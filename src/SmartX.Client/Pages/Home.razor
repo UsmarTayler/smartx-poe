@@ -1,7 +1,126 @@
-﻿@page "/"
+@page "/"
+@inject SmartXApiClient Api
+@inject IConfiguration Configuration
 
-<PageTitle>Home</PageTitle>
+<PageTitle>Smart-X</PageTitle>
 
-<h1>Hello, world!</h1>
+<MudContainer MaxWidth="MaxWidth.Large" Class="mt-8">
 
-Welcome to your new app.
+    <MudText Typo="Typo.h4" GutterBottom="true">Smart-X</MudText>
+    <MudText Typo="Typo.subtitle1" Class="mb-6 mud-text-secondary">
+        Telemetry ingestion and mesh management for distributed IoT sensor networks.
+    </MudText>
+
+    @* This banner is the whole point of the landing page at this stage: it is the visible proof
+       that the client reaches the API across an HTTP boundary rather than referencing it. *@
+    @switch (_connection)
+    {
+        case ConnectionState.Checking:
+            <MudAlert Severity="Severity.Info" Class="mb-8" Dense="true">
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-3" />
+                Contacting the API&hellip;
+            </MudAlert>
+            break;
+
+        case ConnectionState.Healthy:
+            <MudAlert Severity="Severity.Success" Class="mb-8" Dense="true">
+                Connected to the API at @ApiBaseAddress — reported status "@_reportedStatus".
+            </MudAlert>
+            break;
+
+        default:
+            <MudAlert Severity="Severity.Error" Class="mb-8" Dense="true">
+                No response from the API at @ApiBaseAddress. Start SmartX.Api and reload this page.
+            </MudAlert>
+            break;
+    }
+
+    <MudText Typo="Typo.h6" GutterBottom="true">Capabilities</MudText>
+
+    <MudGrid>
+        @foreach (var pillar in Pillars)
+        {
+            <MudItem xs="12" md="4">
+                @* Disabled pillars stay on the page rather than being hidden, so the scope of the
+                   system is visible from the start. Reduced opacity plus an explicit chip carries
+                   that more honestly than a greyed-out card on its own would. *@
+                <MudCard Outlined="true"
+                         Class="h-100"
+                         Style="@(pillar.IsEnabled ? null : "opacity:0.6")">
+                    <MudCardContent>
+                        <MudIcon Icon="@pillar.Icon"
+                                 Size="Size.Large"
+                                 Color="@(pillar.IsEnabled ? Color.Primary : Color.Default)"
+                                 Class="mb-3" />
+
+                        <MudText Typo="Typo.h6" GutterBottom="true">@pillar.Title</MudText>
+                        <MudText Typo="Typo.body2" Class="mud-text-secondary">@pillar.Description</MudText>
+                    </MudCardContent>
+
+                    <MudCardActions>
+                        @if (pillar.IsEnabled)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Text">
+                                Available
+                            </MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Text"
+                                     Icon="@Icons.Material.Filled.Lock">
+                                Not yet implemented
+                            </MudChip>
+                        }
+                    </MudCardActions>
+                </MudCard>
+            </MudItem>
+        }
+    </MudGrid>
+
+</MudContainer>
+
+@code {
+    private ConnectionState _connection = ConnectionState.Checking;
+    private string? _reportedStatus;
+
+    private string ApiBaseAddress => Configuration["ApiBaseAddress"] ?? "(not configured)";
+
+    /// <summary>
+    /// The three pillars of the Smart-X brief. Only the first is in scope so far; the other two
+    /// are listed to show where the system is going.
+    /// </summary>
+    private static readonly Pillar[] Pillars =
+    [
+        new("Sensor Data Ingestion and Telemetry",
+            "Accept readings from field sensors, validate them, and store the resulting telemetry stream.",
+            Icons.Material.Filled.Sensors,
+            IsEnabled: true),
+
+        new("Real-Time Command Stream and History",
+            "Push commands out to devices and keep a replayable record of what was sent and when.",
+            Icons.Material.Filled.Stream,
+            IsEnabled: false),
+
+        new("Network Topology and Mesh Routing",
+            "Map the mesh, track which nodes can still reach the gateway, and route around failures.",
+            Icons.Material.Filled.AccountTree,
+            IsEnabled: false)
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var health = await Api.GetHealthAsync();
+
+        _reportedStatus = health?.Status;
+        _connection = health is null ? ConnectionState.Unreachable : ConnectionState.Healthy;
+    }
+
+    private enum ConnectionState
+    {
+        Checking,
+        Healthy,
+        Unreachable
+    }
+
+    private sealed record Pillar(string Title, string Description, string Icon, bool IsEnabled);
+}
