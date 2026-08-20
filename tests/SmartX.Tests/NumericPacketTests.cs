@@ -128,34 +128,71 @@ public class NumericPacketTests
     [Fact]
     public void Adding_readings_in_different_units_throws()
     {
+        // Both Environmental, so the units are the only thing that differ and the unit check is
+        // genuinely what fires.
         var temperature = Numeric(21.5f, unit: "°C", category: SensorCategory.Environmental);
-        var power = Numeric(3.25f, unit: "kWh");
+        var humidity = Numeric(48.0f, unit: "%", category: SensorCategory.Environmental);
 
-        var error = Assert.Throws<InvalidOperationException>(() => temperature + power);
+        var error = Assert.Throws<InvalidOperationException>(() => temperature + humidity);
 
         // The message has to name both units, because the whole point of failing here is to tell
         // the caller what they got wrong.
         Assert.Contains("°C", error.Message, StringComparison.Ordinal);
-        Assert.Contains("kWh", error.Message, StringComparison.Ordinal);
+        Assert.Contains("%", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Adding_readings_from_different_categories_throws()
+    {
+        // The case the unit check alone misses. Relative humidity and a battery charge level are
+        // both "%", so nothing about the unit distinguishes them — but their sum is meaningless.
+        var humidity = Numeric(48.0f, unit: "%", category: SensorCategory.Environmental);
+        var battery = Numeric(80.0f, unit: "%", category: SensorCategory.PowerConsumption);
+
+        var error = Assert.Throws<InvalidOperationException>(() => humidity + battery);
+
+        Assert.Contains(nameof(SensorCategory.Environmental), error.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(SensorCategory.PowerConsumption), error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
     public void Subtracting_readings_in_different_units_throws()
     {
         var temperature = Numeric(21.5f, unit: "°C", category: SensorCategory.Environmental);
-        var power = Numeric(3.25f, unit: "kWh");
+        var humidity = Numeric(48.0f, unit: "%", category: SensorCategory.Environmental);
 
-        Assert.Throws<InvalidOperationException>(() => temperature - power);
+        Assert.Throws<InvalidOperationException>(() => temperature - humidity);
+    }
+
+    [Fact]
+    public void Subtracting_readings_from_different_categories_throws()
+    {
+        var humidity = Numeric(48.0f, unit: "%", category: SensorCategory.Environmental);
+        var battery = Numeric(80.0f, unit: "%", category: SensorCategory.PowerConsumption);
+
+        Assert.Throws<InvalidOperationException>(() => humidity - battery);
     }
 
     [Fact]
     public void Ordering_readings_in_different_units_throws()
     {
         var temperature = Numeric(21.5f, unit: "°C", category: SensorCategory.Environmental);
-        var power = Numeric(3.25f, unit: "kWh");
+        var humidity = Numeric(48.0f, unit: "%", category: SensorCategory.Environmental);
 
-        Assert.Throws<InvalidOperationException>(() => temperature > power);
-        Assert.Throws<InvalidOperationException>(() => temperature < power);
+        Assert.Throws<InvalidOperationException>(() => temperature > humidity);
+        Assert.Throws<InvalidOperationException>(() => temperature < humidity);
+    }
+
+    [Fact]
+    public void Ordering_readings_from_different_categories_throws()
+    {
+        // "Is the room more humid than the battery is charged" is not a question, even though both
+        // sides are a percentage.
+        var humidity = Numeric(48.0f, unit: "%", category: SensorCategory.Environmental);
+        var battery = Numeric(80.0f, unit: "%", category: SensorCategory.PowerConsumption);
+
+        Assert.Throws<InvalidOperationException>(() => humidity > battery);
+        Assert.Throws<InvalidOperationException>(() => humidity < battery);
     }
 
     [Fact]
@@ -165,11 +202,22 @@ public class NumericPacketTests
         // always a valid question, and equality is called from places the caller never wrote —
         // dictionary lookups, collection searches — where a throw would be a trap.
         var temperature = Numeric(21.5f, unit: "°C", category: SensorCategory.Environmental);
-        var power = Numeric(21.5f, unit: "kWh");
+        var humidity = Numeric(21.5f, unit: "%", category: SensorCategory.Environmental);
 
-        Assert.False(temperature == power);
-        Assert.True(temperature != power);
+        Assert.False(temperature == humidity);
+        Assert.True(temperature != humidity);
     }
+
+    [Fact]
+    public void Equality_across_different_categories_is_false_rather_than_an_exception()
+    {
+        var humidity = Numeric(48.0f, unit: "%", category: SensorCategory.Environmental);
+        var battery = Numeric(48.0f, unit: "%", category: SensorCategory.PowerConsumption);
+
+        Assert.False(humidity == battery);
+        Assert.True(humidity != battery);
+    }
+
 
     [Fact]
     public void Packets_with_identical_fields_are_equal()

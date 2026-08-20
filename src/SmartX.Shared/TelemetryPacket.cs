@@ -102,13 +102,15 @@ public abstract class TelemetryPacket<T> : IEquatable<TelemetryPacket<T>>
     public string Unit { get; }
 
     /// <summary>
-    /// Rejects an operation between two packets measured in different units.
+    /// Rejects an operation between two packets that are not measuring the same kind of thing.
     /// </summary>
     /// <param name="left">Left operand.</param>
     /// <param name="right">Right operand.</param>
     /// <param name="op">The operator symbol, used in the exception message.</param>
     /// <exception cref="ArgumentNullException">Either operand is null.</exception>
-    /// <exception cref="InvalidOperationException">The operands carry different units.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The operands carry different units, or come from different sensor categories.
+    /// </exception>
     /// <remarks>
     /// Two nodes reporting in kWh may be combined freely — that is the smart-meter aggregation the
     /// brief calls for, and differing node identifiers are expected there. Two nodes reporting in
@@ -116,14 +118,24 @@ public abstract class TelemetryPacket<T> : IEquatable<TelemetryPacket<T>>
     /// returning 8 would be worse than failing, because a wrong number propagates silently while an
     /// exception does not.
     /// <para>
-    /// Deliberately checks the unit and not the category. The unit is what makes a magnitude
-    /// physically meaningful; the category is descriptive metadata about the device.
+    /// The category is checked as well as the unit, because the unit alone is not enough to make
+    /// two readings comparable. Relative humidity and a battery charge level are both reported in
+    /// "%", and summing them produces a number with no physical meaning whatsoever. The unit says
+    /// how a magnitude is scaled; the category says what is being measured. Both have to agree
+    /// before an arithmetic or ordering operation means anything.
     /// </para>
     /// </remarks>
     protected static void EnsureCombinable(TelemetryPacket<T> left, TelemetryPacket<T> right, string op)
     {
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
+
+        if (left.Category != right.Category)
+        {
+            throw new InvalidOperationException(
+                $"Cannot apply '{op}' to readings from different sensor categories " +
+                $"('{left.Category}' and '{right.Category}').");
+        }
 
         if (!string.Equals(left.Unit, right.Unit, StringComparison.Ordinal))
         {
