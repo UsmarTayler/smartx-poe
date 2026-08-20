@@ -37,7 +37,7 @@ namespace SmartX.Shared;
 /// new packets without any risk of aliasing an operand.
 /// </para>
 /// </remarks>
-public abstract class TelemetryPacket<T> : IEquatable<TelemetryPacket<T>>
+public abstract class TelemetryPacket<T> : ITelemetryPacket, IEquatable<TelemetryPacket<T>>
     where T : struct
 {
     /// <summary>
