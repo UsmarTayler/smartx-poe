@@ -11,7 +11,9 @@
     <link rel="stylesheet" href="_content/MudBlazor/MudBlazor.min.css" />
     <link rel="stylesheet" href="css/app.css" />
     <link rel="icon" type="image/png" href="favicon.png" />
-    <link href="SmartX.Client.styles.css" rel="stylesheet" />
+    <!-- No <link> to SmartX.Client.styles.css: that bundle is only emitted when the project
+         contains scoped .razor.css files, and it currently has none, so referencing it would
+         404 on every page load. Add the link back alongside the first scoped stylesheet. -->
     <script type="importmap"></script>
 </head>
 
