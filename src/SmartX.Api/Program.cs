@@ -1,4 +1,5 @@
 using SmartX.Api.Endpoints;
+using SmartX.Api.Storage;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,6 +19,14 @@ builder.Services.AddCors(options =>
         .AllowAnyHeader()
         .AllowAnyMethod()));
 
+// Singletons, because these are the storage. A scoped or transient lifetime would hand each
+// request its own empty dictionary, so a sensor registered by one call would not exist for the
+// next — the registration would appear to succeed and then vanish. The implementations are
+// thread-safe precisely because a singleton is shared across concurrent requests.
+builder.Services.AddSingleton<ISensorRegistry, InMemorySensorRegistry>();
+builder.Services.AddSingleton<ITelemetryStore, InMemoryTelemetryStore>();
+builder.Services.AddSingleton<IZoneStore, InMemoryZoneStore>();
+
 var app = builder.Build();
 
 app.UseCors(ClientCorsPolicy);
@@ -25,6 +34,9 @@ app.UseCors(ClientCorsPolicy);
 // Everything the client calls hangs off /api. Feature areas attach themselves to this group.
 var api = app.MapGroup("/api");
 api.MapHealthEndpoints();
+api.MapSensorEndpoints();
+api.MapTelemetryEndpoints();
+api.MapZoneEndpoints();
 
 app.Run();
 
