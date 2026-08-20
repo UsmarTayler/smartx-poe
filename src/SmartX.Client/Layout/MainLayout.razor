@@ -1,16 +1,24 @@
-﻿@inherits LayoutComponentBase
-<div class="page">
-    <div class="sidebar">
-        <NavMenu />
-    </div>
+@inherits LayoutComponentBase
 
-    <main>
-        <div class="top-row px-4">
-            <a href="https://learn.microsoft.com/aspnet/core/" target="_blank">About</a>
-        </div>
+@* MudBlazor's providers must appear exactly once, above the layout. Dialogs, popovers and
+   snackbars are rendered into these hosts rather than where they are invoked, so leaving one
+   out makes the corresponding feature fail silently later on. *@
+<MudThemeProvider />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
 
-        <article class="content px-4">
-            @Body
-        </article>
-    </main>
-</div>
+<MudLayout>
+    <MudAppBar Elevation="1">
+        <MudIcon Icon="@Icons.Material.Filled.Hub" Class="mr-3" />
+        <MudText Typo="Typo.h6">Smart-X</MudText>
+        <MudSpacer />
+        <MudText Typo="Typo.body2" Class="d-none d-sm-flex">
+            IoT telemetry ingestion and mesh management
+        </MudText>
+    </MudAppBar>
+
+    <MudMainContent>
+        @Body
+    </MudMainContent>
+</MudLayout>
