@@ -24,7 +24,13 @@ builder.Services.AddCors(options =>
 // next — the registration would appear to succeed and then vanish. The implementations are
 // thread-safe precisely because a singleton is shared across concurrent requests.
 builder.Services.AddSingleton<ISensorRegistry, InMemorySensorRegistry>();
-builder.Services.AddSingleton<ITelemetryStore, InMemoryTelemetryStore>();
+// Retention comes from configuration so the sliding window can be tuned without a rebuild.
+// Registered through a factory because the container resolves constructor arguments rather than
+// falling back to their default values.
+var retentionPerNode = builder.Configuration.GetValue<int?>("Telemetry:RetentionPerNode")
+    ?? InMemoryTelemetryStore.DefaultRetentionPerNode;
+
+builder.Services.AddSingleton<ITelemetryStore>(_ => new InMemoryTelemetryStore(retentionPerNode));
 builder.Services.AddSingleton<IZoneStore, InMemoryZoneStore>();
 
 var app = builder.Build();
