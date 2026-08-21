@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace SmartX.Shared;
 
 /// <summary>
@@ -16,7 +18,18 @@ namespace SmartX.Shared;
 /// needs the reading works with the concrete <see cref="NumericPacket{T}"/> or
 /// <see cref="StatePacket"/>, where the payload keeps its own type.
 /// </para>
+/// <para>
+/// <b>Why the derived types are declared here.</b> Serialising a collection of this interface would
+/// otherwise write only the four properties below, silently dropping the reading itself. The
+/// attributes let System.Text.Json write a <c>$type</c> discriminator and the concrete shape, so a
+/// history response carries real values and can be read back into the right packet type. The list
+/// is closed and stays closed: <see cref="TelemetryPayloadKind"/> has exactly three members, and a
+/// fourth would need a branch in the ingestion endpoint anyway.
+/// </para>
 /// </remarks>
+[JsonDerivedType(typeof(NumericPacket<int>), "integer")]
+[JsonDerivedType(typeof(NumericPacket<float>), "real")]
+[JsonDerivedType(typeof(StatePacket), "state")]
 public interface ITelemetryPacket
 {
     /// <summary>MAC address of the node that produced this reading.</summary>
