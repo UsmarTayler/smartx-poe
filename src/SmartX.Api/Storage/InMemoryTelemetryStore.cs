@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Options;
 using SmartX.Shared;
 
 namespace SmartX.Api.Storage;
@@ -12,33 +13,27 @@ namespace SmartX.Api.Storage;
 /// <para>
 /// Each partition is a <see cref="TelemetryRingBuffer{T}"/> rather than a growing list. That is
 /// what makes retention a property of the structure instead of a chore: the buffer holds the last
-/// <see cref="DefaultRetentionPerNode"/> readings and overwrites the oldest in place, at O(1), with
-/// no trimming pass and no reallocation. The store previously grew without bound, which was fine
-/// for a demonstration and would have been a leak in anything longer-lived.
+/// <see cref="TelemetryOptions.RetentionPerNode"/> readings and overwrites the oldest in place, at
+/// O(1), with no trimming pass and no reallocation. The store previously grew without bound, which
+/// was fine for a demonstration and would have been a leak in anything longer-lived.
 /// </para>
 /// </remarks>
 internal sealed class InMemoryTelemetryStore : ITelemetryStore
 {
-    /// <summary>
-    /// Readings retained per node before the oldest is overwritten.
-    /// </summary>
-    /// <remarks>
-    /// 256 is enough history for a dashboard to draw a trend and for the trust scoring in a later
-    /// part to weigh recent behaviour, while keeping the whole store bounded at a predictable size:
-    /// nodes × 256 references, fixed at startup, regardless of how long the process runs.
-    /// </remarks>
-    internal const int DefaultRetentionPerNode = 256;
-
     private readonly ConcurrentDictionary<string, NodeHistory> _byNode = new(StringComparer.Ordinal);
     private readonly int _retentionPerNode;
 
     /// <summary>Creates the store.</summary>
-    /// <param name="retentionPerNode">Readings to retain per node.</param>
-    public InMemoryTelemetryStore(int retentionPerNode = DefaultRetentionPerNode)
+    /// <param name="options">Retention configuration, bound from the "Telemetry" section.</param>
+    public InMemoryTelemetryStore(IOptions<TelemetryOptions> options)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(retentionPerNode);
+        ArgumentNullException.ThrowIfNull(options);
 
-        _retentionPerNode = retentionPerNode;
+        // Checked here as well as at startup, because the store can be constructed without going
+        // through the host — by a test, or by a future host that skips startup validation.
+        ArgumentOutOfRangeException.ThrowIfNegative(options.Value.RetentionPerNode);
+
+        _retentionPerNode = options.Value.RetentionPerNode;
     }
 
     /// <inheritdoc />
