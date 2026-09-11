@@ -90,7 +90,9 @@ else
             ? Feed.RefreshInterval is { } interval
                 ? $"Updated {ReadingFormatter.Time(at)} · every {interval.TotalSeconds:0}s"
                 : $"Updated {ReadingFormatter.Time(at)} · live"
-            : "Connecting…";
+            // Before the first successful refresh, say whether an attempt has already failed rather than
+            // claiming to still be connecting while the API is known to be down.
+            : Snapshot.Problem is not null ? "Not connected" : "Connecting…";
 
     protected override async Task OnInitializedAsync()
     {
