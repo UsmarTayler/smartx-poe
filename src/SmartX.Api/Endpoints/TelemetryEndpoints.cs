@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using SmartX.Api.Storage;
+using SmartX.Api.Trust;
 using SmartX.Shared;
 
 namespace SmartX.Api.Endpoints;
@@ -12,24 +13,25 @@ namespace SmartX.Api.Endpoints;
 /// <b>The pipeline, stage by stage.</b> A batched reading travels:
 /// <list type="number">
 /// <item><description>
-/// <b>Raw</b> — arrives as jagged JSON, <c>[[21.5, 21.6], [22.0]]</c>, one inner array per
-/// ingestion window.
+/// <b>Raw</b> — arrives as jagged JSON, <c>[[21.5, 21.6], [22.0]]</c>, one inner array per window.
 /// </description></item>
 /// <item><description>
 /// <b>Staged</b> — each window is copied into a row of <see cref="TelemetryStagingBuffer{T}"/>,
 /// sized to that window's own length.
 /// </description></item>
 /// <item><description>
-/// <b>Flattened</b> — <see cref="TelemetryStagingBuffer{T}.Drain"/> hands the whole batch over as
-/// one pre-sized <see cref="List{T}"/> and empties the staging rows.
+/// <b>Flattened</b> — <see cref="TelemetryStagingBuffer{T}.Drain"/> hands the batch over as one
+/// pre-sized <see cref="List{T}"/> and empties the staging rows.
 /// </description></item>
 /// <item><description>
 /// <b>Validated</b> — <see cref="TryCreatePacket"/> checks each reading against the registration
 /// and turns it into a typed packet.
 /// </description></item>
 /// <item><description>
-/// <b>Retained</b> — the packet enters that node's <see cref="TelemetryRingBuffer{T}"/> inside the
-/// store, evicting the oldest reading if the window is full.
+/// <b>Retained</b> — an accepted packet enters that node's <see cref="TelemetryRingBuffer{T}"/>.
+/// </description></item>
+/// <item><description>
+/// <b>Scored</b> — the outcome, accepted or not, is recorded against the node's trust.
 /// </description></item>
 /// <item><description>
 /// <b>Snapshot</b> — a response copies the window out as a <see cref="List{T}"/>.
@@ -37,18 +39,17 @@ namespace SmartX.Api.Endpoints;
 /// </list>
 /// <para>
 /// <b>How a JSON value becomes a typed packet.</b> The reading arrives as a
-/// <see cref="JsonElement"/>, a struct pointing into the parsed request, so reading it allocates
-/// nothing. It is not converted eagerly, because JSON cannot distinguish the types the system cares
-/// about: <c>1200</c> is equally a valid int and a valid float, so a packet type inferred from the
-/// payload would flip between <c>NumericPacket&lt;int&gt;</c> and <c>NumericPacket&lt;float&gt;</c>
-/// for the same meter depending on whether a reading happened to be whole.
+/// <see cref="JsonElement"/>, a struct pointing into the parsed request. JSON cannot distinguish the
+/// types the system cares about — <c>1200</c> is equally a valid int and a valid float — so the
+/// registration's <see cref="SensorRegistration.PayloadKind"/> selects the branch, and the JSON is
+/// asked to produce exactly that type. A payload that cannot is rejected rather than coerced. Each
+/// branch constructs its packet type directly, so <c>T</c> is known at compile time and the payload
+/// is never boxed.
 /// </para>
 /// <para>
-/// So the registration decides instead. <see cref="SensorRegistration.PayloadKind"/> was fixed when
-/// the device was registered, and it selects the branch. The JSON is then asked to produce exactly
-/// that type — <c>TryGetInt32</c>, <c>TryGetSingle</c> or <c>GetBoolean</c> — and a payload that
-/// cannot is rejected rather than coerced. Each branch constructs its packet type directly, so
-/// <c>T</c> is known at compile time and the payload is never boxed.
+/// <b>Why a rejected reading is scored, not just refused.</b> A 400 tells the device it sent
+/// something wrong; it tells an operator nothing. Recording the rejection as a trust outcome is what
+/// turns a stream of individually refused packets into a node that visibly sinks down the dashboard.
 /// </para>
 /// </remarks>
 internal static class TelemetryEndpoints
@@ -67,12 +68,14 @@ internal static class TelemetryEndpoints
         TelemetryIngestionRequest request,
         ISensorRegistry registry,
         ITelemetryStore store,
+        ITrustEngine trust,
         CancellationToken cancellationToken)
     {
         var sensor = await registry.FindAsync(request.MacAddress, cancellationToken);
 
         if (sensor is null)
         {
+            // Not scored: without a registration there is no node to hold accountable.
             return UnregisteredSensor(request.MacAddress);
         }
 
@@ -81,12 +84,15 @@ internal static class TelemetryEndpoints
         // later be ordered against others.
         var timestamp = request.Timestamp ?? DateTimeOffset.UtcNow;
 
-        if (!TryCreatePacket(sensor, request.Value, timestamp, out var packet, out var reason))
+        if (!TryCreatePacket(sensor, request.Value, timestamp, out var packet, out var rejection))
         {
-            return Rejected(reason);
+            trust.Record(sensor.MacAddress, rejection.Outcome);
+
+            return Rejected(rejection.Reason);
         }
 
         await store.AddAsync(packet, cancellationToken);
+        trust.Record(sensor.MacAddress, TrustOutcome.Success);
 
         // 202 rather than 201: telemetry is an event stream, and an individual reading is not a
         // resource with a URL of its own to point a Location header at.
@@ -117,13 +123,14 @@ internal static class TelemetryEndpoints
     /// Accepts a batch of ingestion windows through the staging buffer.
     /// </summary>
     /// <remarks>
-    /// Each of the six pipeline stages is a named step below, in order, so a reading can be traced
-    /// from the request body to the retained window.
+    /// Each pipeline stage is a numbered step below, in order, so a reading can be traced from the
+    /// request body to the node's trust.
     /// </remarks>
     private static async Task<IResult> IngestBatchAsync(
         TelemetryBatchRequest request,
         ISensorRegistry registry,
         ITelemetryStore store,
+        ITrustEngine trust,
         CancellationToken cancellationToken)
     {
         var sensor = await registry.FindAsync(request.MacAddress, cancellationToken);
@@ -138,7 +145,7 @@ internal static class TelemetryEndpoints
             return Rejected("A batch must carry at least an empty array of ingestion windows.");
         }
 
-        // STAGE 1 — stage the raw windows. The outer array is reserved at the batch's window count,
+        // STAGE 2 — stage the raw windows. The outer array is reserved at the batch's window count,
         // so it never has to grow; each row is allocated at its own window's length.
         var staging = new TelemetryStagingBuffer<JsonElement>(request.Windows.Length);
 
@@ -150,7 +157,7 @@ internal static class TelemetryEndpoints
         // Captured before draining, because draining resets the counters this describes.
         var statistics = staging.Statistics;
 
-        // STAGE 2 — flatten into one pre-sized list and release the staged rows.
+        // STAGE 3 — flatten into one pre-sized list and release the staged rows.
         var raw = staging.Drain();
 
         var timestamp = request.Timestamp ?? DateTimeOffset.UtcNow;
@@ -159,18 +166,22 @@ internal static class TelemetryEndpoints
 
         for (var index = 0; index < raw.Count; index++)
         {
-            // STAGE 3 — validate and convert.
-            if (TryCreatePacket(sensor, raw[index], timestamp, out var packet, out var reason))
+            // STAGE 4 — validate and convert.
+            if (TryCreatePacket(sensor, raw[index], timestamp, out var packet, out var rejection))
             {
-                // STAGE 4 — into the node's sliding window.
+                // STAGE 5 — into the node's sliding window.
                 await store.AddAsync(packet, cancellationToken);
+
+                // STAGE 6 — score it.
+                trust.Record(sensor.MacAddress, TrustOutcome.Success);
                 accepted++;
             }
             else
             {
-                // One bad sample does not discard the batch. The position is reported so the caller
-                // can find it in what they sent.
-                errors.Add($"Reading {index}: {reason}");
+                // A rejected reading is not retained, but it is still scored. One bad sample does not
+                // discard the batch, and its position is reported so the caller can find it.
+                trust.Record(sensor.MacAddress, rejection.Outcome);
+                errors.Add($"Reading {index}: {rejection.Reason}");
             }
         }
 
@@ -189,29 +200,28 @@ internal static class TelemetryEndpoints
     /// <param name="value">The reading as it arrived.</param>
     /// <param name="timestamp">When the reading was taken.</param>
     /// <param name="packet">The typed packet, when the reading is acceptable.</param>
-    /// <param name="reason">Why it was not, otherwise.</param>
+    /// <param name="rejection">Why it was not, and what kind of failure that counts as.</param>
     /// <remarks>
-    /// Single-sourced so that the batch path and the single-reading path cannot drift apart. Two
-    /// copies of these rules would eventually disagree about something like whether 21.5 is a valid
-    /// integer reading, and the answer would then depend on which endpoint the device happened to
-    /// use.
+    /// Single-sourced so the batch path and the single-reading path cannot drift apart. Two copies
+    /// of these rules would eventually disagree about whether 21.5 is a valid integer reading, and
+    /// the answer — and the trust penalty — would depend on which endpoint a device happened to use.
     /// </remarks>
     private static bool TryCreatePacket(
         SensorRegistration sensor,
         JsonElement value,
         DateTimeOffset timestamp,
         [NotNullWhen(true)] out ITelemetryPacket? packet,
-        [NotNullWhen(false)] out string? reason)
+        [NotNullWhen(false)] out PacketRejection? rejection)
     {
         packet = null;
-        reason = null;
+        rejection = null;
 
         switch (sensor.PayloadKind)
         {
             case TelemetryPayloadKind.State:
                 if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
                 {
-                    reason = Mismatch(sensor, value, "a boolean");
+                    rejection = Mismatch(sensor, value, "a boolean");
 
                     return false;
                 }
@@ -225,14 +235,14 @@ internal static class TelemetryEndpoints
                 // reporting 21.5 is caught here rather than silently truncated to 21.
                 if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var whole))
                 {
-                    reason = Mismatch(sensor, value, "a whole number");
+                    rejection = Mismatch(sensor, value, "a whole number");
 
                     return false;
                 }
 
                 if (!sensor.ExpectedRange.Contains(whole))
                 {
-                    reason = OutOfRange(sensor, whole);
+                    rejection = OutOfRange(sensor, whole);
 
                     return false;
                 }
@@ -245,14 +255,14 @@ internal static class TelemetryEndpoints
             case TelemetryPayloadKind.Real:
                 if (value.ValueKind != JsonValueKind.Number || !value.TryGetSingle(out var real))
                 {
-                    reason = Mismatch(sensor, value, "a number");
+                    rejection = Mismatch(sensor, value, "a number");
 
                     return false;
                 }
 
                 if (!sensor.ExpectedRange.Contains(real))
                 {
-                    reason = OutOfRange(sensor, real);
+                    rejection = OutOfRange(sensor, real);
 
                     return false;
                 }
@@ -264,23 +274,29 @@ internal static class TelemetryEndpoints
 
             default:
                 // Unreachable for any declared member, but an enum can hold a value outside its
-                // declared set, and that would be a fault in stored configuration rather than in
-                // the reading.
-                reason = $"Sensor '{sensor.MacAddress}' is registered with payload kind " +
-                         $"'{sensor.PayloadKind}', which this gateway cannot route.";
+                // declared set. Counted as a schema failure: the device and its registration disagree
+                // about what it sends.
+                rejection = new PacketRejection(
+                    TrustOutcome.SchemaFailure,
+                    $"Sensor '{sensor.MacAddress}' is registered with payload kind " +
+                    $"'{sensor.PayloadKind}', which this gateway cannot route.");
 
                 return false;
         }
     }
 
-    private static string Mismatch(SensorRegistration sensor, JsonElement value, string expected) =>
-        $"Sensor '{sensor.MacAddress}' is registered as {sensor.PayloadKind}, so its readings must " +
-        $"be {expected}. Received {value.ValueKind}.";
+    /// <summary>The payload is not the shape the registration promised: a schema failure.</summary>
+    private static PacketRejection Mismatch(SensorRegistration sensor, JsonElement value, string expected) =>
+        new(TrustOutcome.SchemaFailure,
+            $"Sensor '{sensor.MacAddress}' is registered as {sensor.PayloadKind}, so its readings must " +
+            $"be {expected}. Received {value.ValueKind}.");
 
-    private static string OutOfRange<T>(SensorRegistration sensor, T reading)
+    /// <summary>The payload is the right shape but outside the promised range: a range violation.</summary>
+    private static PacketRejection OutOfRange<T>(SensorRegistration sensor, T reading)
         where T : struct, System.Numerics.INumber<T> =>
-        $"{reading} falls outside the expected range {sensor.ExpectedRange} declared for sensor " +
-        $"'{sensor.MacAddress}'.";
+        new(TrustOutcome.RangeViolation,
+            $"{reading} falls outside the expected range {sensor.ExpectedRange} declared for sensor " +
+            $"'{sensor.MacAddress}'.");
 
     private static IResult UnregisteredSensor(string macAddress) =>
         Results.Problem(
@@ -293,4 +309,12 @@ internal static class TelemetryEndpoints
         Results.ValidationProblem(
             new Dictionary<string, string[]> { [nameof(TelemetryIngestionRequest.Value)] = [reason] },
             title: "The reading was not accepted");
+
+    /// <summary>Why a reading was refused, and what kind of failure that counts as for trust.</summary>
+    /// <remarks>
+    /// The classification travels with the message because it is made once, at the point the failure
+    /// is detected, where it is known for certain. Working it out later from the message would mean
+    /// parsing English to decide whether something was a range violation or a type failure.
+    /// </remarks>
+    private sealed record PacketRejection(TrustOutcome Outcome, string Reason);
 }
