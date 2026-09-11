@@ -1,0 +1,64 @@
+@* The registered sensors. Data in only: the list, how to name a zone, and whether it is still
+   loading. Below the small breakpoint the table stacks each row into labelled lines, so it stays
+   readable at phone width instead of scrolling sideways. *@
+@if (Loading)
+{
+    @* Skeleton rows the shape of real rows, so the panel does not jump when the data arrives. *@
+    @for (var row = 0; row < 3; row++)
+    {
+        <div class="d-flex align-center gap-4 py-3" aria-hidden="true">
+            <MudSkeleton Width="30%" Height="24px" />
+            <MudSkeleton Width="20%" Height="24px" />
+            <MudSkeleton Width="40%" Height="24px" />
+        </div>
+    }
+}
+else if (Sensors.Count == 0)
+{
+    <EmptyState Icon="@Icons.Material.Outlined.Sensors"
+                Title="No sensors registered yet"
+                Text="Fill in the form to register your first sensor. It will appear here as soon as the API accepts it." />
+}
+else
+{
+    <MudTable T="SensorRegistration" Items="Sensors" Dense="true" Hover="true" Elevation="0"
+              Breakpoint="Breakpoint.Sm">
+        <HeaderContent>
+            <MudTh>MAC address</MudTh>
+            <MudTh>Category</MudTh>
+            <MudTh>Expected</MudTh>
+            <MudTh>Location</MudTh>
+            <MudTh>Heartbeat</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd DataLabel="MAC address"><span class="smartx-mono">@context.MacAddress</span></MudTd>
+            <MudTd DataLabel="Category">@context.Category</MudTd>
+            <MudTd DataLabel="Expected">@DescribeRange(context)</MudTd>
+            <MudTd DataLabel="Location">
+                @context.Location.Room
+                <MudText Typo="Typo.caption" Class="d-block mud-text-secondary">
+                    @ZonePath(context.Location.ZoneId) · node @context.Location.NodeId
+                </MudText>
+            </MudTd>
+            <MudTd DataLabel="Heartbeat">
+                @(context.HeartbeatInterval is { } interval ? $"every {interval.TotalSeconds:0}s" : "gateway default")
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<SensorRegistration> Sensors { get; set; } = [];
+
+    [Parameter]
+    public bool Loading { get; set; }
+
+    [Parameter]
+    public Func<string, string> ZonePath { get; set; } = zoneId => zoneId;
+
+    private static string DescribeRange(SensorRegistration sensor) =>
+        sensor.PayloadKind == TelemetryPayloadKind.State
+            ? $"on / off ({sensor.Unit})"
+            : $"{sensor.ExpectedRange.Minimum:0.##} – {sensor.ExpectedRange.Maximum:0.##} {sensor.Unit} ({sensor.PayloadKind})";
+}

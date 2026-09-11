@@ -23,5 +23,6 @@ builder.Services.AddHttpClient<SmartXApiClient>(client => client.BaseAddress = n
 // navigation lives in these rather than in page components, which are rebuilt on every visit.
 builder.Services.AddScoped<AppState>();
 builder.Services.AddScoped<ApiConnection>();
+builder.Services.AddScoped<SensorService>();
 
 await builder.Build().RunAsync();

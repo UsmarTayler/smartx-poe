@@ -1,0 +1,120 @@
+@* The registration form. Data in: the zones to choose from, whether a submission is in flight, and
+   the problem the server returned for the last attempt. Events out: a finished request.
+
+   Two layers of validation, both visible. As the user types, every field runs the matching method
+   from SensorRegistrationRules — the same code the API runs — so a malformed MAC or an inverted
+   range is flagged before anything is sent. After submitting, anything the server still rejects
+   (typically a zone constraint only the recursive validator can check) is attached to the field it
+   belongs to, not dropped into a banner. Editing a field clears its server error, because the
+   message described a value that is no longer there. *@
+
+<MudForm @ref="_form" @bind-IsValid="_isValid">
+    <MudGrid Spacing="3">
+        <MudItem xs="12" sm="6">
+            <MudTextField T="string" Label="MAC address" Placeholder="AA:BB:CC:DD:EE:01"
+                          Value="Model.MacAddress" ValueChanged="OnMacChanged"
+                          Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Validation="@(new Func<string, string?>(ValidateMac))"
+                          HelperText="Six hex pairs, colons or hyphens" Class="smartx-mono-input" />
+        </MudItem>
+
+        <MudItem xs="12" sm="6">
+            <MudTextField T="string" Label="Node id" Placeholder="NODE-1"
+                          Value="Model.NodeId" ValueChanged="@(value => OnTextChanged(value, v => Model.NodeId = v, NodeIdField))"
+                          Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Validation="@(new Func<string, string?>(value => SensorRegistrationRules.NodeId(value) ?? ServerError(NodeIdField)))"
+                          HelperText="The mesh node it reports through" />
+        </MudItem>
+
+        <MudItem xs="12" sm="6">
+            <MudTextField T="string" Label="Room" Placeholder="Server Room 2"
+                          Value="Model.Room" ValueChanged="@(value => OnTextChanged(value, v => Model.Room = v, RoomField))"
+                          Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Validation="@(new Func<string, string?>(value => SensorRegistrationRules.Room(value) ?? ServerError(RoomField)))" />
+        </MudItem>
+
+        <MudItem xs="12" sm="6">
+            <ZonePicker Zones="Zones"
+                        Value="@Model.ZoneId"
+                        ValueChanged="OnZoneChanged"
+                        Validation="@(new Func<string?, string?>(ValidateZone))" />
+        </MudItem>
+
+        @* Every violation the server found, each naming the zone responsible, directly under the
+           picker it concerns. The picker itself carries a one-line summary so its error state is
+           visible even when this list is scrolled out of view. *@
+        @if (ZoneViolations.Count > 0)
+        {
+            <MudItem xs="12">
+                <MudAlert Severity="Severity.Error" Variant="Variant.Text" Dense="true" role="alert"
+                          aria-label="Zone constraint violations">
+                    <ul class="smartx-violations">
+                        @foreach (var violation in ZoneViolations)
+                        {
+                            <li>@violation</li>
+                        }
+                    </ul>
+                </MudAlert>
+            </MudItem>
+        }
+
+        <MudItem xs="12" sm="6">
+            <MudSelect T="SensorCategory" Label="Category" Value="Model.Category" ValueChanged="OnCategoryChanged"
+                       Variant="Variant.Outlined" Margin="Margin.Dense" AnchorOrigin="Origin.BottomCenter">
+                @foreach (var category in Enum.GetValues<SensorCategory>())
+                {
+                    <MudSelectItem T="SensorCategory" Value="category">@category</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+
+        <MudItem xs="12" sm="6">
+            <MudSelect T="TelemetryPayloadKind" @ref="_payloadField" Label="Payload"
+                       Value="Model.PayloadKind" ValueChanged="OnPayloadChanged"
+                       Variant="Variant.Outlined" Margin="Margin.Dense" AnchorOrigin="Origin.BottomCenter"
+                       Validation="@(new Func<TelemetryPayloadKind, string?>(ValidatePayload))"
+                       HelperText="Decides which packet type its readings become">
+                <MudSelectItem T="TelemetryPayloadKind" Value="TelemetryPayloadKind.Real">Real — fractional readings</MudSelectItem>
+                <MudSelectItem T="TelemetryPayloadKind" Value="TelemetryPayloadKind.Integer">Integer — whole-number readings</MudSelectItem>
+                <MudSelectItem T="TelemetryPayloadKind" Value="TelemetryPayloadKind.State">State — on or off</MudSelectItem>
+            </MudSelect>
+        </MudItem>
+
+        <MudItem xs="12" sm="4">
+            <MudTextField T="string" Label="Unit" Placeholder="°C"
+                          Value="Model.Unit" ValueChanged="@(value => OnTextChanged(value, v => Model.Unit = v, UnitField))"
+                          Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Validation="@(new Func<string, string?>(ValidateUnit))" />
+        </MudItem>
+
+        <MudItem xs="6" sm="4">
+            <MudNumericField T="double?" @ref="_minimumField" Label="Expected minimum"
+                             Value="Model.Minimum" ValueChanged="OnMinimumChanged"
+                             Immediate="true" HideSpinButtons="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                             Validation="@(new Func<double?, string?>(ValidateMinimum))" />
+        </MudItem>
+
+        <MudItem xs="6" sm="4">
+            <MudNumericField T="double?" Label="Expected maximum"
+                             Value="Model.Maximum" ValueChanged="OnMaximumChanged"
+                             Immediate="true" HideSpinButtons="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                             Validation="@(new Func<double?, string?>(ValidateMaximum))" />
+        </MudItem>
+
+        <MudItem xs="12" sm="6">
+            <MudNumericField T="int?" Label="Heartbeat interval"
+                             Value="Model.HeartbeatIntervalSeconds" ValueChanged="OnHeartbeatChanged"
+                             Immediate="true" Min="1" Variant="Variant.Outlined" Margin="Margin.Dense"
+                             Adornment="Adornment.End" AdornmentText="seconds"
+                             Validation="@(new Func<int?, string?>(ValidateHeartbeat))"
+                             HelperText="How often it should report. Blank uses the gateway default." />
+        </MudItem>
+
+        <MudItem xs="12" sm="6" Class="d-flex align-center justify-end">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SubmitAsync" Disabled="Busy"
+                       StartIcon="@Icons.Material.Filled.AddCircleOutline">
+                @(Busy ? "Registering…" : "Register sensor")
+            </MudButton>
+        </MudItem>
+    </MudGrid>
+</MudForm>

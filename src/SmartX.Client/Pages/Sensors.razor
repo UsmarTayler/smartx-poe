@@ -1,5 +1,104 @@
 @page "/sensors"
+@implements IDisposable
+@inject SensorService SensorCatalog
+@inject ISnackbar Snackbar
 
 <PageTitle>Sensors · Smart-X</PageTitle>
 
 <PageHeader Title="Sensors" Subtitle="Register field sensors into the deployment hierarchy." />
+
+@if (SensorCatalog.LoadProblem is { } problem && !SensorCatalog.IsLoaded)
+{
+    <ApiErrorState Problem="problem" OnRetry="LoadAsync" />
+}
+else
+{
+    <MudGrid Spacing="4">
+        <MudItem xs="12" lg="5">
+            <MudPaper Outlined="true" Class="pa-4">
+                <MudText Typo="Typo.h6" HtmlTag="h2" Class="mb-3">Register a sensor</MudText>
+
+                @if (!SensorCatalog.IsLoaded)
+                {
+                    <div aria-hidden="true">
+                        @for (var field = 0; field < 5; field++)
+                        {
+                            <MudSkeleton Height="48px" Class="mb-3" />
+                        }
+                    </div>
+                }
+                else
+                {
+                    <SensorRegistrationForm @ref="_form"
+                                            Zones="SensorCatalog.Zones"
+                                            Model="SensorCatalog.Draft"
+                                            Busy="_submitting"
+                                            ServerProblem="_serverProblem"
+                                            OnSubmit="RegisterAsync" />
+                }
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" lg="7">
+            <MudPaper Outlined="true" Class="pa-4">
+                <MudText Typo="Typo.h6" HtmlTag="h2" Class="mb-3">Registered sensors</MudText>
+                <SensorTable Sensors="SensorCatalog.Sensors" Loading="!SensorCatalog.IsLoaded" ZonePath="SensorCatalog.ZonePath" />
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    private SensorRegistrationForm? _form;
+    private bool _submitting;
+    private ApiProblem? _serverProblem;
+
+    protected override async Task OnInitializedAsync()
+    {
+        SensorCatalog.Changed += OnSensorsChanged;
+
+        // Already loaded on an earlier visit: render from what the service holds instead of blanking
+        // the page to fetch it again.
+        if (!SensorCatalog.IsLoaded)
+        {
+            await LoadAsync();
+        }
+    }
+
+    private Task LoadAsync() => SensorCatalog.LoadAsync();
+
+    private async Task RegisterAsync(SensorRegistrationRequest request)
+    {
+        _submitting = true;
+        _serverProblem = null;
+
+        var result = await SensorCatalog.RegisterAsync(request);
+
+        _submitting = false;
+
+        if (result.IsSuccess)
+        {
+            Snackbar.Add($"Registered {result.Value.MacAddress} in {SensorCatalog.ZonePath(result.Value.Location.ZoneId)}.", Severity.Success);
+            if (_form is not null)
+            {
+                await _form.ResetAfterSuccessAsync();
+            }
+
+            return;
+        }
+
+        // Field-level problems go back to the form to show against their fields. Anything without a
+        // field — an unreachable API, an unexpected error — has nowhere in the form to live, so it is
+        // announced instead.
+        _serverProblem = result.Problem;
+
+        if (result.Problem.FieldErrors.Count == 0)
+        {
+            Snackbar.Add(result.Problem.Message, Severity.Error);
+        }
+    }
+
+    private void OnSensorsChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => SensorCatalog.Changed -= OnSensorsChanged;
+}

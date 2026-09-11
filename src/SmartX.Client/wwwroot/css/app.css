@@ -105,3 +105,30 @@ h1:focus {
     align-items: center;
     gap: 4px;
 }
+
+/* ---- Content ---------------------------------------------------------------------------------
+   MAC addresses and readings in a monospaced face with tabular figures, so columns of them line up
+   digit for digit and "AA:BB" is not confused with "AA.BB" at a glance. */
+.smartx-mono {
+    font-family: ui-monospace, "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+    font-variant-numeric: tabular-nums;
+}
+
+.smartx-violations {
+    margin: 0;
+    padding-left: 1.1rem;
+}
+
+/* MudBlazor text fields take their class on the wrapper, so the monospaced face is applied to the
+   input inside it. */
+.smartx-mono-input input {
+    font-family: ui-monospace, "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Elements focused only by script — the page heading that App.razor focuses after each navigation,
+   so a screen reader announces the new page — are not keyboard stops and need no ring. Without this,
+   every page's heading appears boxed after navigating to it. */
+[tabindex="-1"]:focus-visible {
+    outline: none !important;
+}

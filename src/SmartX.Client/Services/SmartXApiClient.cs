@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Text.Json;
 using SmartX.Shared;
 
 namespace SmartX.Client.Services;
@@ -9,21 +10,18 @@ namespace SmartX.Client.Services;
 /// <remarks>
 /// The client project deliberately holds no reference to SmartX.Api. It knows a base address and
 /// the contracts in SmartX.Shared, nothing more, so the two halves are separated in fact and not
-/// just in folder layout. Routing every call through one typed client also keeps URL strings out
-/// of the components.
+/// just in folder layout. Routing every call through one typed client keeps URL strings out of
+/// components, and means no component ever touches <see cref="HttpClient"/> directly.
+/// <para>
+/// Every call returns an <see cref="ApiResult{T}"/>. A validation rejection, a 404 and an API that is
+/// not running are all things the UI must render, so they come back as values; only cancellation
+/// propagates as an exception, because a cancelled call has no result to render.
+/// </para>
 /// </remarks>
 public sealed class SmartXApiClient(HttpClient http)
 {
-    /// <summary>
-    /// Asks the API whether it is up.
-    /// </summary>
+    /// <summary>Asks the API whether it is up.</summary>
     /// <returns>The reported health, or <c>null</c> when the API could not be reached.</returns>
-    /// <remarks>
-    /// An unreachable API is an expected state during development, not an exceptional one — the
-    /// backend is a separate process the user may simply not have started. Returning null lets the
-    /// landing page render a "disconnected" banner instead of the exception bubbling up through
-    /// the component lifecycle and blanking the page.
-    /// </remarks>
     public async Task<HealthResponse?> GetHealthAsync(CancellationToken cancellationToken = default)
     {
         try
@@ -35,4 +33,124 @@ public sealed class SmartXApiClient(HttpClient http)
             return null;
         }
     }
+
+    public Task<ApiResult<IReadOnlyList<ZoneTreeNode>>> GetZoneTreeAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<IReadOnlyList<ZoneTreeNode>>("api/zones", cancellationToken);
+
+    public Task<ApiResult<IReadOnlyList<SensorRegistration>>> GetSensorsAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<IReadOnlyList<SensorRegistration>>("api/sensors", cancellationToken);
+
+    public Task<ApiResult<SensorRegistration>> RegisterSensorAsync(
+        SensorRegistrationRequest request,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<SensorRegistration>(token => http.PostAsJsonAsync("api/sensors", request, token), cancellationToken);
+
+    public Task<ApiResult<IReadOnlyList<ITelemetryPacket>>> GetRecentReadingsAsync(
+        string macAddress,
+        CancellationToken cancellationToken = default) =>
+        GetAsync<IReadOnlyList<ITelemetryPacket>>($"api/sensors/{Uri.EscapeDataString(macAddress)}/telemetry", cancellationToken);
+
+    /// <summary>Sends one reading for a sensor.</summary>
+    /// <typeparam name="T">The reading's type: a number or a bool, never boxed on the way out.</typeparam>
+    /// <remarks>
+    /// <see cref="JsonSerializer.SerializeToElement{TValue}(TValue, JsonSerializerOptions?)"/> is
+    /// generic, so a float reading becomes a JSON number without passing through <c>object</c>. The
+    /// server then decides which packet type it becomes from the sensor's registration, exactly as it
+    /// would for a real device.
+    /// </remarks>
+    public Task<ApiResult<ITelemetryPacket>> SendReadingAsync<T>(
+        string macAddress,
+        T value,
+        CancellationToken cancellationToken = default)
+        where T : struct =>
+        SendAsync<ITelemetryPacket>(
+            token => http.PostAsJsonAsync(
+                "api/telemetry",
+                new TelemetryIngestionRequest(macAddress, JsonSerializer.SerializeToElement(value)),
+                token),
+            cancellationToken);
+
+    public Task<ApiResult<IReadOnlyList<NodeTrustSnapshot>>> GetTrustAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<IReadOnlyList<NodeTrustSnapshot>>("api/trust", cancellationToken);
+
+    public Task<ApiResult<TrustSummary>> GetTrustSummaryAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<TrustSummary>("api/trust/summary", cancellationToken);
+
+    public Task<ApiResult<IReadOnlyList<TrustHistoryPoint>>> GetTrustHistoryAsync(
+        string macAddress,
+        CancellationToken cancellationToken = default) =>
+        GetAsync<IReadOnlyList<TrustHistoryPoint>>($"api/trust/{Uri.EscapeDataString(macAddress)}/history", cancellationToken);
+
+    private Task<ApiResult<T>> GetAsync<T>(string uri, CancellationToken cancellationToken) =>
+        SendAsync<T>(token => http.GetAsync(uri, token), cancellationToken);
+
+    /// <summary>Sends a request and turns every expected outcome into a result.</summary>
+    private static async Task<ApiResult<T>> SendAsync<T>(
+        Func<CancellationToken, Task<HttpResponseMessage>> send,
+        CancellationToken cancellationToken)
+    {
+        HttpResponseMessage response;
+
+        try
+        {
+            response = await send(cancellationToken);
+        }
+        catch (HttpRequestException)
+        {
+            // In the browser a refused connection surfaces as a failed fetch, which is the API not
+            // running rather than anything the user did.
+            return ApiResult<T>.Failure(ApiProblem.Unreachable());
+        }
+
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode)
+            {
+                return ApiResult<T>.Failure(await ReadProblemAsync(response, cancellationToken));
+            }
+
+            try
+            {
+                var value = await response.Content.ReadFromJsonAsync<T>(cancellationToken);
+
+                return value is null
+                    ? ApiResult<T>.Failure(new ApiProblem((int)response.StatusCode, "The API returned an empty response."))
+                    : ApiResult<T>.Success(value);
+            }
+            catch (JsonException)
+            {
+                return ApiResult<T>.Failure(
+                    new ApiProblem((int)response.StatusCode, "The API returned a response the client could not read."));
+            }
+        }
+    }
+
+    /// <summary>Reads an RFC 7807 problem body, falling back to the status line if there is none.</summary>
+    private static async Task<ApiProblem> ReadProblemAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        var status = (int)response.StatusCode;
+
+        try
+        {
+            var payload = await response.Content.ReadFromJsonAsync<ProblemPayload>(cancellationToken);
+
+            if (payload is not null)
+            {
+                return new ApiProblem(
+                    status,
+                    payload.Title ?? response.ReasonPhrase ?? "The request failed.",
+                    payload.Detail,
+                    payload.Errors);
+            }
+        }
+        catch (JsonException)
+        {
+            // Not a problem-details body. Fall through to the status line.
+        }
+
+        return new ApiProblem(status, response.ReasonPhrase ?? $"The request failed with status {status}.");
+    }
+
+    /// <summary>The parts of a problem-details body the client uses.</summary>
+    private sealed record ProblemPayload(string? Title, string? Detail, Dictionary<string, string[]>? Errors);
 }
