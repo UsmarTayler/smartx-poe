@@ -70,6 +70,14 @@ public sealed class AppState
         Changed?.Invoke();
     }
 
+    /// <summary>Shows every band and clears the search text.</summary>
+    public void ClearTrustFilters()
+    {
+        _hiddenBands.Clear();
+        TrustSearch = string.Empty;
+        Changed?.Invoke();
+    }
+
     /// <summary>Applies a change and notifies, but only if the value actually changed.</summary>
     /// <remarks>
     /// Generic so the comparison runs through <see cref="EqualityComparer{T}.Default"/> without

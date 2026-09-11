@@ -1,0 +1,70 @@
+@using System.Globalization
+@* The hero tile. Two plain numbers — the average and the minimum — rather than a gauge or a donut.
+   A gauge spends most of its area on an arc to show a single value, is hard to read to two decimal
+   places, and two gauges side by side invite comparing arc lengths instead of numbers.
+
+   The minimum is not optional. An average hides exactly the failure this dashboard exists to surface:
+   forty healthy nodes and one dead one average to about 0.93, which reads as fine. Showing the lowest
+   score, and which node holds it, next to the average means a single fault cannot disappear into it. *@
+<MudPaper Outlined="true" Class="pa-4 pa-sm-6">
+    <MudText Typo="Typo.overline" Class="mud-text-secondary" HtmlTag="h2">Mesh confidence</MudText>
+
+    @if (Summary is null)
+    {
+        <div class="d-flex flex-wrap gap-8 mt-2" aria-hidden="true">
+            <MudSkeleton Width="7rem" Height="4rem" />
+            <MudSkeleton Width="7rem" Height="4rem" />
+        </div>
+        <MudSkeleton Width="60%" Height="28px" Class="mt-3" />
+    }
+    else
+    {
+        @if (Summary.MeshConfidence is { } average && Summary.LowestScore is { } lowest)
+        {
+            <div class="d-flex flex-wrap gap-8 align-end mt-1">
+                <div>
+                    <div class="smartx-hero-number">@Score(average)</div>
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary">average of @ProvenCount proven @(ProvenCount == 1 ? "node" : "nodes")</MudText>
+                </div>
+                <div>
+                    <div class="smartx-hero-number">@Score(lowest)</div>
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                        lowest · <span class="smartx-mono">@Summary.WorstNode</span>
+                    </MudText>
+                </div>
+            </div>
+        }
+        else
+        {
+            <MudText Typo="Typo.body1" Class="mt-2">
+                @(Summary.NodeCount == 0
+                    ? "No nodes are tracked yet, so there is nothing to measure."
+                    : "No node has reported yet, so there is no evidence to measure. Every tracked node is unproven.")
+            </MudText>
+        }
+
+        <div class="d-flex flex-wrap gap-2 mt-4" aria-label="Nodes per band">
+            @foreach (var band in TrustBandStyle.InSeverityOrder)
+            {
+                <TrustStatusChip Band="band" Count="CountOf(band)" />
+            }
+        </div>
+    }
+</MudPaper>
+
+@code {
+    [Parameter]
+    public TrustSummary? Summary { get; set; }
+
+    private int ProvenCount => Summary is null ? 0 : Summary.NodeCount - Summary.Unproven;
+
+    private int CountOf(TrustBand band) => band switch
+    {
+        TrustBand.Nominal => Summary!.Nominal,
+        TrustBand.Unproven => Summary!.Unproven,
+        TrustBand.Degrading => Summary!.Degrading,
+        _ => Summary!.Fault
+    };
+
+    private static string Score(double value) => value.ToString("0.00", CultureInfo.InvariantCulture);
+}

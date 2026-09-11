@@ -1,0 +1,18 @@
+@* A trust band as icon, word and colour together. The word is rendered in the theme's body colour
+   so it is legible whatever the status colour's contrast; the colour sits on the icon and the
+   outline, where it reinforces the meaning rather than carrying it. See TrustBandStyle. *@
+<span class="smartx-status" style="--smartx-status: @Style.Colour">
+    <MudIcon Icon="@Style.Icon" Size="Size.Small" aria-hidden="true" />
+    <span>@(Count is { } count ? $"{count} {Style.Label}" : Style.Label)</span>
+</span>
+
+@code {
+    [Parameter, EditorRequired]
+    public TrustBand Band { get; set; }
+
+    /// <summary>A number to show before the label, for per-band counts.</summary>
+    [Parameter]
+    public int? Count { get; set; }
+
+    private TrustBandStyle Style => TrustBandStyle.For(Band);
+}

@@ -150,3 +150,145 @@ h1:focus {
         .smartx-readings li:last-child {
             border-bottom: none;
         }
+
+/* ---- Trust panel ------------------------------------------------------------------------------
+   Status chips carry the band's colour on the icon and outline only; the label keeps the body text
+   colour so it is legible whatever the status colour's contrast. */
+.smartx-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 10px 2px 6px;
+    border: 1px solid var(--smartx-status);
+    border-radius: 999px;
+    color: var(--mud-palette-text-primary);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    line-height: 1.6;
+    white-space: nowrap;
+}
+
+    .smartx-status .mud-icon-root {
+        color: var(--smartx-status);
+    }
+
+.smartx-hero-number {
+    font-size: clamp(2.25rem, 7vw, 3.5rem);
+    font-weight: 500;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+}
+
+.smartx-trust-row {
+    display: grid;
+    grid-template-columns: 8.5rem 11rem minmax(0, 1fr) 120px 3.5rem;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 10px 12px 10px 8px;
+    border: 0;
+    border-left: 4px solid var(--smartx-status, transparent);
+    border-bottom: 1px solid var(--mud-palette-lines-default);
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+    .smartx-trust-row:hover {
+        background: color-mix(in srgb, var(--mud-palette-text-primary) 6%, transparent);
+    }
+
+    .smartx-trust-row[aria-pressed="true"] {
+        background: color-mix(in srgb, var(--mud-palette-primary) 16%, transparent);
+    }
+
+.smartx-trust-row--header {
+    cursor: default;
+    color: var(--mud-palette-text-secondary);
+    font-size: 0.75rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+    .smartx-trust-row--header:hover {
+        background: none;
+    }
+
+.smartx-trust-row__reason {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.smartx-trust-row__score {
+    text-align: right;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.smartx-sparkline {
+    display: block;
+}
+
+.smartx-sparkline--empty {
+    display: block;
+    border-bottom: 1px dashed var(--mud-palette-lines-default);
+}
+
+.smartx-band-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px 4px 8px;
+    border: 1px solid var(--smartx-status);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--smartx-status) 14%, transparent);
+    color: var(--mud-palette-text-primary);
+    font: inherit;
+    font-size: 0.8125rem;
+    cursor: pointer;
+}
+
+    .smartx-band-toggle .mud-icon-root {
+        color: var(--smartx-status);
+    }
+
+    /* A hidden band is shown struck through as well as faded, so "off" does not depend on seeing a
+       subtle change of tint. */
+    .smartx-band-toggle[aria-pressed="false"] {
+        background: none;
+        border-style: dashed;
+        color: var(--mud-palette-text-secondary);
+        text-decoration: line-through;
+    }
+
+.smartx-trust-search {
+    flex: 1 1 14rem;
+    max-width: 22rem;
+}
+
+/* Below tablet width a row becomes three lines: status and score, then the MAC on its own full-width line,
+   then reason and trend. The MAC is never truncated — it is the node's identity, and cut to
+   "AA:BB:CC:DD:EE:…" it would read the same for every node in the list.
+   The header row is dropped, since the chip and the score label themselves. */
+@media (max-width: 767.98px) {
+    .smartx-trust-row {
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas:
+            "status score"
+            "mac mac"
+            "reason trend";
+        row-gap: 6px;
+    }
+
+    .smartx-trust-row__status { grid-area: status; }
+    .smartx-trust-row__mac { grid-area: mac; overflow-wrap: anywhere; }
+    .smartx-trust-row__score { grid-area: score; }
+    .smartx-trust-row__reason { grid-area: reason; font-size: 0.875rem; }
+    .smartx-trust-row__trend { grid-area: trend; justify-self: end; }
+
+    .smartx-trust-row--header {
+        display: none;
+    }
+}
