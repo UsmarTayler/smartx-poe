@@ -32,6 +32,7 @@ public partial class SensorRegistrationForm
     private bool _isValid;
     private ApiProblem? _appliedProblem;
     private bool _revalidate;
+    private bool _resetValidationPending;
     private Dictionary<string, string[]> _serverErrors = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The zones to choose from, flattened parent before child.</summary>
@@ -62,16 +63,22 @@ public partial class SensorRegistrationForm
         _serverErrors.TryGetValue(ZoneField, out var messages) ? messages : [];
 
     /// <summary>Clears the form after a successful registration, keeping the location for the next device.</summary>
-    public async Task ResetAfterSuccessAsync()
+    public Task ResetAfterSuccessAsync()
     {
         Model.ClearForNextSensor();
         _serverErrors.Clear();
+
+        // The validation reset is deferred until after the render that empties the MAC box. Done here,
+        // before that render, the field would see its value change to empty and flag "A MAC address is
+        // required" in red immediately after a successful registration.
         if (_form is not null)
         {
-            await _form.ResetValidationAsync();
+            _resetValidationPending = true;
         }
 
         StateHasChanged();
+
+        return Task.CompletedTask;
     }
 
     protected override void OnParametersSet()
@@ -92,6 +99,13 @@ public partial class SensorRegistrationForm
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        // Runs after the render that emptied the MAC box, for the reason given in ResetAfterSuccessAsync.
+        if (_resetValidationPending && _form is not null)
+        {
+            _resetValidationPending = false;
+            await _form.ResetValidationAsync();
+        }
+
         // Re-validating after the render that applied the server's errors makes each field pick up its
         // own message through the same validation function that runs as the user types. There is no
         // second, separate way for an error to reach a field.
