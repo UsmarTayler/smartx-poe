@@ -1,0 +1,37 @@
+@* The nodes, in the order given — worst first, as the API sorted them. Each row is keyed by MAC, so
+   when a score changes and a node moves up the list Blazor moves that row's element instead of
+   rewriting every row's contents in place. Keyboard focus stays on the node the user was on, not on
+   whatever node happened to slide into the same position. *@
+<div class="smartx-trust-list" role="list" aria-label="Nodes, worst first">
+    <div class="smartx-trust-row smartx-trust-row--header" aria-hidden="true">
+        <span>Status</span>
+        <span>MAC address</span>
+        <span>Reason</span>
+        <span>Trend</span>
+        <span class="smartx-trust-row__score">Score</span>
+    </div>
+
+    @foreach (var node in Nodes)
+    {
+        <div role="listitem" @key="node.MacAddress">
+            <TrustNodeRow Node="node"
+                          History="HistoryFor(node.MacAddress)"
+                          Selected="@string.Equals(node.MacAddress, SelectedNode, StringComparison.OrdinalIgnoreCase)"
+                          OnSelect="OnSelect" />
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<NodeTrustSnapshot> Nodes { get; set; } = [];
+
+    [Parameter]
+    public Func<string, IReadOnlyList<TrustHistoryPoint>> HistoryFor { get; set; } = _ => [];
+
+    [Parameter]
+    public string? SelectedNode { get; set; }
+
+    [Parameter]
+    public EventCallback<string> OnSelect { get; set; }
+}

@@ -43,12 +43,15 @@ public sealed record SensorRegistrationRequest(
     /// </summary>
     /// <param name="registration">The registration, when the request is sound.</param>
     /// <param name="errors">
-    /// Field name to messages, in the shape ASP.NET Core's problem-details helper expects.
+    /// Field name to messages, in the shape ASP.NET Core's problem-details helper expects. The field
+    /// names are this record's own property names, so the client can map each error straight back
+    /// to the input it came from with <c>nameof</c>.
     /// </param>
     /// <remarks>
-    /// Collects every field's problems rather than stopping at the first, for the same reason the
-    /// zone walk does: a caller fixing one field at a time learns about the next only by trying
-    /// again.
+    /// Every rule comes from <see cref="SensorRegistrationRules"/>, the same methods the client form
+    /// runs as the user types. Collects every field's problems rather than stopping at the first, for
+    /// the same reason the zone walk does: a caller fixing one field at a time learns about the next
+    /// only by trying again.
     /// </remarks>
     public bool TryCreateRegistration(
         [NotNullWhen(true)] out SensorRegistration? registration,
@@ -57,54 +60,15 @@ public sealed record SensorRegistrationRequest(
         errors = [];
         registration = null;
 
-        if (!MacAddressValidator.IsValid(MacAddress))
-        {
-            errors[nameof(MacAddress)] =
-                ["Expected six hex pairs separated consistently by colons or hyphens, " +
-                 "and not the reserved all-zero address."];
-        }
-
-        if (string.IsNullOrWhiteSpace(Room))
-        {
-            errors[nameof(Room)] = ["A room is required."];
-        }
-
-        if (string.IsNullOrWhiteSpace(ZoneId))
-        {
-            errors[nameof(ZoneId)] = ["A zone id is required."];
-        }
-
-        if (string.IsNullOrWhiteSpace(NodeId))
-        {
-            errors[nameof(NodeId)] = ["A node id is required."];
-        }
-
-        if (string.IsNullOrWhiteSpace(Unit))
-        {
-            errors[nameof(Unit)] = ["A unit is required."];
-        }
-
-        if (double.IsNaN(Minimum) || double.IsNaN(Maximum))
-        {
-            errors[nameof(Minimum)] = ["Range bounds cannot be NaN."];
-        }
-        else if (Minimum > Maximum)
-        {
-            errors[nameof(Minimum)] = [$"Minimum {Minimum} exceeds maximum {Maximum}."];
-        }
-
-        if (PayloadKind == TelemetryPayloadKind.State && Category != SensorCategory.Actuator)
-        {
-            errors[nameof(PayloadKind)] =
-                [$"A {nameof(TelemetryPayloadKind.State)} sensor must be registered as " +
-                 $"{nameof(SensorCategory.Actuator)}, not {Category}."];
-        }
-
-        if (HeartbeatIntervalSeconds is <= 0)
-        {
-            errors[nameof(HeartbeatIntervalSeconds)] =
-                ["A heartbeat interval must be a positive number of seconds."];
-        }
+        Collect(errors, nameof(MacAddress), SensorRegistrationRules.MacAddress(MacAddress));
+        Collect(errors, nameof(Room), SensorRegistrationRules.Room(Room));
+        Collect(errors, nameof(ZoneId), SensorRegistrationRules.ZoneId(ZoneId));
+        Collect(errors, nameof(NodeId), SensorRegistrationRules.NodeId(NodeId));
+        Collect(errors, nameof(Unit), SensorRegistrationRules.Unit(Unit));
+        Collect(errors, nameof(Minimum), SensorRegistrationRules.Range(Minimum, Maximum));
+        Collect(errors, nameof(PayloadKind), SensorRegistrationRules.PayloadKind(PayloadKind, Category));
+        Collect(errors, nameof(HeartbeatIntervalSeconds),
+            SensorRegistrationRules.HeartbeatIntervalSeconds(HeartbeatIntervalSeconds));
 
         if (errors.Count > 0)
         {
@@ -121,5 +85,13 @@ public sealed record SensorRegistrationRequest(
             HeartbeatIntervalSeconds is { } seconds ? TimeSpan.FromSeconds(seconds) : null);
 
         return true;
+    }
+
+    private static void Collect(Dictionary<string, string[]> errors, string field, string? message)
+    {
+        if (message is not null)
+        {
+            errors[field] = [message];
+        }
     }
 }

@@ -1,0 +1,90 @@
+@using System.Globalization
+@using System.Text
+@* A node's recent trust as a single line. Deliberately bare: 2px stroke, no axes, no gridlines, no
+   legend — the row it sits in already names the series, and anything more would turn a glanceable
+   trend into a chart that needs reading.
+
+   The y-domain is fixed at 0 to 1 rather than fitted to each node's own range. A fitted axis would
+   make a node wobbling between 0.95 and 0.96 look as dramatic as one collapsing from 0.9 to 0.1, and
+   rows could no longer be compared by eye. With a fixed domain, height means the same thing on every
+   row.
+
+   The hover text uses SVG's own <title>, not a tooltip component. It shows the current value and time
+   on hover, doubles as the accessible name, and adds no extra elements — which keeps the row itself
+   a real <button>, where a tooltip wrapper's div would not be valid content. *@
+@if (Points.Count == 0)
+{
+    <span class="smartx-sparkline smartx-sparkline--empty" style="width: @(Width)px; height: @(Height)px" aria-hidden="true"></span>
+}
+else
+{
+    <svg class="smartx-sparkline" width="@Width" height="@Height" viewBox="0 0 @Width @Height"
+         role="img" focusable="false">
+        <title>@Summary</title>
+        @if (Points.Count == 1)
+        {
+            <circle cx="@Number(Width - Inset)" cy="@Number(Y(Points[0].Score))" r="2" fill="@Colour" />
+        }
+        else
+        {
+            <polyline points="@Path" fill="none" stroke="@Colour" stroke-width="2"
+                      stroke-linejoin="round" stroke-linecap="round" />
+        }
+    </svg>
+}
+
+@code {
+    // Half the stroke width plus a pixel, so a score of exactly 0 or 1 is not clipped by the edge.
+    private const double Inset = 2;
+
+    [Parameter, EditorRequired]
+    public IReadOnlyList<TrustHistoryPoint> Points { get; set; } = [];
+
+    /// <summary>The node's current band, which colours the line.</summary>
+    [Parameter, EditorRequired]
+    public TrustBand Band { get; set; }
+
+    [Parameter]
+    public int Width { get; set; } = 120;
+
+    [Parameter]
+    public int Height { get; set; } = 28;
+
+    private string Colour => TrustBandStyle.For(Band).Colour;
+
+    private string Summary =>
+        $"{Points[^1].Score.ToString("0.00", CultureInfo.InvariantCulture)} at {ReadingFormatter.Time(Points[^1].Timestamp)}";
+
+    private double Y(double score) => Inset + (1 - Math.Clamp(score, 0, 1)) * (Height - 2 * Inset);
+
+    /// <summary>The polyline, spaced by time rather than by sample index.</summary>
+    /// <remarks>
+    /// Samples arrive irregularly — at most every ten seconds, plus one at every band change — so
+    /// spacing them evenly would draw a burst of changes and a quiet ten minutes as the same width.
+    /// </remarks>
+    private string Path
+    {
+        get
+        {
+            var first = Points[0].Timestamp;
+            var span = (Points[^1].Timestamp - first).TotalMilliseconds;
+            var path = new StringBuilder();
+
+            for (var index = 0; index < Points.Count; index++)
+            {
+                var along = span > 0
+                    ? (Points[index].Timestamp - first).TotalMilliseconds / span
+                    : (double)index / (Points.Count - 1);
+
+                path.Append(Number(Inset + along * (Width - 2 * Inset)))
+                    .Append(',')
+                    .Append(Number(Y(Points[index].Score)))
+                    .Append(' ');
+            }
+
+            return path.ToString();
+        }
+    }
+
+    private static string Number(double value) => value.ToString("0.##", CultureInfo.InvariantCulture);
+}

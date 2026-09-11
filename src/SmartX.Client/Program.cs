@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
 using MudBlazor.Services;
 using SmartX.Client;
 using SmartX.Client.Services;
+using SmartX.Client.State;
 
 var builder = WebAssemblyHostBuilder.CreateDefault(args);
 builder.RootComponents.Add<App>("#app");
@@ -17,5 +18,17 @@ var apiBaseAddress = builder.Configuration["ApiBaseAddress"]
     ?? throw new InvalidOperationException("ApiBaseAddress is missing from wwwroot/appsettings.json.");
 
 builder.Services.AddHttpClient<SmartXApiClient>(client => client.BaseAddress = new Uri(apiBaseAddress));
+
+// Scoped, which in WebAssembly means one instance per browser tab. State that must survive
+// navigation lives in these rather than in page components, which are rebuilt on every visit.
+builder.Services.AddScoped<AppState>();
+builder.Services.AddScoped<ApiConnection>();
+builder.Services.AddScoped<SensorService>();
+builder.Services.AddScoped<TelemetryService>();
+builder.Services.AddScoped<ITrustFeed, PollingTrustFeed>();
+
+// Injected rather than read from DateTimeOffset.UtcNow, matching the API, so anything that stamps
+// or ages client-side state can be driven by a controlled clock in a test.
+builder.Services.AddSingleton(TimeProvider.System);
 
 await builder.Build().RunAsync();

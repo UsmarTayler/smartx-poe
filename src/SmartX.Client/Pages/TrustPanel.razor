@@ -1,0 +1,122 @@
+@page "/"
+@implements IAsyncDisposable
+@inject ITrustFeed Feed
+@inject AppState State
+
+<PageTitle>Trust panel · Smart-X</PageTitle>
+
+<PageHeader Title="Trust panel" Subtitle="Every node, worst first. The node most likely to be at fault is always the top row.">
+    <Actions>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">@RefreshLabel</MudText>
+        <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Refresh" OnClick="RefreshAsync">
+            Refresh now
+        </MudButton>
+    </Actions>
+</PageHeader>
+
+@if (!Snapshot.IsLoaded && Snapshot.Problem is { } problem)
+{
+    <ApiErrorState Problem="problem" OnRetry="RefreshAsync" />
+}
+else
+{
+    @* Data that has gone stale stays on screen, labelled as stale. Losing the connection is exactly
+       when an operator most needs the last known state of the mesh, so it is not blanked. *@
+    @if (Snapshot.IsLoaded && Snapshot.Problem is { } stale)
+    {
+        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-4" role="status">
+            Showing trust as of @(Snapshot.RefreshedAt is { } at ? ReadingFormatter.Time(at) : "the last refresh").
+            @(stale.IsUnreachable ? "The API stopped answering" : stale.Message); retrying automatically.
+        </MudAlert>
+    }
+
+    <MeshConfidenceTile Summary="Snapshot.Summary" />
+
+    <MudPaper Outlined="true" Class="mt-4">
+        <div class="pa-3">
+            <TrustFilterBar Nodes="Snapshot.Nodes"
+                            HiddenBands="State.HiddenBands"
+                            Search="@State.TrustSearch"
+                            OnToggleBand="State.ToggleBand"
+                            OnSearch="@(text => State.SetTrustSearch(text))" />
+        </div>
+
+        @if (!Snapshot.IsLoaded)
+        {
+            <div class="px-3 pb-3" aria-hidden="true">
+                @for (var row = 0; row < 4; row++)
+                {
+                    <MudSkeleton Height="44px" Class="mb-2" />
+                }
+            </div>
+        }
+        else if (Snapshot.Nodes.Count == 0)
+        {
+            <EmptyState Icon="@Icons.Material.Outlined.Shield"
+                        Title="No nodes are tracked yet"
+                        Text="Register a sensor and it appears here straight away as unproven. Send it readings and it earns a score.">
+                <MudButton Href="sensors" Variant="Variant.Filled" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.AppRegistration">
+                    Register a sensor
+                </MudButton>
+            </EmptyState>
+        }
+        else if (Visible.Count == 0)
+        {
+            <EmptyState Icon="@Icons.Material.Outlined.FilterAltOff"
+                        Title="No nodes match these filters"
+                        Text="Every tracked node is hidden by the bands or text chosen above.">
+                <MudButton Variant="Variant.Outlined" OnClick="State.ClearTrustFilters">Clear filters</MudButton>
+            </EmptyState>
+        }
+        else
+        {
+            <TrustNodeList Nodes="Visible"
+                           HistoryFor="Snapshot.HistoryFor"
+                           SelectedNode="@State.SelectedNode"
+                           OnSelect="ToggleSelection" />
+        }
+    </MudPaper>
+}
+
+@code {
+    private TrustFeedSnapshot Snapshot => Feed.Current;
+
+    private IReadOnlyList<NodeTrustSnapshot> Visible =>
+        TrustFilter.Apply(Snapshot.Nodes, State.HiddenBands, State.TrustSearch);
+
+    private string RefreshLabel =>
+        State.LastRefresh is { } at
+            ? Feed.RefreshInterval is { } interval
+                ? $"Updated {ReadingFormatter.Time(at)} · every {interval.TotalSeconds:0}s"
+                : $"Updated {ReadingFormatter.Time(at)} · live"
+            // Before the first successful refresh, say whether an attempt has already failed rather than
+            // claiming to still be connecting while the API is known to be down.
+            : Snapshot.Problem is not null ? "Not connected" : "Connecting…";
+
+    protected override async Task OnInitializedAsync()
+    {
+        Feed.Updated += OnChanged;
+        State.Changed += OnChanged;
+
+        // Whatever the feed already holds renders first; starting it fetches fresh data and then keeps
+        // it coming for as long as this page is open.
+        await Feed.StartAsync();
+    }
+
+    private Task RefreshAsync() => Feed.RefreshNowAsync();
+
+    private void ToggleSelection(string macAddress) =>
+        State.SelectNode(string.Equals(State.SelectedNode, macAddress, StringComparison.OrdinalIgnoreCase) ? null : macAddress);
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public async ValueTask DisposeAsync()
+    {
+        Feed.Updated -= OnChanged;
+        State.Changed -= OnChanged;
+
+        // Stop polling when the panel closes; the last snapshot stays in the feed for the next visit.
+        await Feed.StopAsync();
+    }
+}

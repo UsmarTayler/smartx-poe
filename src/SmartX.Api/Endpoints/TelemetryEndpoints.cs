@@ -221,7 +221,7 @@ internal static class TelemetryEndpoints
             case TelemetryPayloadKind.State:
                 if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
                 {
-                    rejection = Mismatch(sensor, value, "a boolean");
+                    rejection = Mismatch(sensor, value, "true or false");
 
                     return false;
                 }
@@ -235,14 +235,14 @@ internal static class TelemetryEndpoints
                 // reporting 21.5 is caught here rather than silently truncated to 21.
                 if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var whole))
                 {
-                    rejection = Mismatch(sensor, value, "a whole number");
+                    rejection = Mismatch(sensor, value, "whole numbers");
 
                     return false;
                 }
 
                 if (!sensor.ExpectedRange.Contains(whole))
                 {
-                    rejection = OutOfRange(sensor, whole);
+                    rejection = OutOfRange(sensor);
 
                     return false;
                 }
@@ -255,14 +255,14 @@ internal static class TelemetryEndpoints
             case TelemetryPayloadKind.Real:
                 if (value.ValueKind != JsonValueKind.Number || !value.TryGetSingle(out var real))
                 {
-                    rejection = Mismatch(sensor, value, "a number");
+                    rejection = Mismatch(sensor, value, "numbers");
 
                     return false;
                 }
 
                 if (!sensor.ExpectedRange.Contains(real))
                 {
-                    rejection = OutOfRange(sensor, real);
+                    rejection = OutOfRange(sensor);
 
                     return false;
                 }
@@ -278,25 +278,49 @@ internal static class TelemetryEndpoints
                 // about what it sends.
                 rejection = new PacketRejection(
                     TrustOutcome.SchemaFailure,
-                    $"Sensor '{sensor.MacAddress}' is registered with payload kind " +
-                    $"'{sensor.PayloadKind}', which this gateway cannot route.");
+                    $"sensor is registered with payload kind " +
+                    $"'{sensor.PayloadKind}', which this gateway cannot route");
 
                 return false;
         }
     }
 
+    // Rejection reasons are phrased as the end of a sentence, without the value and without the
+    // sensor's MAC. They are always shown after something that already names both: "21.5 rejected:"
+    // on the dashboard, "Reading 3:" in a batch result. Repeating either inside the reason produced
+    // lines like "21.5 rejected: Sensor 'AA:BB:…' … Received Number", which said the same thing twice
+    // and ended on a JSON token name no operator should need to know.
+
     /// <summary>The payload is not the shape the registration promised: a schema failure.</summary>
-    private static PacketRejection Mismatch(SensorRegistration sensor, JsonElement value, string expected) =>
-        new(TrustOutcome.SchemaFailure,
-            $"Sensor '{sensor.MacAddress}' is registered as {sensor.PayloadKind}, so its readings must " +
-            $"be {expected}. Received {value.ValueKind}.");
+    private static PacketRejection Mismatch(SensorRegistration sensor, JsonElement value, string expected)
+    {
+        // A fractional number sent to an integer sensor is still a number, so "not a number" would be
+        // false; the requirement for whole numbers is the whole explanation.
+        var received = value.ValueKind == JsonValueKind.Number && sensor.PayloadKind == TelemetryPayloadKind.Integer
+            ? string.Empty
+            : $", not {Describe(value.ValueKind)}";
+
+        return new PacketRejection(
+            TrustOutcome.SchemaFailure,
+            $"sensor is registered as {sensor.PayloadKind}, so readings must be {expected}{received}");
+    }
 
     /// <summary>The payload is the right shape but outside the promised range: a range violation.</summary>
-    private static PacketRejection OutOfRange<T>(SensorRegistration sensor, T reading)
-        where T : struct, System.Numerics.INumber<T> =>
+    private static PacketRejection OutOfRange(SensorRegistration sensor) =>
         new(TrustOutcome.RangeViolation,
-            $"{reading} falls outside the expected range {sensor.ExpectedRange} declared for sensor " +
-            $"'{sensor.MacAddress}'.");
+            $"outside the expected range {sensor.ExpectedRange.Minimum:0.##}–{sensor.ExpectedRange.Maximum:0.##} {sensor.Unit}");
+
+    /// <summary>Names a JSON value's kind in words rather than as a token name.</summary>
+    private static string Describe(JsonValueKind kind) => kind switch
+    {
+        JsonValueKind.Number => "a number",
+        JsonValueKind.String => "text",
+        JsonValueKind.True or JsonValueKind.False => "true or false",
+        JsonValueKind.Null => "null",
+        JsonValueKind.Array => "a list",
+        JsonValueKind.Object => "an object",
+        _ => "a missing value"
+    };
 
     private static IResult UnregisteredSensor(string macAddress) =>
         Results.Problem(

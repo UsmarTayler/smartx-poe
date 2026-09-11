@@ -1,0 +1,24 @@
+@* Shown in place of a panel whose data could not load. It says what happened in words, offers the
+   one action that can fix it from here, and leaves the rest of the page rendered — a dead API
+   should cost the user one panel, not the whole screen. *@
+<MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="my-2" role="alert">
+    <MudText Typo="Typo.subtitle2">@(Problem.IsUnreachable ? "Can't reach the API" : Problem.Title)</MudText>
+    <MudText Typo="Typo.body2" Class="mb-3">
+        @(Problem.IsUnreachable
+            ? "Nothing answered at the API address. Start SmartX.Api, then retry."
+            : Problem.Detail ?? "The request did not succeed.")
+    </MudText>
+    <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+               StartIcon="@Icons.Material.Filled.Refresh"
+               OnClick="@(() => OnRetry.InvokeAsync())">
+        Retry
+    </MudButton>
+</MudAlert>
+
+@code {
+    [Parameter, EditorRequired]
+    public ApiProblem Problem { get; set; } = ApiProblem.Unreachable();
+
+    [Parameter]
+    public EventCallback OnRetry { get; set; }
+}

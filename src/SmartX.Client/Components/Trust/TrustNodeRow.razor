@@ -1,0 +1,34 @@
+@using System.Globalization
+@* One node: status, MAC, the plain-language reason, the trend, the score. The whole row is a real
+   button, so it is reachable by Tab and selectable with Enter or Space with no extra keyboard code,
+   and aria-pressed tells a screen reader which node is selected. The left border repeats the band
+   colour so the list can be scanned by colour — but the chip beside it always says the band in words. *@
+<button type="button" class="smartx-trust-row" style="--smartx-status: @TrustBandStyle.For(Node.Band).Colour"
+        aria-pressed="@(Selected ? "true" : "false")"
+        aria-label="@AccessibleName"
+        @onclick="@(() => OnSelect.InvokeAsync(Node.MacAddress))">
+    <span class="smartx-trust-row__status"><TrustStatusChip Band="Node.Band" /></span>
+    <span class="smartx-trust-row__mac smartx-mono">@Node.MacAddress</span>
+    <span class="smartx-trust-row__reason">@Node.Reason</span>
+    <span class="smartx-trust-row__trend"><Sparkline Points="History" Band="Node.Band" /></span>
+    <span class="smartx-trust-row__score">@Score</span>
+</button>
+
+@code {
+    [Parameter, EditorRequired]
+    public NodeTrustSnapshot Node { get; set; } = default!;
+
+    [Parameter]
+    public IReadOnlyList<TrustHistoryPoint> History { get; set; } = [];
+
+    [Parameter]
+    public bool Selected { get; set; }
+
+    [Parameter]
+    public EventCallback<string> OnSelect { get; set; }
+
+    private string Score => Node.Score.ToString("0.00", CultureInfo.InvariantCulture);
+
+    private string AccessibleName =>
+        $"{Node.MacAddress}, {TrustBandStyle.For(Node.Band).Label}, score {Score}, {Node.Reason}";
+}

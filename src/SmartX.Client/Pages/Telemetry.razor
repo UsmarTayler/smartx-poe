@@ -1,0 +1,105 @@
+@page "/telemetry"
+@implements IDisposable
+@inject SensorService SensorCatalog
+@inject TelemetryService TelemetryData
+
+<PageTitle>Telemetry · Smart-X</PageTitle>
+
+<PageHeader Title="Telemetry" Subtitle="Send readings through the ingestion pipeline and see what it accepts.">
+    <Actions>
+        @if (SensorCatalog.IsLoaded && SensorCatalog.Sensors.Count > 0)
+        {
+            <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Refresh"
+                       OnClick="RefreshAsync" Disabled="_refreshing">
+                Refresh readings
+            </MudButton>
+        }
+    </Actions>
+</PageHeader>
+
+@if (SensorCatalog.LoadProblem is { } problem && !SensorCatalog.IsLoaded)
+{
+    <ApiErrorState Problem="problem" OnRetry="LoadAsync" />
+}
+else if (!SensorCatalog.IsLoaded)
+{
+    <MudGrid Spacing="3">
+        @for (var card = 0; card < 3; card++)
+        {
+            <MudItem xs="12" sm="6" lg="4">
+                <MudPaper Outlined="true" Class="pa-4" aria-hidden="true">
+                    <MudSkeleton Width="60%" Height="28px" />
+                    <MudSkeleton Width="40%" Height="20px" Class="mb-4" />
+                    <MudSkeleton Width="30%" Height="40px" Class="mb-4" />
+                    <MudSkeleton SkeletonType="SkeletonType.Rectangle" Height="48px" />
+                </MudPaper>
+            </MudItem>
+        }
+    </MudGrid>
+}
+else if (SensorCatalog.Sensors.Count == 0)
+{
+    <MudPaper Outlined="true">
+        <EmptyState Icon="@Icons.Material.Outlined.Sensors"
+                    Title="No sensors to send readings for"
+                    Text="Register a sensor first. It will appear here with a control that matches the kind of reading it was registered to send.">
+            <MudButton Href="sensors" Variant="Variant.Filled" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.AppRegistration">
+                Register a sensor
+            </MudButton>
+        </EmptyState>
+    </MudPaper>
+}
+else
+{
+    <MudGrid Spacing="3">
+        @foreach (var sensor in SensorCatalog.Sensors)
+        {
+            <MudItem xs="12" sm="6" lg="4" @key="sensor.MacAddress">
+                <SensorReadingCard Sensor="sensor"
+                                   Telemetry="TelemetryData.For(sensor.MacAddress)"
+                                   ZonePath="@SensorCatalog.ZonePath(sensor.Location.ZoneId)"
+                                   OnSend="@(input => TelemetryData.SendAsync(sensor, input))" />
+            </MudItem>
+        }
+    </MudGrid>
+}
+
+@code {
+    private bool _refreshing;
+
+    protected override async Task OnInitializedAsync()
+    {
+        SensorCatalog.Changed += OnChanged;
+        TelemetryData.Changed += OnChanged;
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        // Always refreshed, not only on first visit, for the same reason as the sensors page: cached
+        // sensors render immediately, and anything registered since then is picked up.
+        await SensorCatalog.LoadAsync();
+
+        if (SensorCatalog.IsLoaded)
+        {
+            await TelemetryData.LoadAllAsync(SensorCatalog.Sensors);
+        }
+    }
+
+    private async Task RefreshAsync()
+    {
+        _refreshing = true;
+        await TelemetryData.LoadAllAsync(SensorCatalog.Sensors);
+        _refreshing = false;
+    }
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        SensorCatalog.Changed -= OnChanged;
+        TelemetryData.Changed -= OnChanged;
+    }
+}

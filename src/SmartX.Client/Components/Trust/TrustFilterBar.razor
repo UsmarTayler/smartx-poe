@@ -1,0 +1,55 @@
+@* Filters for the trust list. Data in: the nodes (for counts), the hidden bands and the search text,
+   all held in AppState so they survive navigation. Events out: a band toggled, the search changed.
+   Each band toggle is a real button with aria-pressed, and shows icon, count and word. *@
+<div class="d-flex flex-wrap align-center gap-2">
+    <MudTextField T="string" Value="Search" ValueChanged="OnSearch" Immediate="true" DebounceInterval="200"
+                  Placeholder="Filter by MAC or reason" Variant="Variant.Outlined" Margin="Margin.Dense"
+                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Clearable="true"
+                  Class="smartx-trust-search" aria-label="Filter nodes by MAC address or reason" />
+
+    @foreach (var band in TrustBandStyle.InSeverityOrder)
+    {
+        var style = TrustBandStyle.For(band);
+        var shown = !HiddenBands.Contains(band);
+
+        <button type="button" class="smartx-band-toggle" style="--smartx-status: @style.Colour"
+                aria-pressed="@(shown ? "true" : "false")"
+                title="@(shown ? $"Hide {style.Label} nodes" : $"Show {style.Label} nodes")"
+                @onclick="@(() => OnToggleBand.InvokeAsync(band))">
+            <MudIcon Icon="@style.Icon" Size="Size.Small" aria-hidden="true" />
+            <span>@CountOf(band) @style.Label</span>
+        </button>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<NodeTrustSnapshot> Nodes { get; set; } = [];
+
+    [Parameter, EditorRequired]
+    public IReadOnlySet<TrustBand> HiddenBands { get; set; } = new HashSet<TrustBand>();
+
+    [Parameter]
+    public string Search { get; set; } = string.Empty;
+
+    [Parameter]
+    public EventCallback<TrustBand> OnToggleBand { get; set; }
+
+    [Parameter]
+    public EventCallback<string> OnSearch { get; set; }
+
+    private int CountOf(TrustBand band)
+    {
+        var count = 0;
+
+        foreach (var node in Nodes)
+        {
+            if (node.Band == band)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+}

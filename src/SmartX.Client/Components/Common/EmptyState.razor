@@ -1,0 +1,23 @@
+@* An empty panel should tell the user what to do next, not just that there is nothing. Every
+   empty state therefore names the next step, and offers it as an action where one exists. *@
+<div class="d-flex flex-column align-center text-center py-8 px-4">
+    <MudIcon Icon="@Icon" Size="Size.Large" Class="mb-3 mud-text-secondary" aria-hidden="true" />
+    <MudText Typo="Typo.subtitle1" HtmlTag="p">@Title</MudText>
+    <MudText Typo="Typo.body2" Class="mud-text-secondary mb-4" Style="max-width: 36ch">@Text</MudText>
+    @ChildContent
+</div>
+
+@code {
+    [Parameter]
+    public string Icon { get; set; } = Icons.Material.Outlined.Inbox;
+
+    [Parameter, EditorRequired]
+    public string Title { get; set; } = string.Empty;
+
+    [Parameter, EditorRequired]
+    public string Text { get; set; } = string.Empty;
+
+    /// <summary>The action that fills the empty state, if there is one.</summary>
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+}

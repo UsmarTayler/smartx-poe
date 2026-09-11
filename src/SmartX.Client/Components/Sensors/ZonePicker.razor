@@ -1,0 +1,75 @@
+@* A zone is chosen from the real hierarchy the API returned, never typed. A free-text box would
+   accept "zone1", "Zone 1" and "zone-l" alike, and every one of them would be rejected by the server
+   only after submitting. Options are indented by depth and the selected value shows its full path,
+   so "Zone 1" under one facility cannot be mistaken for "Zone 1" under another. *@
+<MudSelect T="string" Label="Zone" Placeholder="Choose where it is deployed"
+           Value="Value" ValueChanged="ValueChanged"
+           Variant="Variant.Outlined" Margin="Margin.Dense" AnchorOrigin="Origin.BottomCenter"
+           Validation="Validation" ToStringFunc="PathOf" HelperText="@HelperText"
+           Disabled="Zones.Count == 0">
+    @foreach (var zone in Zones)
+    {
+        <MudSelectItem T="string" Value="zone.Id">
+            <span class="d-inline-flex align-center" style="@($"padding-left: {zone.Depth * 16}px")">
+                <MudIcon Icon="@(zone.Depth == 0 ? Icons.Material.Outlined.Business : Icons.Material.Outlined.SubdirectoryArrowRight)"
+                         Size="Size.Small" Class="mr-2 mud-text-secondary" aria-hidden="true" />
+                @zone.Name
+            </span>
+        </MudSelectItem>
+    }
+</MudSelect>
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<ZoneOption> Zones { get; set; } = [];
+
+    [Parameter]
+    public string? Value { get; set; }
+
+    [Parameter]
+    public EventCallback<string?> ValueChanged { get; set; }
+
+    [Parameter]
+    public Func<string?, string?>? Validation { get; set; }
+
+    private ZoneOption? Selected =>
+        Zones.FirstOrDefault(zone => string.Equals(zone.Id, Value, StringComparison.OrdinalIgnoreCase));
+
+    private string? PathOf(string? zoneId) =>
+        Zones.FirstOrDefault(zone => string.Equals(zone.Id, zoneId, StringComparison.OrdinalIgnoreCase))?.Path ?? zoneId;
+
+    /// <summary>
+    /// What the chosen level itself imposes, with a reminder that levels above it apply too.
+    /// </summary>
+    /// <remarks>
+    /// Only this zone's own rules are listed. The inherited ones are the server's to compute — the
+    /// recursive validator walks every ancestor — and repeating that walk here would be a second
+    /// implementation free to disagree with the first.
+    /// </remarks>
+    private string HelperText
+    {
+        get
+        {
+            if (Selected is not { } zone)
+            {
+                return "Sensors inherit the rules of every zone above the one chosen.";
+            }
+
+            var rules = new List<string>();
+
+            if (zone.Constraints.PermittedCategories.Count > 0)
+            {
+                rules.Add($"permits {string.Join(", ", zone.Constraints.PermittedCategories)} only");
+            }
+
+            foreach (var (unit, range) in zone.Constraints.PermittedRanges)
+            {
+                rules.Add($"{unit} within {range.Minimum:0.##}–{range.Maximum:0.##}");
+            }
+
+            return rules.Count == 0
+                ? "No rules of its own; rules from the zones above still apply."
+                : $"This level {string.Join("; ", rules)}. Rules above it apply too.";
+        }
+    }
+}

@@ -1,24 +1,100 @@
 @inherits LayoutComponentBase
+@implements IDisposable
+@inject AppState State
+@inject ApiConnection Connection
 
 @* MudBlazor's providers must appear exactly once, above the layout. Dialogs, popovers and
    snackbars are rendered into these hosts rather than where they are invoked, so leaving one
    out makes the corresponding feature fail silently later on. *@
-<MudThemeProvider />
+<MudThemeProvider @ref="_themeProvider" Theme="SmartXTheme.Theme" IsDarkMode="IsDark" />
 <MudPopoverProvider />
 <MudDialogProvider />
 <MudSnackbarProvider />
 
 <MudLayout>
-    <MudAppBar Elevation="1">
-        <MudIcon Icon="@Icons.Material.Filled.Hub" Class="mr-3" />
-        <MudText Typo="Typo.h6">Smart-X</MudText>
+    <MudAppBar Elevation="0">
+        <MudIconButton Icon="@Icons.Material.Filled.Menu"
+                       Color="Color.Inherit"
+                       Edge="Edge.Start"
+                       OnClick="ToggleDrawer"
+                       aria-label="Toggle navigation"
+                       aria-expanded="@(State.DrawerOpen ? "true" : "false")" />
+
+        <MudIcon Icon="@Icons.Material.Filled.Hub" Class="ml-1 mr-2" aria-hidden="true" />
+        <MudText Typo="Typo.h6" HtmlTag="span">Smart-X</MudText>
+
         <MudSpacer />
-        <MudText Typo="Typo.body2" Class="d-none d-sm-flex">
-            IoT telemetry ingestion and mesh management
-        </MudText>
+
+        <ConnectionIndicator Status="Connection.Status" OnRetry="RetryConnectionAsync" />
+
+        <MudTooltip Text="@ThemeToggleLabel">
+            <MudIconButton Icon="@(IsDark ? Icons.Material.Filled.LightMode : Icons.Material.Filled.DarkMode)"
+                           Color="Color.Inherit"
+                           Edge="Edge.End"
+                           OnClick="ToggleTheme"
+                           aria-label="@ThemeToggleLabel" />
+        </MudTooltip>
     </MudAppBar>
 
+    @* Inert while closed, so keyboard focus cannot wander into navigation that is off screen: without
+       it, Tab on a phone walks through four invisible links before reaching the page.
+       Responsive: pinned open beside the content on wide screens, and an overlay that closes after
+       use below the medium breakpoint, so a phone never loses two thirds of its width to navigation. *@
+    <MudDrawer Open="State.DrawerOpen"
+               OpenChanged="State.SetDrawerOpen"
+               ClipMode="DrawerClipMode.Always"
+               Variant="DrawerVariant.Responsive"
+               Breakpoint="Breakpoint.Md"
+               Elevation="0"
+               inert="@(!State.DrawerOpen)">
+        <NavMenu />
+    </MudDrawer>
+
     <MudMainContent>
-        @Body
+        <MudContainer MaxWidth="MaxWidth.Large" Class="py-6 px-3 px-sm-6">
+            @Body
+        </MudContainer>
     </MudMainContent>
 </MudLayout>
+
+@code {
+    private MudThemeProvider? _themeProvider;
+
+    private bool IsDark => State.IsDarkMode ?? false;
+
+    private string ThemeToggleLabel => IsDark ? "Switch to light theme" : "Switch to dark theme";
+
+    protected override void OnInitialized()
+    {
+        State.Changed += OnStateChanged;
+        Connection.Changed += OnStateChanged;
+    }
+
+    protected override Task OnInitializedAsync() => Connection.CheckAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // The operating system's preference is a starting point, read once. After that the toggle
+        // owns the choice, and because the choice lives in AppState it survives navigation.
+        if (firstRender && State.IsDarkMode is null && _themeProvider is not null)
+        {
+            State.SetDarkMode(await _themeProvider.GetSystemDarkModeAsync());
+        }
+    }
+
+    private void ToggleDrawer() => State.SetDrawerOpen(!State.DrawerOpen);
+
+    private void ToggleTheme() => State.SetDarkMode(!IsDark);
+
+    private Task RetryConnectionAsync() => Connection.CheckAsync();
+
+    // Changes can be raised from a service's continuation rather than from this component's own
+    // event handler, so the re-render is routed through InvokeAsync instead of StateHasChanged.
+    private void OnStateChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        State.Changed -= OnStateChanged;
+        Connection.Changed -= OnStateChanged;
+    }
+}
