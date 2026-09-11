@@ -1,0 +1,37 @@
+@* Shows API reachability in the app bar. Takes the status in and raises a retry out; it never
+   checks the connection itself. Icon and text always travel together, because the state should
+   not depend on telling green from red. On narrow screens the text collapses and the accessible
+   name carries it instead. *@
+@switch (Status)
+{
+    case ConnectionStatus.Connected:
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Inherit"
+                 Icon="@Icons.Material.Filled.CloudDone" Class="mr-1" aria-label="API connected">
+            <span class="d-none d-sm-inline">API connected</span>
+        </MudChip>
+        break;
+
+    case ConnectionStatus.Checking:
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Inherit"
+                 Icon="@Icons.Material.Filled.Sync" Class="mr-1" aria-label="Connecting to the API">
+            <span class="d-none d-sm-inline">Connecting&hellip;</span>
+        </MudChip>
+        break;
+
+    default:
+        <MudButton Variant="Variant.Outlined" Color="Color.Inherit" Size="Size.Small" Class="mr-1"
+                   StartIcon="@Icons.Material.Filled.CloudOff"
+                   OnClick="@(() => OnRetry.InvokeAsync())"
+                   aria-label="API unreachable. Retry the connection.">
+            <span class="d-none d-sm-inline">API unreachable &middot; Retry</span>
+        </MudButton>
+        break;
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public ConnectionStatus Status { get; set; }
+
+    [Parameter]
+    public EventCallback OnRetry { get; set; }
+}

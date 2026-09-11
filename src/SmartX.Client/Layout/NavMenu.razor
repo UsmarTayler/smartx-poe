@@ -1,0 +1,30 @@
+@* The three pillars of the brief. Only the first is built, but all three are listed: hiding the
+   other two would make the system look smaller than its scope, and an operator should be able to
+   see where the product is going. The disabled entries are styled to stay legible (see app.css)
+   rather than fading to the framework's default disabled grey, and each carries a chip saying
+   which part delivers it, so "disabled" reads as "not yet" rather than "broken". *@
+<MudNavMenu Class="py-2" Color="Color.Primary" Rounded="true">
+    <MudText Typo="Typo.overline" Class="px-4 mud-text-secondary">Pillars</MudText>
+
+    <MudNavGroup Title="Sensor Data Ingestion and Telemetry"
+                 Icon="@Icons.Material.Filled.Sensors"
+                 Expanded="true">
+        <MudNavLink Href="" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Shield">Trust panel</MudNavLink>
+        <MudNavLink Href="sensors" Icon="@Icons.Material.Filled.AppRegistration">Sensors</MudNavLink>
+        <MudNavLink Href="telemetry" Icon="@Icons.Material.Filled.Timeline">Telemetry</MudNavLink>
+    </MudNavGroup>
+
+    <MudNavLink Disabled="true" Icon="@Icons.Material.Filled.Terminal" Class="smartx-future-pillar" aria-disabled="true">
+        <span class="smartx-future-pillar__label">
+            Real-Time Command Stream and History
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="ml-1">Part 2</MudChip>
+        </span>
+    </MudNavLink>
+
+    <MudNavLink Disabled="true" Icon="@Icons.Material.Filled.Lan" Class="smartx-future-pillar" aria-disabled="true">
+        <span class="smartx-future-pillar__label">
+            Network Topology and Mesh Routing
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="ml-1">Part 3</MudChip>
+        </span>
+    </MudNavLink>
+</MudNavMenu>

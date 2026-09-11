@@ -60,3 +60,48 @@ h1:focus {
     .loading-progress-text:after {
         content: var(--blazor-load-percentage-text, "Loading");
     }
+
+/* ---- Accessibility ---------------------------------------------------------------------------
+   A visible ring on anything that takes keyboard focus. :focus-visible rather than :focus, so the
+   ring appears for keyboard and assistive-technology users without flashing on every mouse click.
+   Three pixels in the primary colour with an offset clears the 3:1 non-text contrast requirement
+   against both themes' surfaces.
+
+   !important is deliberate: MudBlazor resets outline to none on nav links and buttons with more
+   specific selectors, which silently removed the ring from exactly the controls a keyboard user
+   reaches first. An accessibility guarantee should not depend on winning a specificity contest. */
+:focus-visible {
+    outline: 3px solid var(--mud-palette-primary) !important;
+    outline-offset: 2px !important;
+    border-radius: 4px;
+}
+
+/* ---- Navigation --------------------------------------------------------------------------------
+   Future pillars are disabled but must stay legible. MudBlazor's disabled styling fades the whole
+   link to the disabled text colour, which drops below readable contrast; here the text keeps the
+   secondary colour, full opacity, and a not-allowed cursor, so it reads as "not yet" rather than
+   "broken". The label wraps so the full pillar name survives the drawer's width. */
+.smartx-future-pillar .mud-nav-link,
+.smartx-future-pillar.mud-nav-link,
+.smartx-future-pillar .mud-nav-link.mud-nav-link-disabled {
+    color: var(--mud-palette-text-secondary) !important;
+    opacity: 1 !important;
+    cursor: not-allowed;
+}
+
+.smartx-future-pillar .mud-nav-link-icon {
+    color: var(--mud-palette-text-secondary) !important;
+    opacity: 1 !important;
+}
+
+.smartx-future-pillar__label,
+.mud-nav-link .mud-nav-link-text {
+    white-space: normal;
+}
+
+.smartx-future-pillar__label {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}

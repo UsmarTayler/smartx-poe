@@ -1,0 +1,27 @@
+@* Every page starts with this, so every page has exactly one h1. App.razor moves focus to the h1
+   after each navigation, which is what tells a screen reader user that the page changed. *@
+<MudStack Row="true" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-6 gap-3">
+    <div>
+        <MudText Typo="Typo.h4" HtmlTag="h1" tabindex="-1">@Title</MudText>
+        @if (!string.IsNullOrWhiteSpace(Subtitle))
+        {
+            <MudText Typo="Typo.body1" Class="mud-text-secondary">@Subtitle</MudText>
+        }
+    </div>
+
+    @if (Actions is not null)
+    {
+        <MudStack Row="true" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center" Class="gap-2">@Actions</MudStack>
+    }
+</MudStack>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Title { get; set; } = string.Empty;
+
+    [Parameter]
+    public string? Subtitle { get; set; }
+
+    [Parameter]
+    public RenderFragment? Actions { get; set; }
+}
