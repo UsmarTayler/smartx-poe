@@ -1,0 +1,125 @@
+@* One sensor's ingestion controls. Data in: the sensor, its telemetry state and where it sits.
+   Event out: a reading to send. The input control follows the registered payload kind — a number
+   box for a meter or thermometer, a switch for an actuator — because that kind is what the server
+   will parse the reading as. The outcome line always pairs an icon with the words "accepted" or
+   "rejected", so the result never depends on telling green from red. *@
+<MudPaper Outlined="true" Class="pa-4 d-flex flex-column gap-3" Style="height: 100%">
+    <div class="d-flex align-start justify-space-between gap-2">
+        <div style="min-width: 0">
+            <MudText Typo="Typo.subtitle1" HtmlTag="h2" Class="smartx-mono">@Sensor.MacAddress</MudText>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">@ZonePath · @Sensor.Location.Room</MudText>
+        </div>
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@Sensor.PayloadKind</MudChip>
+    </div>
+
+    <div>
+        <MudText Typo="Typo.overline" Class="mud-text-secondary">Current reading</MudText>
+        @if (!Telemetry.IsLoaded)
+        {
+            <MudSkeleton Width="40%" Height="36px" />
+        }
+        else if (Telemetry.Latest is { } latest)
+        {
+            <MudText Typo="Typo.h5" Class="smartx-mono">
+                @ReadingFormatter.Value(latest) <span class="mud-text-secondary" style="font-size: 1rem">@UnitSuffix</span>
+            </MudText>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">at @ReadingFormatter.Time(latest.Timestamp)</MudText>
+        }
+        else
+        {
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">No readings yet. Send one below to see it arrive.</MudText>
+        }
+    </div>
+
+    <div class="d-flex align-center gap-2 flex-wrap">
+        @if (Sensor.PayloadKind == TelemetryPayloadKind.State)
+        {
+            <MudSwitch T="bool" @bind-Value="_state" Color="Color.Primary"
+                       Label="@(_state ? "On" : "Off")" AriaLabel="@($"Reading to send for {Sensor.MacAddress}")" />
+        }
+        else
+        {
+            @* Sized by a wrapper rather than a Style on the field itself: MudBlazor puts Style on an inner
+               element that lays out as a column, where a flex-basis sets height, and the box grew to 10rem tall. *@
+            <div style="flex: 1 1 10rem; min-width: 0">
+            <MudNumericField T="double?" @bind-Value="_number" Immediate="true" HideSpinButtons="true"
+                             Label="@($"Reading ({Sensor.Unit})")" HelperText="@RangeHint"
+                             Variant="Variant.Outlined" Margin="Margin.Dense" />
+            </div>
+        }
+
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Send"
+                   Disabled="@(!CanSend)" OnClick="SendAsync">
+            @(Telemetry.IsSending ? "Sending…" : "Send")
+        </MudButton>
+    </div>
+
+    @if (Telemetry.LastOutcome is { } outcome)
+    {
+        <div role="status" aria-live="polite" class="d-flex align-start gap-2">
+            <MudIcon Icon="@(outcome.Accepted ? Icons.Material.Filled.CheckCircle : Icons.Material.Filled.Error)"
+                     Color="@(outcome.Accepted ? Color.Success : Color.Error)" Size="Size.Small" aria-hidden="true" />
+            <MudText Typo="Typo.body2">@outcome.Message</MudText>
+        </div>
+    }
+
+    <div>
+        <MudText Typo="Typo.overline" Class="mud-text-secondary">Recent readings</MudText>
+        @if (Telemetry.LoadProblem is { } problem)
+        {
+            <MudText Typo="Typo.body2" Color="Color.Error">Couldn't load history: @problem.Message</MudText>
+        }
+        else if (Telemetry.IsLoaded && Telemetry.Recent.Count == 0)
+        {
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">Accepted readings will be listed here, newest first.</MudText>
+        }
+        else
+        {
+            <ul class="smartx-readings">
+                @for (var index = Telemetry.Recent.Count - 1; index >= 0 && index >= Telemetry.Recent.Count - VisibleReadings; index--)
+                {
+                    var packet = Telemetry.Recent[index];
+                    <li>
+                        <span class="smartx-mono">@ReadingFormatter.Value(packet) @UnitSuffix</span>
+                        <span class="mud-text-secondary">@ReadingFormatter.Time(packet.Timestamp)</span>
+                    </li>
+                }
+            </ul>
+        }
+    </div>
+</MudPaper>
+
+@code {
+    // The API retains up to 256 per node; a card shows the latest few so it stays scannable.
+    private const int VisibleReadings = 6;
+
+    private double? _number;
+    private bool _state;
+
+    // An actuator's "unit" names its states ("state", "on/off") rather than a scale, so appending it
+    // gives "on state". Only numeric readings carry a unit.
+    private string UnitSuffix => Sensor.PayloadKind == TelemetryPayloadKind.State ? string.Empty : Sensor.Unit;
+
+    [Parameter, EditorRequired]
+    public SensorRegistration Sensor { get; set; } = default!;
+
+    [Parameter, EditorRequired]
+    public SensorTelemetry Telemetry { get; set; } = default!;
+
+    [Parameter]
+    public string ZonePath { get; set; } = string.Empty;
+
+    [Parameter]
+    public EventCallback<ReadingInput> OnSend { get; set; }
+
+    private bool CanSend =>
+        !Telemetry.IsSending && (Sensor.PayloadKind == TelemetryPayloadKind.State || _number is not null);
+
+    private string RangeHint =>
+        $"Expected {Sensor.ExpectedRange.Minimum:0.##}–{Sensor.ExpectedRange.Maximum:0.##}";
+
+    private Task SendAsync() => OnSend.InvokeAsync(
+        Sensor.PayloadKind == TelemetryPayloadKind.State
+            ? new ReadingInput(null, _state, _state ? "on" : "off")
+            : new ReadingInput(_number, false, ReadingFormatter.Number(_number ?? 0)));
+}

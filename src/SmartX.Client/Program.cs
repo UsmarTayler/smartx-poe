@@ -24,5 +24,10 @@ builder.Services.AddHttpClient<SmartXApiClient>(client => client.BaseAddress = n
 builder.Services.AddScoped<AppState>();
 builder.Services.AddScoped<ApiConnection>();
 builder.Services.AddScoped<SensorService>();
+builder.Services.AddScoped<TelemetryService>();
+
+// Injected rather than read from DateTimeOffset.UtcNow, matching the API, so anything that stamps
+// or ages client-side state can be driven by a controlled clock in a test.
+builder.Services.AddSingleton(TimeProvider.System);
 
 await builder.Build().RunAsync();
