@@ -6,20 +6,20 @@
 {
     case ConnectionStatus.Connected:
         <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Inherit"
-                 Icon="@Icons.Material.Filled.CloudDone" Class="mr-1" aria-label="API connected">
+                 Icon="@Icons.Material.Filled.CloudDone" Class="mr-1 smartx-appbar-chip" aria-label="API connected">
             <span class="d-none d-sm-inline">API connected</span>
         </MudChip>
         break;
 
     case ConnectionStatus.Checking:
         <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Inherit"
-                 Icon="@Icons.Material.Filled.Sync" Class="mr-1" aria-label="Connecting to the API">
+                 Icon="@Icons.Material.Filled.Sync" Class="mr-1 smartx-appbar-chip" aria-label="Connecting to the API">
             <span class="d-none d-sm-inline">Connecting&hellip;</span>
         </MudChip>
         break;
 
     default:
-        <MudButton Variant="Variant.Outlined" Color="Color.Inherit" Size="Size.Small" Class="mr-1"
+        <MudButton Variant="Variant.Outlined" Color="Color.Inherit" Size="Size.Small" Class="mr-1 smartx-appbar-chip"
                    StartIcon="@Icons.Material.Filled.CloudOff"
                    OnClick="@(() => OnRetry.InvokeAsync())"
                    aria-label="API unreachable. Retry the connection.">

@@ -292,3 +292,19 @@ h1:focus {
         display: none;
     }
 }
+
+/* ---- App bar ---------------------------------------------------------------------------------
+   The connection indicator sits on the app bar, which is navy in the light theme and near-black in
+   the dark one. MudBlazor's chip paints its own surface, which in the light theme left dark text on a
+   dark pill. Inheriting the bar's text colour and drawing only an outline in that colour keeps the
+   indicator legible on either bar. */
+.smartx-appbar-chip,
+.smartx-appbar-chip.mud-chip {
+    color: inherit !important;
+    background: transparent !important;
+    border-color: color-mix(in srgb, currentColor 55%, transparent) !important;
+}
+
+    .smartx-appbar-chip .mud-icon-root {
+        color: inherit !important;
+    }
