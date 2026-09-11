@@ -1,40 +1,35 @@
 namespace SmartX.Shared;
 
 /// <summary>
-/// The pure arithmetic of trust: the score, the band, and the recency weight.
+/// The pure arithmetic of trust: the score, the band, the recency weight, and the urgency order.
 /// </summary>
 /// <remarks>
 /// Kept free of state, clocks and configuration so the same formula can be reused wherever a score
-/// is needed — the predictive engine and the routing weights in later parts — without dragging the
-/// engine that maintains per-node history along with it.
+/// is needed — the predictive engine and routing weights in later parts, and the client when it
+/// orders bands — without dragging the engine that maintains per-node history along with it.
 /// </remarks>
 public static class TrustFormula
 {
     /// <summary>The score of a node with no evidence either way.</summary>
-    /// <remarks>
-    /// Not configuration: it falls out of the formula. With s = 0 and f = 0,
-    /// (0 + 1) / (0 + 0 + 2) = 0.5.
-    /// </remarks>
+    /// <remarks>Not configuration: with s = 0 and f = 0, (0 + 1) / (0 + 0 + 2) = 0.5.</remarks>
     public const double PriorScore = 0.5;
 
-    /// <summary>
-    /// Computes trust as <c>(s + 1) / (s + f + 2)</c>.
-    /// </summary>
+    /// <summary>Computes trust as <c>(s + 1) / (s + f + 2)</c>.</summary>
     /// <param name="successes">Weighted successful packets, <c>s</c>.</param>
     /// <param name="failures">Weighted failures, <c>f</c>.</param>
     /// <returns>A score strictly between 0 and 1.</returns>
     /// <remarks>
     /// <b>Why the +1 and +2 — Laplace smoothing.</b> The plain ratio <c>s / (s + f)</c> breaks at
-    /// exactly the moment a node matters most, when it is new. With no packets it is 0 / 0, which
-    /// is undefined. After one good packet it is 1 / 1 = 1.0, a claim of perfect reliability from a
+    /// exactly the moment a node matters most, when it is new. With no packets it is 0 / 0, which is
+    /// undefined. After one good packet it is 1 / 1 = 1.0, a claim of perfect reliability from a
     /// single observation; after one bad packet it is 0.0, total condemnation on the same evidence.
     /// <para>
     /// Adding one imaginary success and one imaginary failure — +1 on top, +2 underneath — fixes all
     /// three. A node with no history scores (0 + 1) / (0 + 2) = 0.5: not trusted, not condemned,
-    /// simply unknown. One good packet moves it to 2 / 3 ≈ 0.67 rather than to 1.0, and one bad
-    /// packet to 1 / 3 ≈ 0.33 rather than to 0. As real evidence accumulates the two imaginary
-    /// observations are outweighed and the score converges on the true ratio, so the smoothing only
-    /// ever matters while there is too little data to say anything confident.
+    /// simply unknown. One good packet moves it to 2 / 3 ≈ 0.67 rather than 1.0, one bad packet to
+    /// 1 / 3 ≈ 0.33 rather than 0. As real evidence accumulates the imaginary observations are
+    /// outweighed and the score converges on the true ratio, so the smoothing only matters while
+    /// there is too little data to say anything confident.
     /// </para>
     /// <para>
     /// It also guarantees the score never reaches exactly 0 or 1, so no finite history can make a
@@ -62,16 +57,32 @@ public static class TrustFormula
     /// <param name="nominalThreshold">Lowest score still counted as nominal.</param>
     /// <param name="faultThreshold">Lowest score not yet counted as a fault.</param>
     /// <remarks>
-    /// Both boundaries are inclusive on the upper band: a score of exactly the nominal threshold is
-    /// nominal, and exactly the fault threshold is degrading. A consequence worth knowing: a brand
-    /// new node sits at 0.5, which is degrading rather than nominal under the default thresholds. It
-    /// has to earn nominal — two clean packets take it to 0.75 — which is the honest position for a
-    /// device nobody has seen work yet.
+    /// Both boundaries are inclusive on the upper band. This judges a score and nothing else: whether
+    /// there is any evidence behind the score is the caller's question, and a node with none is
+    /// <see cref="TrustBand.Unproven"/> rather than whatever band 0.5 happens to fall in.
     /// </remarks>
     public static TrustBand Classify(double score, double nominalThreshold, double faultThreshold) =>
         score >= nominalThreshold ? TrustBand.Nominal
         : score >= faultThreshold ? TrustBand.Degrading
         : TrustBand.Fault;
+
+    /// <summary>How urgently a band calls for attention. Lower sorts first.</summary>
+    /// <remarks>
+    /// Fault, then degrading, then unproven, then nominal. Unproven sits above nominal because an
+    /// unverified node is worth a glance, and below degrading because nothing has actually gone
+    /// wrong with it. Stated explicitly rather than taken from the enum's numeric values, so the
+    /// dashboard's ordering is a decision written down in one place, not a side effect of the order
+    /// the members happen to be declared in.
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">The band is not a declared member.</exception>
+    public static int Severity(TrustBand band) => band switch
+    {
+        TrustBand.Fault => 0,
+        TrustBand.Degrading => 1,
+        TrustBand.Unproven => 2,
+        TrustBand.Nominal => 3,
+        _ => throw new ArgumentOutOfRangeException(nameof(band), band, "Unknown trust band.")
+    };
 
     /// <summary>How much an observation of a given age still counts, between 0 and 1.</summary>
     /// <param name="age">How long ago the observation was made.</param>
@@ -79,8 +90,8 @@ public static class TrustFormula
     /// <remarks>
     /// Exponential decay, <c>0.5 ^ (age / halfLife)</c>. Every half-life an observation's influence
     /// halves, smoothly, with no cliff edge where evidence suddenly stops counting. A negative age —
-    /// an observation stamped fractionally in the future by clock jitter — is treated as fresh
-    /// rather than being allowed to count for more than one.
+    /// an observation stamped fractionally in the future by clock jitter — counts as fresh rather than
+    /// being allowed to count for more than one.
     /// </remarks>
     public static double DecayWeight(TimeSpan age, TimeSpan halfLife)
     {

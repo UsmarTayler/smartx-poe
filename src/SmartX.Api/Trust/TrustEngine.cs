@@ -276,38 +276,47 @@ internal sealed class TrustEngine : ITrustEngine
     {
         lock (_gate)
         {
-            if (_nodes.Count == 0)
-            {
-                return new TrustSummary(null, null, null, 0, 0, 0, 0);
-            }
-
-            var total = 0.0;
+            var provenTotal = 0.0;
+            var proven = 0;
             NodeTrust? worst = null;
-            int nominal = 0, degrading = 0, fault = 0;
+            int nominal = 0, unproven = 0, degrading = 0, fault = 0;
 
             foreach (var node in _nodes.Values)
             {
-                total += node.Score;
-
-                if (worst is null || CompareWorstFirst(node.Score, node.MacAddress, worst.Score, worst.MacAddress) < 0)
-                {
-                    worst = node;
-                }
-
                 switch (node.Band)
                 {
                     case TrustBand.Nominal: nominal++; break;
+                    case TrustBand.Unproven: unproven++; break;
                     case TrustBand.Degrading: degrading++; break;
                     default: fault++; break;
                 }
+
+                // Counted, but not averaged. An unproven node's 0.5 is the absence of evidence, and
+                // folding it into the mean would pull a healthy mesh toward 0.5 on every registration.
+                if (node.Band == TrustBand.Unproven)
+                {
+                    continue;
+                }
+
+                provenTotal += node.Score;
+                proven++;
+
+                // Among proven nodes the band order and the score order agree, so the most urgent
+                // node is also the one with the lowest score.
+                if (worst is null || CompareWorstFirst(node.Band, node.Score, node.MacAddress, worst.Band, worst.Score, worst.MacAddress) < 0)
+                {
+                    worst = node;
+                }
             }
 
-            return new TrustSummary(
-                total / _nodes.Count, worst!.Score, worst.MacAddress, _nodes.Count, nominal, degrading, fault);
+            return worst is null
+                ? new TrustSummary(null, null, null, _nodes.Count, nominal, unproven, degrading, fault)
+                : new TrustSummary(
+                    provenTotal / proven, worst.Score, worst.MacAddress, _nodes.Count, nominal, unproven, degrading, fault);
         }
     }
 
-    /// <summary>Finds a node, tracking it at the prior score if it has not been seen before.</summary>
+    /// <summary>Finds a node, tracking it as unproven if it has not been seen before.</summary>
     private NodeTrust GetOrTrack(string mac, DateTimeOffset now)
     {
         if (_nodes.TryGetValue(mac, out var node))
@@ -315,15 +324,10 @@ internal sealed class TrustEngine : ITrustEngine
             return node;
         }
 
-        var initialBand = TrustFormula.Classify(
-            TrustFormula.PriorScore, _options.NominalThreshold, _options.FaultThreshold);
-
-        node = new NodeTrust(mac, now, initialBand, _options.OutcomeWindow, _options.HistoryLength);
-
-        if (initialBand == TrustBand.Nominal)
-        {
-            node.LastNominalAt = now;
-        }
+        // A node with no outcomes has nothing to judge, so it starts unproven whatever the
+        // thresholds say about its 0.5. That keeps it out of the degraded set, and means tracking a
+        // node can never be what raises an event about it.
+        node = new NodeTrust(mac, now, TrustBand.Unproven, _options.OutcomeWindow, _options.HistoryLength);
 
         _nodes.Add(mac, node);
         UpdateDegradedSet(node);
@@ -337,10 +341,14 @@ internal sealed class TrustEngine : ITrustEngine
     /// <see cref="HashSet{T}.Add"/> on a member already present returns false and changes nothing.
     /// That is the whole mechanism by which a node failing on every packet stays one entry: the
     /// second and every later failure finds it already there.
+    /// <para>
+    /// Unproven nodes are kept out alongside nominal ones. This set is what alerting will read, and
+    /// a node nobody has heard from yet has not failed.
+    /// </para>
     /// </remarks>
     private void UpdateDegradedSet(NodeTrust node)
     {
-        if (node.Band == TrustBand.Nominal)
+        if (node.Band is TrustBand.Nominal or TrustBand.Unproven)
         {
             _degraded.Remove(node.MacAddress);
         }
@@ -359,15 +367,26 @@ internal sealed class TrustEngine : ITrustEngine
     };
 
     private static int WorstFirst(NodeTrustSnapshot left, NodeTrustSnapshot right) =>
-        CompareWorstFirst(left.Score, left.MacAddress, right.Score, right.MacAddress);
+        CompareWorstFirst(left.Band, left.Score, left.MacAddress, right.Band, right.Score, right.MacAddress);
 
-    /// <summary>Orders by score ascending, then by MAC.</summary>
+    /// <summary>Orders by urgency of band, then by score ascending, then by MAC.</summary>
     /// <remarks>
-    /// The MAC tie-break makes the order total. Without it, two nodes on the same score could swap
-    /// places between refreshes and the dashboard rows would visibly shuffle for no reason.
+    /// Band comes first because score alone gets unproven nodes wrong: an unproven 0.5 is
+    /// numerically below a degrading 0.6, so a plain score sort would rank a node nobody has heard
+    /// from above one that is actually slipping. The MAC tie-break makes the order total, so two
+    /// nodes on the same score cannot swap places between refreshes and visibly shuffle the rows.
     /// </remarks>
-    private static int CompareWorstFirst(double leftScore, string leftMac, double rightScore, string rightMac)
+    private static int CompareWorstFirst(
+        TrustBand leftBand, double leftScore, string leftMac,
+        TrustBand rightBand, double rightScore, string rightMac)
     {
+        var bySeverity = TrustFormula.Severity(leftBand).CompareTo(TrustFormula.Severity(rightBand));
+
+        if (bySeverity != 0)
+        {
+            return bySeverity;
+        }
+
         var byScore = leftScore.CompareTo(rightScore);
 
         return byScore != 0 ? byScore : string.CompareOrdinal(leftMac, rightMac);
@@ -430,7 +449,12 @@ internal sealed class TrustEngine : ITrustEngine
 
         var previousBand = node.Band;
         var score = TrustFormula.Score(successes, failures);
-        var band = TrustFormula.Classify(score, _options.NominalThreshold, _options.FaultThreshold);
+
+        // No outcomes means nothing to judge. The score is still reported — it is the 0.5 prior — but
+        // the band says so plainly instead of letting 0.5 fall wherever the thresholds happen to put it.
+        var band = node.Outcomes.IsEmpty
+            ? TrustBand.Unproven
+            : TrustFormula.Classify(score, _options.NominalThreshold, _options.FaultThreshold);
 
         // Penalised intervals are only non-zero while at least one whole heartbeat has passed since
         // the last packet, so this is "currently silent" rather than merely "quiet for a moment".

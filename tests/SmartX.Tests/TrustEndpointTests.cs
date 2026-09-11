@@ -13,7 +13,7 @@ public class TrustEndpointTests
 {
     /// <summary>
     /// Three nodes, one per band: a thermometer with three clean readings (nominal), a switch that
-    /// has said nothing (the 0.5 prior, degrading), and a meter whose only reading was the wrong
+    /// has said nothing (unproven), and a meter whose only reading was the wrong
     /// type (0.25, fault).
     /// </summary>
     private static async Task<HttpClient> WithOneNodePerBandAsync(WebApplicationFactory<Program> api)
@@ -59,7 +59,7 @@ public class TrustEndpointTests
 
         Assert.Equal([Meter, Switch, Thermometer], nodes?.Select(node => node.MacAddress));
         Assert.Equal(
-            [TrustBand.Fault, TrustBand.Degrading, TrustBand.Nominal],
+            [TrustBand.Fault, TrustBand.Unproven, TrustBand.Nominal],
             nodes?.Select(node => node.Band));
     }
 
@@ -111,7 +111,7 @@ public class TrustEndpointTests
 
         var history = await client.GetFromJsonAsync<List<TrustHistoryPoint>>($"/api/trust/{Meter}/history");
 
-        Assert.Equal([TrustBand.Degrading, TrustBand.Fault], history?.Select(point => point.Band));
+        Assert.Equal([TrustBand.Unproven, TrustBand.Fault], history?.Select(point => point.Band));
     }
 
     [Fact]
@@ -123,10 +123,10 @@ public class TrustEndpointTests
         var summary = await client.GetFromJsonAsync<TrustSummary>("/api/trust/summary");
 
         Assert.Equal(3, summary?.NodeCount);
-        Assert.Equal((1, 1, 1), (summary?.Nominal, summary?.Degrading, summary?.Fault));
+        Assert.Equal((1, 1, 0, 1), (summary?.Nominal, summary?.Unproven, summary?.Degrading, summary?.Fault));
         Assert.Equal(Meter, summary?.WorstNode);
         Assert.Equal(0.25, summary?.LowestScore);
-        Assert.InRange(summary!.MeshConfidence!.Value, 0.51, 0.52);
+        Assert.InRange(summary!.MeshConfidence!.Value, 0.52, 0.53);
     }
 
     [Theory]

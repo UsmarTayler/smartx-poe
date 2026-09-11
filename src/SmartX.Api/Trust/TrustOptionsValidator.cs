@@ -46,6 +46,10 @@ internal sealed class TrustOptionsValidator : IValidateOptions<TrustOptions>
             failures.Add("History length and sample interval cannot be negative.");
         }
 
+        // No rule tying the fault threshold to the 0.5 prior any more. It used to exist because a
+        // threshold above 0.5 would have started every new node in the fault band without an event.
+        // A node with no evidence is now Unproven regardless of the thresholds, so the risk it
+        // guarded against cannot arise.
         if (!(options.FaultThreshold > 0
               && options.FaultThreshold < options.NominalThreshold
               && options.NominalThreshold <= 1))
@@ -53,18 +57,6 @@ internal sealed class TrustOptionsValidator : IValidateOptions<TrustOptions>
             failures.Add(
                 $"Thresholds must satisfy 0 < {nameof(TrustOptions.FaultThreshold)} < " +
                 $"{nameof(TrustOptions.NominalThreshold)} <= 1.");
-        }
-
-        // A node nobody has heard from yet sits at the Laplace prior of 0.5. If the fault threshold
-        // were above that, every newly registered sensor would start life in the fault band — and
-        // since it never crossed into it, no transition would fire, so escalation would never hear
-        // about it. Keeping the threshold at or below the prior means a node can only reach fault
-        // on evidence.
-        if (options.FaultThreshold > SmartX.Shared.TrustFormula.PriorScore)
-        {
-            failures.Add(
-                $"{nameof(TrustOptions.FaultThreshold)} cannot exceed the prior score of " +
-                $"{SmartX.Shared.TrustFormula.PriorScore}, or new nodes would start in the fault band.");
         }
 
         if (options.DefaultHeartbeatInterval <= TimeSpan.Zero

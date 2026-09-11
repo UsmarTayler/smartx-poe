@@ -28,12 +28,12 @@ public class TrustEngineTests
     [Fact]
     public void A_fresh_node_is_unproven_rather_than_nominal()
     {
-        // 0.5 falls in the degrading band. A device nobody has seen work has not earned nominal.
+        // No outcomes at all, so nothing to judge: unproven, even though 0.5 lies in the degrading range.
         var (engine, _) = Create();
 
         engine.Track(NodeA);
 
-        Assert.Equal(TrustBand.Degrading, Trust(engine, NodeA).Band);
+        Assert.Equal(TrustBand.Unproven, Trust(engine, NodeA).Band);
     }
 
     [Fact]
@@ -174,7 +174,7 @@ public class TrustEngineTests
         var transition = Assert.Single(raised);
         Assert.Equal(NodeA, transition.MacAddress);
         Assert.Equal(TrustBand.Fault, transition.Band);
-        Assert.Equal(TrustBand.Degrading, transition.PreviousBand);
+        Assert.Equal(TrustBand.Unproven, transition.PreviousBand);
         Assert.False(string.IsNullOrWhiteSpace(transition.Reason));
     }
 
@@ -255,6 +255,7 @@ public class TrustEngineTests
         var (engine, _) = Create();
 
         engine.Track(NodeA);
+        engine.Record(NodeA, TrustOutcome.RangeViolation);
         Assert.Contains(NodeA, engine.DegradedNodes);
 
         RecordMany(engine, NodeA, TrustOutcome.Success, 5);
