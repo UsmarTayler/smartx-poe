@@ -11,9 +11,9 @@ namespace SmartX.Shared;
 /// registration declared, and the value falls inside the range the registration promised.
 /// <para>
 /// The constructor enforces everything that can be checked from the registration alone — MAC
-/// format, non-empty unit, payload and category agreeing. It deliberately does <i>not</i> check the
-/// zone, because that requires the surrounding tree; <see cref="ZoneValidator"/> owns that and
-/// needs an already-constructed registration to check.
+/// format, non-empty unit, payload and category agreeing, a positive heartbeat interval. It
+/// deliberately does <i>not</i> check the zone, because that requires the surrounding tree;
+/// <see cref="ZoneValidator"/> owns that and needs an already-constructed registration to check.
 /// </para>
 /// </remarks>
 public sealed record SensorRegistration
@@ -29,10 +29,14 @@ public sealed record SensorRegistration
     /// says nothing.
     /// </param>
     /// <param name="payloadKind">The shape of reading it emits.</param>
+    /// <param name="heartbeatInterval">
+    /// How often the device is expected to report. Null defers to the gateway's configured default.
+    /// </param>
     /// <exception cref="ArgumentException">
     /// The MAC is malformed or reserved, the unit is blank, or a
     /// <see cref="TelemetryPayloadKind.State"/> payload is paired with a non-actuator category.
     /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">The heartbeat interval is zero or negative.</exception>
     [JsonConstructor]
     public SensorRegistration(
         string macAddress,
@@ -40,7 +44,8 @@ public sealed record SensorRegistration
         SensorCategory category,
         string unit,
         ValueRange expectedRange,
-        TelemetryPayloadKind payloadKind)
+        TelemetryPayloadKind payloadKind,
+        TimeSpan? heartbeatInterval = null)
     {
         ArgumentNullException.ThrowIfNull(location);
         ArgumentException.ThrowIfNullOrWhiteSpace(unit);
@@ -59,12 +64,21 @@ public sealed record SensorRegistration
                 nameof(payloadKind));
         }
 
+        // A zero interval would mean every instant is a missed heartbeat, so the node would be
+        // penalised continuously from the moment it registered.
+        if (heartbeatInterval is { } interval && interval <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(heartbeatInterval), interval, "A heartbeat interval must be positive.");
+        }
+
         MacAddress = MacAddressValidator.Normalise(macAddress);
         Location = location;
         Category = category;
         Unit = unit;
         ExpectedRange = expectedRange;
         PayloadKind = payloadKind;
+        HeartbeatInterval = heartbeatInterval;
     }
 
     /// <summary>The device's MAC, uppercase and colon-separated. The unique key for a sensor.</summary>
@@ -84,4 +98,13 @@ public sealed record SensorRegistration
 
     /// <summary>The shape of reading it emits.</summary>
     public TelemetryPayloadKind PayloadKind { get; }
+
+    /// <summary>How often the device is expected to report, or null for the gateway default.</summary>
+    /// <remarks>
+    /// Declared per sensor because devices genuinely differ: a smart meter might report every
+    /// fifteen minutes by design while a door contact reports every ten seconds. One global
+    /// interval would either flag the meter as dead between every reading or let a dead door
+    /// contact go unnoticed for a quarter of an hour.
+    /// </remarks>
+    public TimeSpan? HeartbeatInterval { get; }
 }

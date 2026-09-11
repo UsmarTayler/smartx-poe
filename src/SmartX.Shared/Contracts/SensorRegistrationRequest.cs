@@ -21,6 +21,11 @@ namespace SmartX.Shared;
 /// <param name="Minimum">Lowest value it is expected to report.</param>
 /// <param name="Maximum">Highest value it is expected to report.</param>
 /// <param name="PayloadKind">The shape of reading it emits.</param>
+/// <param name="HeartbeatIntervalSeconds">
+/// How often, in seconds, the device is expected to report. Omit to use the gateway default.
+/// Whole seconds rather than a TimeSpan string, because "60" is what a device author writes and
+/// "00:01:00" is not.
+/// </param>
 public sealed record SensorRegistrationRequest(
     string MacAddress,
     string Room,
@@ -30,7 +35,8 @@ public sealed record SensorRegistrationRequest(
     string Unit,
     double Minimum,
     double Maximum,
-    TelemetryPayloadKind PayloadKind)
+    TelemetryPayloadKind PayloadKind,
+    int? HeartbeatIntervalSeconds = null)
 {
     /// <summary>
     /// Turns the request into a registration, or reports everything wrong with it.
@@ -94,6 +100,12 @@ public sealed record SensorRegistrationRequest(
                  $"{nameof(SensorCategory.Actuator)}, not {Category}."];
         }
 
+        if (HeartbeatIntervalSeconds is <= 0)
+        {
+            errors[nameof(HeartbeatIntervalSeconds)] =
+                ["A heartbeat interval must be a positive number of seconds."];
+        }
+
         if (errors.Count > 0)
         {
             return false;
@@ -105,7 +117,8 @@ public sealed record SensorRegistrationRequest(
             Category,
             Unit,
             new ValueRange(Minimum, Maximum),
-            PayloadKind);
+            PayloadKind,
+            HeartbeatIntervalSeconds is { } seconds ? TimeSpan.FromSeconds(seconds) : null);
 
         return true;
     }
