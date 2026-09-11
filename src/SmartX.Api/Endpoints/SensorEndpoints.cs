@@ -1,4 +1,5 @@
 using SmartX.Api.Storage;
+using SmartX.Api.Trust;
 using SmartX.Shared;
 
 namespace SmartX.Api.Endpoints;
@@ -63,6 +64,7 @@ internal static class SensorEndpoints
         SensorRegistrationRequest request,
         ISensorRegistry registry,
         IZoneStore zones,
+        ITrustEngine trust,
         CancellationToken cancellationToken)
     {
         if (!request.TryCreateRegistration(out var registration, out var errors))
@@ -94,6 +96,11 @@ internal static class SensorEndpoints
                 title: "Sensor already registered",
                 detail: $"A sensor with MAC address '{registration.MacAddress}' is already registered.");
         }
+
+        // Tracked from the moment of registration rather than from its first packet. A sensor that
+        // is registered and then never sends anything is the silent disconnect in its purest form,
+        // and it can only be caught if its heartbeat clock started when it was registered.
+        trust.Track(registration.MacAddress);
 
         return Results.Created($"/api/sensors/{registration.MacAddress}", registration);
     }
