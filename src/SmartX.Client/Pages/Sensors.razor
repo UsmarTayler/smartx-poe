@@ -57,12 +57,10 @@ else
     {
         SensorCatalog.Changed += OnSensorsChanged;
 
-        // Already loaded on an earlier visit: render from what the service holds instead of blanking
-        // the page to fetch it again.
-        if (!SensorCatalog.IsLoaded)
-        {
-            await LoadAsync();
-        }
+        // Render straight away from whatever the service already holds, then refresh it. A return visit
+        // never blanks the page, and sensors registered elsewhere — by another operator, or directly
+        // against the API — still appear without a full reload.
+        await LoadAsync();
     }
 
     private Task LoadAsync() => SensorCatalog.LoadAsync();
