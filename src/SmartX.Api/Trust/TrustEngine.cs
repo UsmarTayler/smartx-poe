@@ -405,11 +405,12 @@ internal sealed class TrustEngine : ITrustEngine
     /// and the overwrite share one lock, two packets arriving at the same instant cannot both read
     /// "not yet in fault" and both raise the event.
     /// <para>
-    /// A property of the maths worth knowing: decay alone can never move a node into or out of fault.
-    /// Ageing multiplies <c>s</c> and <c>f</c> by the same factor, and <c>T &lt; 0.5</c> holds exactly
-    /// when <c>s &lt; f</c>, which scaling both cannot change. So every fault transition corresponds to
-    /// a real new outcome. Decay can only carry a nominal node back to degrading as its good evidence
-    /// goes stale.
+    /// A property of the maths worth knowing: decay alone can never push a node into fault or recover
+    /// it from fault. Ageing multiplies <c>s</c> and <c>f</c> by the same factor, and <c>T &lt; 0.5</c>
+    /// holds exactly when <c>s &lt; f</c>, which scaling both cannot change. So every fault transition
+    /// corresponds to a real new outcome. Decay can carry a nominal node back to degrading as its good
+    /// evidence goes stale, and once evidence of any kind has faded to nothing it leaves the node
+    /// unproven — which is not a recovery, and is never announced as one.
     /// </para>
     /// </remarks>
     private TrustTransition? Evaluate(NodeTrust node, DateTimeOffset now)
@@ -450,9 +451,12 @@ internal sealed class TrustEngine : ITrustEngine
         var previousBand = node.Band;
         var score = TrustFormula.Score(successes, failures);
 
-        // No outcomes means nothing to judge. The score is still reported — it is the 0.5 prior — but
-        // the band says so plainly instead of letting 0.5 fall wherever the thresholds happen to put it.
-        var band = node.Outcomes.IsEmpty
+        // Unproven when there is no evidence to judge: either no outcomes at all, or outcomes so old
+        // their decayed weight has all but vanished. The second case guards a rounding failure — once
+        // s and f drop below about 1e-16, (s + 1) rounds to exactly 1 and (s + f + 2) to exactly 2, so
+        // the score lands on exactly 0.5 and a faulted node would seem to recover into degrading with
+        // nothing having happened. See TrustFormula.MinimumEvidence.
+        var band = successes + failures < TrustFormula.MinimumEvidence
             ? TrustBand.Unproven
             : TrustFormula.Classify(score, _options.NominalThreshold, _options.FaultThreshold);
 
@@ -481,6 +485,12 @@ internal sealed class TrustEngine : ITrustEngine
                 node.LastNominalAt ?? node.TrackedSince, now);
 
             node.FaultEnteredAt = now;
+        }
+        else if (previousBand == TrustBand.Fault && band == TrustBand.Unproven)
+        {
+            // Evidence decayed to nothing, which is not a recovery. Raising FaultCleared here would
+            // announce a repair nobody made, so the fault episode ends without an event.
+            node.FaultEnteredAt = null;
         }
         else if (band != TrustBand.Fault && previousBand == TrustBand.Fault)
         {

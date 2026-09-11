@@ -14,6 +14,19 @@ public static class TrustFormula
     /// <remarks>Not configuration: with s = 0 and f = 0, (0 + 1) / (0 + 0 + 2) = 0.5.</remarks>
     public const double PriorScore = 0.5;
 
+    /// <summary>The total weighted evidence below which a node counts as having none.</summary>
+    /// <remarks>
+    /// A numerical guard rather than a tunable, which is why it is a constant and not configuration:
+    /// no operator choice makes the arithmetic more correct. Decay never reaches zero, but a double
+    /// cannot tell 1 + 1e-17 from 1, so once <c>s</c> and <c>f</c> fall below roughly 1e-16 the score
+    /// rounds to exactly 0.5 regardless of which of them was larger — and a faulted node would appear
+    /// to recover with nothing having happened. Treating anything under 1e-9 as no evidence triggers
+    /// about thirty half-lives after the last outcome, some twenty half-lives before that rounding can
+    /// occur, while sitting far below the weight of anything recent: a single outcome from twenty
+    /// half-lives ago still weighs about 1e-6.
+    /// </remarks>
+    public const double MinimumEvidence = 1e-9;
+
     /// <summary>Computes trust as <c>(s + 1) / (s + f + 2)</c>.</summary>
     /// <param name="successes">Weighted successful packets, <c>s</c>.</param>
     /// <param name="failures">Weighted failures, <c>f</c>.</param>

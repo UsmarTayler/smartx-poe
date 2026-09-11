@@ -31,6 +31,11 @@ public interface ITrustEngine
     event Action<TrustTransition>? FaultEntered;
 
     /// <summary>Raised when a node in the fault band recovers into a band above it.</summary>
+    /// <remarks>
+    /// Not raised when a faulted node's evidence decays away entirely and it becomes unproven. That is
+    /// the absence of information, not a recovery, and announcing it as one would clear an alert for a
+    /// node nobody has repaired.
+    /// </remarks>
     event Action<TrustTransition>? FaultCleared;
 
     /// <summary>The nodes currently degrading or faulted.</summary>

@@ -85,7 +85,7 @@ public class HeartbeatPenaltyTests
     public void Decay_alone_never_clears_a_fault()
     {
         // s = 2, f = 4. Ageing scales both by the same factor, and the score is below 0.5 exactly
-        // when s < f — so no amount of waiting can lift this node out of fault. Only evidence can.
+        // when s < f — so waiting alone cannot recover this node. Only new evidence can.
         var (engine, clock) = Create();
         var cleared = 0;
         engine.FaultCleared += _ => cleared++;
