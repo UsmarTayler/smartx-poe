@@ -1,0 +1,62 @@
+@* Where files are dropped or picked. Data in: the limits to describe, and whether it is disabled. Event out:
+   the element that holds the selection, raised while the selection is still in it — the service takes the
+   browser's File objects from there, and the files are never read into .NET.
+
+   MudFileUpload's drag-and-drop mode covers the zone with its file input while a drag is over it, so a drop
+   lands in the input exactly as a picked file would. Dropping is not usable from a keyboard, which is why
+   the zone always also offers a real "Browse files" button. *@
+<div @ref="_container" class="smartx-dropzone @(_dragging ? "smartx-dropzone--dragging" : null)">
+    <MudFileUpload T="IReadOnlyList<IBrowserFile>" @ref="_upload"
+                   DragAndDrop="true" MaximumFileCount="20"
+                   Accept="@Accept" Disabled="Disabled"
+                   @bind-Dragging="_dragging"
+                   OnFilesChanged="OnFilesChangedAsync">
+        <CustomContent>
+            <div class="d-flex flex-column align-center text-center pa-6 gap-2">
+                <MudIcon Icon="@Icons.Material.Outlined.CloudUpload" Size="Size.Large" Class="mud-text-secondary" aria-hidden="true" />
+                <MudText Typo="Typo.subtitle1" HtmlTag="p">
+                    @(_dragging ? "Drop to attach" : "Drag files here to attach them")
+                </MudText>
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.FolderOpen"
+                           Disabled="Disabled" OnClick="@(() => context.OpenFilePickerAsync())">
+                    Browse files
+                </MudButton>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    Images (PNG, JPEG, WebP), logs and text, JSON, YAML, CSV and config files@(Limits is { } limits ? $", up to {AttachmentService.FormatBytes(limits.MaxFileBytes)} each" : string.Empty).
+                </MudText>
+            </div>
+        </CustomContent>
+        <SelectedTemplate />
+    </MudFileUpload>
+</div>
+
+@code {
+    private ElementReference _container;
+    private MudFileUpload<IReadOnlyList<IBrowserFile>>? _upload;
+    private bool _dragging;
+
+    [Parameter]
+    public AttachmentLimits? Limits { get; set; }
+
+    [Parameter]
+    public bool Disabled { get; set; }
+
+    /// <summary>Raised with the element holding the selection, while it still holds it.</summary>
+    [Parameter]
+    public EventCallback<ElementReference> OnFilesSelected { get; set; }
+
+    private string Accept => string.Join(",", Limits?.AllowedExtensions ?? AttachmentPolicy.AllowedExtensions);
+
+    private async Task OnFilesChangedAsync(InputFileChangeEventArgs _)
+    {
+        _dragging = false;
+
+        await OnFilesSelected.InvokeAsync(_container);
+
+        // Cleared after the files have been taken, so choosing the same file again still fires a change.
+        if (_upload is not null)
+        {
+            await _upload.ClearAsync();
+        }
+    }
+}

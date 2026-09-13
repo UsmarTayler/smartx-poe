@@ -31,7 +31,7 @@ else
             <MudTh>Heartbeat</MudTh>
         </HeaderContent>
         <RowTemplate>
-            <MudTd DataLabel="MAC address"><span class="smartx-mono">@context.MacAddress</span></MudTd>
+            <MudTd DataLabel="MAC address"><MudLink Href="@($"sensors/{context.MacAddress}")" Class="smartx-mono">@context.MacAddress</MudLink></MudTd>
             <MudTd DataLabel="Category">@context.Category</MudTd>
             <MudTd DataLabel="Expected">@DescribeRange(context)</MudTd>
             <MudTd DataLabel="Location">

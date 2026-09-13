@@ -6,7 +6,7 @@
 <MudPaper Outlined="true" Class="pa-4 d-flex flex-column gap-3" Style="height: 100%">
     <div class="d-flex align-start justify-space-between gap-2">
         <div style="min-width: 0">
-            <MudText Typo="Typo.subtitle1" HtmlTag="h2" Class="smartx-mono">@Sensor.MacAddress</MudText>
+            <MudText Typo="Typo.subtitle1" HtmlTag="h2" Class="smartx-mono"><MudLink Href="@($"sensors/{Sensor.MacAddress}")" Color="Color.Inherit">@Sensor.MacAddress</MudLink></MudText>
             <MudText Typo="Typo.caption" Class="mud-text-secondary">@ZonePath · @Sensor.Location.Room</MudText>
         </div>
         <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@Sensor.PayloadKind</MudChip>

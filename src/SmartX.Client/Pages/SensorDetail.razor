@@ -1,0 +1,212 @@
+@page "/sensors/{Mac}"
+@implements IDisposable
+@inject SensorService SensorCatalog
+@inject AttachmentService Attachments
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+
+<PageTitle>@(Sensor?.MacAddress ?? Mac) · Smart-X</PageTitle>
+
+<MudButton Href="sensors" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.ArrowBack" Class="mb-2">
+    All sensors
+</MudButton>
+
+@if (SensorCatalog.LoadProblem is { } loadProblem && !SensorCatalog.IsLoaded)
+{
+    <PageHeader Title="Sensor profile" />
+    <ApiErrorState Problem="loadProblem" OnRetry="LoadAsync" />
+}
+else if (!SensorCatalog.IsLoaded)
+{
+    <div aria-hidden="true">
+        <MudSkeleton Width="18rem" Height="48px" Class="mb-4" />
+        <MudSkeleton SkeletonType="SkeletonType.Rectangle" Height="140px" Class="mb-4" />
+        <MudSkeleton SkeletonType="SkeletonType.Rectangle" Height="220px" />
+    </div>
+}
+else if (Sensor is null)
+{
+    <PageHeader Title="Sensor not found" />
+    <MudPaper Outlined="true">
+        <EmptyState Icon="@Icons.Material.Outlined.SearchOff"
+                    Title="@($"No sensor is registered as {Mac}")"
+                    Text="It may have been registered against a different address, or the API may have restarted and lost its in-memory registrations.">
+            <MudButton Href="sensors" Variant="Variant.Filled" Color="Color.Primary">Back to sensors</MudButton>
+        </EmptyState>
+    </MudPaper>
+}
+else
+{
+    <PageHeader Title="@Sensor.MacAddress" Subtitle="@($"{Sensor.Category} sensor · {SensorCatalog.ZonePath(Sensor.Location.ZoneId)}")" />
+
+    <MudGrid Spacing="4">
+        <MudItem xs="12" md="4">
+            <MudPaper Outlined="true" Class="pa-4">
+                <MudText Typo="Typo.h6" HtmlTag="h2" Class="mb-3">Profile</MudText>
+                <dl class="smartx-profile">
+                    <dt>Room</dt><dd>@Sensor.Location.Room</dd>
+                    <dt>Node</dt><dd>@Sensor.Location.NodeId</dd>
+                    <dt>Payload</dt><dd>@Sensor.PayloadKind</dd>
+                    <dt>Expected</dt>
+                    <dd>
+                        @(Sensor.PayloadKind == TelemetryPayloadKind.State
+                            ? "on / off"
+                            : $"{Sensor.ExpectedRange.Minimum:0.##} – {Sensor.ExpectedRange.Maximum:0.##} {Sensor.Unit}")
+                    </dd>
+                    <dt>Heartbeat</dt>
+                    <dd>@(Sensor.HeartbeatInterval is { } interval ? $"every {interval.TotalSeconds:0}s" : "gateway default")</dd>
+                </dl>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="8">
+            <MudPaper Outlined="true" Class="pa-4">
+                <div class="d-flex flex-wrap align-center justify-space-between gap-3 mb-3">
+                    <MudText Typo="Typo.h6" HtmlTag="h2">Attachments</MudText>
+                    <MudSelect T="AttachmentKind?" @bind-Value="_kind" Label="Attach as" Dense="true"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width: 16rem"
+                               ToStringFunc="@(kind => kind is { } k ? AttachmentList.LabelFor(k) : "Work it out from the file")">
+                        <MudSelectItem T="AttachmentKind?" Value="@((AttachmentKind?)null)">Work it out from the file</MudSelectItem>
+                        @foreach (var kind in Enum.GetValues<AttachmentKind>())
+                        {
+                            <MudSelectItem T="AttachmentKind?" Value="@kind">@AttachmentList.LabelFor(kind)</MudSelectItem>
+                        }
+                    </MudSelect>
+                </div>
+
+                <AttachmentDropZone Limits="Attachments.Limits" OnFilesSelected="QueueAsync" />
+
+                <UploadQueue Items="State.Uploads"
+                             OnCancel="@(item => Attachments.CancelAsync(item))"
+                             OnDismiss="@(item => Attachments.Dismiss(Sensor.MacAddress, item))" />
+
+                <MudDivider Class="my-4" />
+
+                @if (State.LoadProblem is { } problem && !State.IsLoaded)
+                {
+                    <ApiErrorState Problem="problem" OnRetry="LoadAttachmentsAsync" />
+                }
+                else if (!State.IsLoaded)
+                {
+                    <div aria-hidden="true">
+                        @for (var row = 0; row < 3; row++)
+                        {
+                            <div class="d-flex align-center gap-3 mb-3">
+                                <MudSkeleton SkeletonType="SkeletonType.Rectangle" Width="56px" Height="56px" />
+                                <div style="flex: 1">
+                                    <MudSkeleton Width="50%" />
+                                    <MudSkeleton Width="30%" />
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+                else if (State.Items.Count == 0)
+                {
+                    <EmptyState Icon="@Icons.Material.Outlined.AttachFile"
+                                Title="Nothing attached yet"
+                                Text="Drop a configuration file, a photo of the installation, or a log pulled off the device into the box above." />
+                }
+                else
+                {
+                    <AttachmentList Attachments="State.Items"
+                                    DownloadUrl="Attachments.DownloadUrl"
+                                    ThumbnailUrl="Attachments.ThumbnailUrl"
+                                    OnPreview="PreviewAsync"
+                                    OnDelete="DeleteAsync" />
+                }
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    private AttachmentKind? _kind;
+
+    [Parameter]
+    public string Mac { get; set; } = string.Empty;
+
+    private SensorRegistration? Sensor =>
+        MacAddressValidator.TryNormalise(Mac, out var canonical)
+            ? SensorCatalog.Sensors.FirstOrDefault(sensor => sensor.MacAddress == canonical)
+            : null;
+
+    private SensorAttachments State => Attachments.For(Sensor?.MacAddress ?? Mac);
+
+    protected override async Task OnInitializedAsync()
+    {
+        SensorCatalog.Changed += OnChanged;
+        Attachments.Changed += OnChanged;
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (!SensorCatalog.IsLoaded)
+        {
+            await SensorCatalog.LoadAsync();
+        }
+
+        await LoadAttachmentsAsync();
+    }
+
+    private async Task LoadAttachmentsAsync()
+    {
+        if (Sensor is { } sensor)
+        {
+            await Attachments.LoadAsync(sensor.MacAddress);
+        }
+    }
+
+    private Task QueueAsync(ElementReference container) =>
+        Sensor is { } sensor ? Attachments.QueueSelectedFilesAsync(sensor.MacAddress, container, _kind) : Task.CompletedTask;
+
+    private async Task PreviewAsync(AttachmentMetadata attachment)
+    {
+        var parameters = new DialogParameters<ImagePreviewDialog>
+        {
+            { dialog => dialog.Source, Attachments.ThumbnailUrl(attachment.Id) },
+            { dialog => dialog.Title, attachment.OriginalFileName },
+            { dialog => dialog.DownloadUrl, Attachments.DownloadUrl(attachment.Id) },
+        };
+
+        await Dialogs.ShowAsync<ImagePreviewDialog>(
+            attachment.OriginalFileName,
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseOnEscapeKey = true, CloseButton = true });
+    }
+
+    private async Task DeleteAsync(AttachmentMetadata attachment)
+    {
+        var confirmed = await Dialogs.ShowMessageBoxAsync(
+            "Delete this attachment?",
+            $"{attachment.OriginalFileName} will be permanently deleted from the gateway. This can't be undone.",
+            yesText: "Delete",
+            cancelText: "Keep it");
+
+        if (confirmed != true || Sensor is not { } sensor)
+        {
+            return;
+        }
+
+        var problem = await Attachments.DeleteAsync(sensor.MacAddress, attachment);
+
+        if (problem is null)
+        {
+            Snackbar.Add($"Deleted {attachment.OriginalFileName}.", Severity.Success);
+        }
+        else
+        {
+            Snackbar.Add($"Couldn't delete {attachment.OriginalFileName}: {problem.Message}", Severity.Error);
+        }
+    }
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        SensorCatalog.Changed -= OnChanged;
+        Attachments.Changed -= OnChanged;
+    }
+}
