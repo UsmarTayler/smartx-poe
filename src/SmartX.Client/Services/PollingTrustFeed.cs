@@ -7,9 +7,10 @@ namespace SmartX.Client.Services;
 /// An <see cref="ITrustFeed"/> that polls the trust endpoints on a fixed interval.
 /// </summary>
 /// <remarks>
-/// Each refresh fetches the summary and the node list concurrently, then every node's history
-/// concurrently. That is N + 2 requests per interval — fine for a demonstration mesh, and exactly
-/// the cost a push-based feed removes, which is part of why the interface exists.
+/// Each refresh is exactly two requests, sent concurrently: the summary, and the node list. Every node
+/// in the list already carries its recent history, so the sparklines need nothing further. It used to
+/// be one more history request per node — N + 2 per interval, which with a few dozen sensors meant
+/// around forty requests every three seconds. The cost is now fixed however large the mesh grows.
 /// <para>
 /// Scoped, so the data outlives the page: leave the trust panel and come back, and the last snapshot
 /// renders at once while the next poll is on its way. Polling runs only while the panel is open;
@@ -91,20 +92,9 @@ public sealed class PollingTrustFeed(
             return;
         }
 
-        var historyCalls = nodes.Value.Select(async node =>
-            (node.MacAddress, History: await api.GetTrustHistoryAsync(node.MacAddress, cancellationToken)));
-
-        var histories = new Dictionary<string, IReadOnlyList<TrustHistoryPoint>>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var (macAddress, history) in await Task.WhenAll(historyCalls))
-        {
-            // One missing sparkline is not a reason to withhold every node's score.
-            histories[macAddress] = history.IsSuccess ? history.Value : [];
-        }
-
         var now = time.GetUtcNow();
 
-        Current = new TrustFeedSnapshot(summary.Value, nodes.Value, histories, now, null, IsLoaded: true);
+        Current = new TrustFeedSnapshot(summary.Value, nodes.Value, now, null, IsLoaded: true);
         state.MarkRefreshed(now);
         Updated?.Invoke();
     }

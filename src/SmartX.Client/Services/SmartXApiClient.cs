@@ -70,16 +70,12 @@ public sealed class SmartXApiClient(HttpClient http)
                 token),
             cancellationToken);
 
+    /// <summary>Every tracked node, worst first, each carrying its recent history for a sparkline.</summary>
     public Task<ApiResult<IReadOnlyList<NodeTrustSnapshot>>> GetTrustAsync(CancellationToken cancellationToken = default) =>
         GetAsync<IReadOnlyList<NodeTrustSnapshot>>("api/trust", cancellationToken);
 
     public Task<ApiResult<TrustSummary>> GetTrustSummaryAsync(CancellationToken cancellationToken = default) =>
         GetAsync<TrustSummary>("api/trust/summary", cancellationToken);
-
-    public Task<ApiResult<IReadOnlyList<TrustHistoryPoint>>> GetTrustHistoryAsync(
-        string macAddress,
-        CancellationToken cancellationToken = default) =>
-        GetAsync<IReadOnlyList<TrustHistoryPoint>>($"api/trust/{Uri.EscapeDataString(macAddress)}/history", cancellationToken);
 
     private Task<ApiResult<T>> GetAsync<T>(string uri, CancellationToken cancellationToken) =>
         SendAsync<T>(token => http.GetAsync(uri, token), cancellationToken);

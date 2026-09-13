@@ -41,9 +41,9 @@ internal sealed class TrustOptionsValidator : IValidateOptions<TrustOptions>
             failures.Add($"{nameof(TrustOptions.OutcomeWindow)} must hold at least one outcome.");
         }
 
-        if (options.HistoryLength < 0 || options.HistorySampleInterval < TimeSpan.Zero)
+        if (options.HistoryLength < 0 || options.SnapshotHistoryPoints < 0 || options.HistorySampleInterval < TimeSpan.Zero)
         {
-            failures.Add("History length and sample interval cannot be negative.");
+            failures.Add("History length, snapshot history points and sample interval cannot be negative.");
         }
 
         // No rule tying the fault threshold to the 0.5 prior any more. It used to exist because a

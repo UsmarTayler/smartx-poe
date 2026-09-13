@@ -14,10 +14,19 @@ namespace SmartX.Shared;
 /// <param name="EvaluatedAt">When this score was computed.</param>
 /// <param name="RecentSuccesses">Valid packets counted as recent.</param>
 /// <param name="RecentFailures">Failures of any kind counted as recent.</param>
+/// <param name="RecentHistory">
+/// The node's most recent trust samples, oldest first, enough to draw its sparkline.
+/// </param>
 /// <remarks>
 /// <paramref name="Reason"/> is what turns this from a report into information. A dashboard showing
 /// "0.41" tells an operator that something is wrong; "no packets for 4m 20s" tells them what to go
 /// and look at.
+/// <para>
+/// <paramref name="RecentHistory"/> travels with the snapshot so the dashboard can draw every row from
+/// one response. Without it the client made one extra history request per node on every refresh —
+/// fine with three sensors, and around forty requests every three seconds once dozens are registered.
+/// Only the last few samples are included; the full series is still at /api/trust/{mac}/history.
+/// </para>
 /// </remarks>
 public sealed record NodeTrustSnapshot(
     string MacAddress,
@@ -28,4 +37,5 @@ public sealed record NodeTrustSnapshot(
     DateTimeOffset? LastSeen,
     DateTimeOffset EvaluatedAt,
     int RecentSuccesses,
-    int RecentFailures);
+    int RecentFailures,
+    IReadOnlyList<TrustHistoryPoint> RecentHistory);

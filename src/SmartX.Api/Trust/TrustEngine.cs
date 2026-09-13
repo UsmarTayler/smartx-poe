@@ -213,7 +213,7 @@ internal sealed class TrustEngine : ITrustEngine
 
             foreach (var node in _nodes.Values)
             {
-                snapshots.Add(node.ToSnapshot());
+                snapshots.Add(node.ToSnapshot(_options.SnapshotHistoryPoints));
             }
         }
 
@@ -241,7 +241,7 @@ internal sealed class TrustEngine : ITrustEngine
                 return false;
             }
 
-            snapshot = node.ToSnapshot();
+            snapshot = node.ToSnapshot(_options.SnapshotHistoryPoints);
 
             return true;
         }

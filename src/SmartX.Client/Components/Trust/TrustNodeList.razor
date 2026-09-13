@@ -15,7 +15,7 @@
     {
         <div role="listitem" @key="node.MacAddress">
             <TrustNodeRow Node="node"
-                          History="HistoryFor(node.MacAddress)"
+                          History="node.RecentHistory"
                           Selected="@string.Equals(node.MacAddress, SelectedNode, StringComparison.OrdinalIgnoreCase)"
                           OnSelect="OnSelect" />
         </div>
@@ -26,8 +26,6 @@
     [Parameter, EditorRequired]
     public IReadOnlyList<NodeTrustSnapshot> Nodes { get; set; } = [];
 
-    [Parameter]
-    public Func<string, IReadOnlyList<TrustHistoryPoint>> HistoryFor { get; set; } = _ => [];
 
     [Parameter]
     public string? SelectedNode { get; set; }

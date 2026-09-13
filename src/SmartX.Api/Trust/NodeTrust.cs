@@ -81,14 +81,31 @@ internal sealed class NodeTrust
     /// <summary>When the node most recently entered the fault band.</summary>
     internal DateTimeOffset? FaultEnteredAt { get; set; }
 
-    internal NodeTrustSnapshot ToSnapshot() => new(
-        MacAddress,
-        Score,
-        Band,
-        Reason,
-        TrackedSince,
-        LastSeen,
-        EvaluatedAt,
-        RecentSuccesses,
-        RecentFailures);
+    /// <summary>Copies the node out, with at most <paramref name="historyPoints"/> recent samples.</summary>
+    /// <remarks>
+    /// The samples are read from the tail of the ring buffer by index rather than copying the whole
+    /// buffer and trimming, so a snapshot of many nodes allocates only what it returns.
+    /// </remarks>
+    internal NodeTrustSnapshot ToSnapshot(int historyPoints)
+    {
+        var take = Math.Clamp(historyPoints, 0, History.Count);
+        var recent = new TrustHistoryPoint[take];
+
+        for (var index = 0; index < take; index++)
+        {
+            recent[index] = History[History.Count - take + index];
+        }
+
+        return new NodeTrustSnapshot(
+            MacAddress,
+            Score,
+            Band,
+            Reason,
+            TrackedSince,
+            LastSeen,
+            EvaluatedAt,
+            RecentSuccesses,
+            RecentFailures,
+            recent);
+    }
 }

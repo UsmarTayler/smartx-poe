@@ -72,6 +72,14 @@ public sealed class TrustOptions
     /// </remarks>
     public TimeSpan HistorySampleInterval { get; set; } = TimeSpan.FromSeconds(10);
 
+    /// <summary>How many recent samples each node carries in the trust list, for its sparkline.</summary>
+    /// <remarks>
+    /// Thirty samples at the ten-second spacing is about five minutes of trend — enough to see a node
+    /// falling — while keeping the list response small when dozens of nodes are polled every few
+    /// seconds. The full series of <see cref="HistoryLength"/> samples stays available per node.
+    /// </remarks>
+    public int SnapshotHistoryPoints { get; set; } = 30;
+
     /// <summary>The lowest score still counted as nominal.</summary>
     public double NominalThreshold { get; set; } = 0.75;
 

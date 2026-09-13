@@ -6,8 +6,9 @@ namespace SmartX.Client.Services;
 /// Everything the trust panel shows, as of one refresh.
 /// </summary>
 /// <param name="Summary">Mesh-wide confidence and per-band counts.</param>
-/// <param name="Nodes">Every tracked node, worst first, as the API ordered them.</param>
-/// <param name="Histories">Each node's sampled trust series, keyed by MAC.</param>
+/// <param name="Nodes">
+/// Every tracked node, worst first, as the API ordered them, each with its recent history.
+/// </param>
 /// <param name="RefreshedAt">When this data arrived.</param>
 /// <param name="Problem">Why the most recent refresh failed, if it did.</param>
 /// <param name="IsLoaded">Whether any refresh has ever succeeded.</param>
@@ -23,17 +24,11 @@ namespace SmartX.Client.Services;
 public sealed record TrustFeedSnapshot(
     TrustSummary? Summary,
     IReadOnlyList<NodeTrustSnapshot> Nodes,
-    IReadOnlyDictionary<string, IReadOnlyList<TrustHistoryPoint>> Histories,
     DateTimeOffset? RefreshedAt,
     ApiProblem? Problem,
     bool IsLoaded)
 {
-    public static TrustFeedSnapshot Empty { get; } =
-        new(null, [], new Dictionary<string, IReadOnlyList<TrustHistoryPoint>>(), null, null, false);
-
-    /// <summary>One node's history, or an empty series.</summary>
-    public IReadOnlyList<TrustHistoryPoint> HistoryFor(string macAddress) =>
-        Histories.TryGetValue(macAddress, out var history) ? history : [];
+    public static TrustFeedSnapshot Empty { get; } = new(null, [], null, null, false);
 }
 
 /// <summary>
