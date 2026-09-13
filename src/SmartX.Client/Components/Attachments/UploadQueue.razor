@@ -1,0 +1,87 @@
+@* Files being uploaded, each with its own bar and its own result. Data in: the queue. Events out: cancel and
+   dismiss. The bar shows real bytes sent, reported by the browser; while a file waits its turn it shows no
+   bar at all rather than a bar pretending to move. Every state pairs an icon with words, so a failure never
+   depends on noticing it is red. *@
+@if (Items.Count > 0)
+{
+    <ul class="smartx-upload-queue" aria-label="Uploads">
+        @foreach (var item in Items)
+        {
+            <li @key="item.Id" class="smartx-upload-queue__item">
+                <div class="d-flex align-center gap-3">
+                    <MudIcon Icon="@IconFor(item.Status)" Color="@ColorFor(item.Status)" Size="Size.Small" aria-hidden="true" />
+
+                    <div style="min-width: 0; flex: 1">
+                        <MudText Typo="Typo.body2" Class="smartx-upload-queue__name">@item.FileName</MudText>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary" role="status" aria-live="polite">
+                            @StatusText(item)
+                        </MudText>
+                    </div>
+
+                    @if (item.IsFinished)
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                       aria-label="@($"Dismiss {item.FileName}")"
+                                       OnClick="@(() => OnDismiss.InvokeAsync(item))" />
+                    }
+                    else
+                    {
+                        <MudButton Size="Size.Small" Variant="Variant.Text"
+                                   aria-label="@($"Cancel uploading {item.FileName}")"
+                                   OnClick="@(() => OnCancel.InvokeAsync(item))">
+                            Cancel
+                        </MudButton>
+                    }
+                </div>
+
+                @if (item.Status == UploadStatus.Uploading)
+                {
+                    <MudProgressLinear Value="@(item.Progress * 100)" Color="Color.Primary" Class="mt-2"
+                                       aria-label="@($"{item.FileName} upload progress")" />
+                }
+
+                @if (item.Status == UploadStatus.Failed && item.Error is { } error)
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Error" Class="mt-1">@error</MudText>
+                }
+            </li>
+        }
+    </ul>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<UploadItem> Items { get; set; } = [];
+
+    [Parameter]
+    public EventCallback<UploadItem> OnCancel { get; set; }
+
+    [Parameter]
+    public EventCallback<UploadItem> OnDismiss { get; set; }
+
+    private static string StatusText(UploadItem item) => item.Status switch
+    {
+        UploadStatus.Queued => $"Waiting · {AttachmentService.FormatBytes(item.SizeBytes)}",
+        UploadStatus.Uploading => $"Uploading · {item.Progress:P0} of {AttachmentService.FormatBytes(item.SizeBytes)}",
+        UploadStatus.Done => $"Attached · {AttachmentService.FormatBytes(item.SizeBytes)}",
+        UploadStatus.Cancelled => "Cancelled",
+        _ => "Failed"
+    };
+
+    private static string IconFor(UploadStatus status) => status switch
+    {
+        UploadStatus.Done => Icons.Material.Filled.CheckCircle,
+        UploadStatus.Failed => Icons.Material.Filled.Error,
+        UploadStatus.Cancelled => Icons.Material.Filled.Block,
+        UploadStatus.Uploading => Icons.Material.Filled.CloudUpload,
+        _ => Icons.Material.Outlined.Schedule
+    };
+
+    private static Color ColorFor(UploadStatus status) => status switch
+    {
+        UploadStatus.Done => Color.Success,
+        UploadStatus.Failed => Color.Error,
+        UploadStatus.Uploading => Color.Primary,
+        _ => Color.Default
+    };
+}

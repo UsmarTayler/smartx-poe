@@ -1,0 +1,76 @@
+@using System.Globalization
+@* A sensor's attachments. Data in: the attachments and how to address them. Events out: preview and delete.
+   Downloading needs no event — it is a plain link the browser follows, and the API sends the file with a
+   Content-Disposition of attachment, so the page stays where it is. Images show their thumbnail, which is a
+   button that opens a preview; everything else shows an icon for its kind. *@
+<ul class="smartx-attachments" aria-label="Attachments">
+    @foreach (var attachment in Attachments)
+    {
+        <li @key="attachment.Id" class="smartx-attachments__item">
+            @if (attachment.IsImage)
+            {
+                <button type="button" class="smartx-attachments__thumb"
+                        aria-label="@($"Preview {attachment.OriginalFileName}")"
+                        @onclick="@(() => OnPreview.InvokeAsync(attachment))">
+                    <img src="@ThumbnailUrl(attachment.Id)" alt="" loading="lazy" />
+                </button>
+            }
+            else
+            {
+                <span class="smartx-attachments__icon" aria-hidden="true">
+                    <MudIcon Icon="@IconFor(attachment.Kind)" />
+                </span>
+            }
+
+            <div class="smartx-attachments__details">
+                <MudText Typo="Typo.body2" Class="smartx-attachments__name">@attachment.OriginalFileName</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    <MudIcon Icon="@IconFor(attachment.Kind)" Size="Size.Small" Style="font-size: 0.9rem; vertical-align: text-bottom" aria-hidden="true" />
+                    @LabelFor(attachment.Kind) · @AttachmentService.FormatBytes(attachment.SizeBytes) · @When(attachment.UploadedAt)
+                </MudText>
+            </div>
+
+            <div class="smartx-attachments__actions">
+                <MudIconButton Icon="@Icons.Material.Filled.Download" Href="@DownloadUrl(attachment.Id)"
+                               aria-label="@($"Download {attachment.OriginalFileName}")" />
+                <MudIconButton Icon="@Icons.Material.Outlined.Delete" Color="Color.Error"
+                               aria-label="@($"Delete {attachment.OriginalFileName}")"
+                               OnClick="@(() => OnDelete.InvokeAsync(attachment))" />
+            </div>
+        </li>
+    }
+</ul>
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<AttachmentMetadata> Attachments { get; set; } = [];
+
+    [Parameter, EditorRequired]
+    public Func<Guid, string> DownloadUrl { get; set; } = _ => string.Empty;
+
+    [Parameter, EditorRequired]
+    public Func<Guid, string> ThumbnailUrl { get; set; } = _ => string.Empty;
+
+    [Parameter]
+    public EventCallback<AttachmentMetadata> OnPreview { get; set; }
+
+    [Parameter]
+    public EventCallback<AttachmentMetadata> OnDelete { get; set; }
+
+    public static string IconFor(AttachmentKind kind) => kind switch
+    {
+        AttachmentKind.DeploymentPhoto => Icons.Material.Outlined.PhotoCamera,
+        AttachmentKind.HardwareLog => Icons.Material.Outlined.Article,
+        _ => Icons.Material.Outlined.SettingsApplications
+    };
+
+    public static string LabelFor(AttachmentKind kind) => kind switch
+    {
+        AttachmentKind.DeploymentPhoto => "Deployment photo",
+        AttachmentKind.HardwareLog => "Hardware log",
+        _ => "Configuration file"
+    };
+
+    private static string When(DateTimeOffset at) =>
+        at.ToLocalTime().ToString("d MMM yyyy, HH:mm", CultureInfo.InvariantCulture);
+}

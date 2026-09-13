@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using SmartX.Api.Attachments;
 using SmartX.Api.Endpoints;
 using SmartX.Api.Storage;
 using SmartX.Api.Trust;
@@ -55,6 +56,19 @@ builder.Services.AddSingleton<IValidateOptions<TrustOptions>, TrustOptionsValida
 builder.Services.AddSingleton<ITrustEngine, TrustEngine>();
 builder.Services.AddHostedService<HeartbeatMonitor>();
 
+// Attachments. The encryption key is read from configuration but is deliberately absent from every
+// committed settings file: it comes from user secrets in development and the environment or a key vault
+// elsewhere. ValidateOnStart refuses to start outside Development without one.
+builder.Services
+    .AddOptions<AttachmentOptions>()
+    .Bind(builder.Configuration.GetSection(AttachmentOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<AttachmentOptions>, AttachmentOptionsValidator>();
+builder.Services.AddSingleton<AttachmentKeyProvider>();
+builder.Services.AddSingleton<AttachmentStorage>();
+builder.Services.AddSingleton<IAttachmentStore, InMemoryAttachmentStore>();
+builder.Services.AddSingleton<AttachmentUploader>();
+
 var app = builder.Build();
 
 app.UseCors(ClientCorsPolicy);
@@ -66,6 +80,7 @@ api.MapSensorEndpoints();
 api.MapTelemetryEndpoints();
 api.MapZoneEndpoints();
 api.MapTrustEndpoints();
+api.MapAttachmentEndpoints();
 
 app.Run();
 

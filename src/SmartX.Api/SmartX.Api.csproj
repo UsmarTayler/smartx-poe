@@ -6,6 +6,9 @@
   </ItemGroup>
 
   <PropertyGroup>
+    <!-- Identifies this project's user-secrets store, where a development encryption key lives outside
+         the repository. The id is not itself a secret. -->
+    <UserSecretsId>smartx-api-attachments</UserSecretsId>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

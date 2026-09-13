@@ -480,3 +480,6 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Encrypted attachment storage written by the API at runtime. Ciphertext only, but still not source.
+App_Data/

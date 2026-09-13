@@ -1,0 +1,29 @@
+@* A full-size look at a deployment photo. Close with the button, Escape, or the backdrop. *@
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6" Class="smartx-attachments__name">@Title</MudText>
+    </TitleContent>
+    <DialogContent>
+        <img src="@Source" alt="@Title" class="smartx-preview-image" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton Href="@DownloadUrl" StartIcon="@Icons.Material.Filled.Download">Download</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Close">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance Dialog { get; set; } = default!;
+
+    [Parameter]
+    public string Source { get; set; } = string.Empty;
+
+    [Parameter]
+    public string Title { get; set; } = string.Empty;
+
+    [Parameter]
+    public string DownloadUrl { get; set; } = string.Empty;
+
+    private void Close() => Dialog.Close();
+}
