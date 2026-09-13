@@ -77,6 +77,39 @@ public sealed class SmartXApiClient(HttpClient http)
     public Task<ApiResult<TrustSummary>> GetTrustSummaryAsync(CancellationToken cancellationToken = default) =>
         GetAsync<TrustSummary>("api/trust/summary", cancellationToken);
 
+    /// <summary>What the server will accept as an attachment.</summary>
+    public Task<ApiResult<AttachmentLimits>> GetAttachmentLimitsAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<AttachmentLimits>("api/attachments/limits", cancellationToken);
+
+    /// <summary>A sensor's attachments, newest first.</summary>
+    public Task<ApiResult<IReadOnlyList<AttachmentMetadata>>> GetAttachmentsAsync(
+        string macAddress,
+        CancellationToken cancellationToken = default) =>
+        GetAsync<IReadOnlyList<AttachmentMetadata>>($"api/sensors/{Uri.EscapeDataString(macAddress)}/attachments", cancellationToken);
+
+    /// <summary>Deletes an attachment.</summary>
+    /// <returns>Null on success, otherwise why it failed.</returns>
+    public async Task<ApiProblem?> DeleteAttachmentAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var response = await http.DeleteAsync($"api/attachments/{id}", cancellationToken);
+
+            return response.IsSuccessStatusCode ? null : await ReadProblemAsync(response, cancellationToken);
+        }
+        catch (HttpRequestException)
+        {
+            return ApiProblem.Unreachable();
+        }
+    }
+
+    /// <summary>The absolute address of an API path, for requests the browser makes itself.</summary>
+    /// <remarks>
+    /// Downloads, thumbnails and uploads are requested by the browser directly — an anchor, an image, an
+    /// XMLHttpRequest — rather than through this client, so they need the full address, not a relative one.
+    /// </remarks>
+    public string AbsoluteUrl(string relativePath) => new Uri(http.BaseAddress!, relativePath).ToString();
+
     private Task<ApiResult<T>> GetAsync<T>(string uri, CancellationToken cancellationToken) =>
         SendAsync<T>(token => http.GetAsync(uri, token), cancellationToken);
 
