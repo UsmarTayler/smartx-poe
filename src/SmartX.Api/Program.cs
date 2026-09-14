@@ -101,6 +101,7 @@ api.MapTelemetryEndpoints();
 api.MapZoneEndpoints();
 api.MapTrustEndpoints();
 api.MapAttachmentEndpoints();
+api.MapSimulationEndpoints();
 
 app.Run();
 
