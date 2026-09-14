@@ -205,8 +205,13 @@ internal static class TelemetryEndpoints
     /// Single-sourced so the batch path and the single-reading path cannot drift apart. Two copies
     /// of these rules would eventually disagree about whether 21.5 is a valid integer reading, and
     /// the answer — and the trust penalty — would depend on which endpoint a device happened to use.
+    /// <para>
+    /// Internal rather than private for the same reason: the mesh simulator judges its generated
+    /// readings with this method, so a simulated fault is rejected by exactly the rules a real device's
+    /// would be, not by a second copy of them.
+    /// </para>
     /// </remarks>
-    private static bool TryCreatePacket(
+    internal static bool TryCreatePacket(
         SensorRegistration sensor,
         JsonElement value,
         DateTimeOffset timestamp,
@@ -340,5 +345,5 @@ internal static class TelemetryEndpoints
     /// is detected, where it is known for certain. Working it out later from the message would mean
     /// parsing English to decide whether something was a range violation or a type failure.
     /// </remarks>
-    private sealed record PacketRejection(TrustOutcome Outcome, string Reason);
+    internal sealed record PacketRejection(TrustOutcome Outcome, string Reason);
 }

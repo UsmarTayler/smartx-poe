@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Options;
 using SmartX.Api.Attachments;
 using SmartX.Api.Endpoints;
+using SmartX.Api.Simulation;
 using SmartX.Api.Storage;
 using SmartX.Api.Trust;
 
@@ -37,7 +38,21 @@ builder.Services
     .ValidateOnStart();
 
 builder.Services.AddSingleton<ITelemetryStore, InMemoryTelemetryStore>();
-builder.Services.AddSingleton<IZoneStore, InMemoryZoneStore>();
+
+// Simulation is off unless configured on. When it is on, the demo mesh's larger hierarchy replaces the
+// brief's, so the seeded sensors have somewhere valid to be registered. Decided in a factory rather than
+// by reading builder.Configuration here, so configuration a test host adds is seen too.
+builder.Services
+    .AddOptions<SimulationOptions>()
+    .Bind(builder.Configuration.GetSection(SimulationOptions.SectionName))
+    .Validate(options => options.BackfillDuration >= TimeSpan.Zero, "Simulation:BackfillDuration cannot be negative.")
+    .Validate(options => options.TickInterval > TimeSpan.Zero, "Simulation:TickInterval must be positive.")
+    .ValidateOnStart();
+
+builder.Services.AddSingleton<IZoneStore>(services => new InMemoryZoneStore(
+    services.GetRequiredService<IOptions<SimulationOptions>>().Value.Enabled
+        ? new SmartX.Shared.ZoneCatalogue(DemoMesh.Zones)
+        : InMemoryZoneStore.BriefHierarchy));
 
 // Trust. The clock is injected rather than read from DateTimeOffset.UtcNow so that decay and
 // heartbeats — both entirely about the passage of time — can be tested without waiting for it.
@@ -68,6 +83,11 @@ builder.Services.AddSingleton<AttachmentKeyProvider>();
 builder.Services.AddSingleton<AttachmentStorage>();
 builder.Services.AddSingleton<IAttachmentStore, InMemoryAttachmentStore>();
 builder.Services.AddSingleton<AttachmentUploader>();
+
+// One instance serves as both the hosted service and the thing the scenario endpoint talks to. Registering
+// it with AddHostedService<MeshSimulator>() alone would create a second, unreachable instance.
+builder.Services.AddSingleton<MeshSimulator>();
+builder.Services.AddHostedService(services => services.GetRequiredService<MeshSimulator>());
 
 var app = builder.Build();
 
