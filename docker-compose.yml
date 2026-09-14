@@ -1,0 +1,49 @@
+# Brings up the API and the client together:
+#   cp .env.example .env
+#   docker compose up --build
+# Then open http://localhost:8080.
+
+name: smartx
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: src/SmartX.Api/Dockerfile
+    image: smartx-api
+    environment:
+      # Required outside Development, and deliberately not defaulted here: compose stops with this message
+      # rather than starting an API that refuses to run.
+      Attachments__EncryptionKey: ${SMARTX_ATTACHMENT_KEY:?Set SMARTX_ATTACHMENT_KEY - copy .env.example to .env}
+      Simulation__Enabled: ${SMARTX_SIMULATION_ENABLED:-false}
+    volumes:
+      # Encrypted files and their index, kept across container restarts and rebuilds.
+      - attachments:/data/attachments
+    ports:
+      # Published for curl and the scenario endpoint. The client does not need it; it goes through nginx.
+      - "${SMARTX_API_PORT:-5266}:8080"
+    networks:
+      - smartx
+    restart: unless-stopped
+
+  client:
+    build:
+      context: .
+      dockerfile: src/SmartX.Client/Dockerfile
+    image: smartx-client
+    environment:
+      # "/" means the client's own origin; nginx forwards /api to the api service above.
+      API_BASE_ADDRESS: /
+    ports:
+      - "${SMARTX_CLIENT_PORT:-8080}:8080"
+    depends_on:
+      - api
+    networks:
+      - smartx
+    restart: unless-stopped
+
+networks:
+  smartx:
+
+volumes:
+  attachments:
