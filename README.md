@@ -332,8 +332,9 @@ you have registered a sensor or two.
 
 1. Open **Trust panel**, the home page. Nodes are listed worst first by band, then by score, each with a
    reason and a sparkline. The tile at the top shows mesh confidence and the count per band.
-2. [Switch](#changing-a-scenario-live) `B8:27:EB:10:00:01` to `Disconnect`. Within a few heartbeats its
-   reason reads `no packets for …` and it climbs the list, through Degrading into Fault.
+2. [Switch](#changing-a-scenario-live) `B8:27:EB:10:00:01` to `Disconnect`. Within seconds its reason
+   reads `no packets for …` and it starts climbing the list. It turns Degrading after about 1½ minutes and
+   Fault after about 3½, because twenty minutes of good history takes a while to outweigh.
 3. Switch it back to `Nominal`. It reports again straight away and sinks back down as its score recovers.
 4. Use the band chips and the text filter to narrow the list.
 
@@ -597,6 +598,17 @@ Usually it's an earlier run of the same app, or the Docker stack while you run l
 
 A running API or client holds its own executable. Stop it (Ctrl+C in its terminal, or stop debugging in
 Visual Studio) and build again.
+
+### The client build fails with MSB3030 "Could not copy the file … webcil"
+
+This happens on Windows when the repository is cloned somewhere with a long path. The Blazor build writes
+files several folders deep under `src/SmartX.Client/obj`, and once the full path passes Windows'
+260-character limit the copy fails. Either clone to a shorter path such as `C:\src\smartx-poe`, or
+enable long paths once from an administrator PowerShell and restart the terminal:
+
+```powershell
+New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name LongPathsEnabled -Value 1 -PropertyType DWORD -Force
+```
 
 ### The browser console shows a CORS error
 
