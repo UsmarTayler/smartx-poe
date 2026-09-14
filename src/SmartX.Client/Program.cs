@@ -17,7 +17,12 @@ builder.Services.AddMudServices();
 var apiBaseAddress = builder.Configuration["ApiBaseAddress"]
     ?? throw new InvalidOperationException("ApiBaseAddress is missing from wwwroot/appsettings.json.");
 
-builder.Services.AddHttpClient<SmartXApiClient>(client => client.BaseAddress = new Uri(apiBaseAddress));
+// Resolved against the page's own address, so the setting may be relative. In development it is absolute,
+// pointing at the API's own port. In Docker it is "/", because the client's web server forwards /api to the
+// API container and the browser only ever talks to one origin. An absolute value ignores the base entirely.
+var apiBaseUri = new Uri(new Uri(builder.HostEnvironment.BaseAddress), apiBaseAddress);
+
+builder.Services.AddHttpClient<SmartXApiClient>(client => client.BaseAddress = apiBaseUri);
 
 // Scoped, which in WebAssembly means one instance per browser tab. State that must survive
 // navigation lives in these rather than in page components, which are rebuilt on every visit.
