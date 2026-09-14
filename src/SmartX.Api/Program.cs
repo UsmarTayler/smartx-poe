@@ -81,7 +81,7 @@ builder.Services
 builder.Services.AddSingleton<IValidateOptions<AttachmentOptions>, AttachmentOptionsValidator>();
 builder.Services.AddSingleton<AttachmentKeyProvider>();
 builder.Services.AddSingleton<AttachmentStorage>();
-builder.Services.AddSingleton<IAttachmentStore, InMemoryAttachmentStore>();
+builder.Services.AddSingleton<IAttachmentStore, FileAttachmentStore>();
 builder.Services.AddSingleton<AttachmentUploader>();
 
 // One instance serves as both the hosted service and the thing the scenario endpoint talks to. Registering
