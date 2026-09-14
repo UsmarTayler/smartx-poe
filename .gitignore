@@ -483,3 +483,6 @@ $RECYCLE.BIN/
 
 # Encrypted attachment storage written by the API at runtime. Ciphertext only, but still not source.
 App_Data/
+
+# Local assistant instructions. Kept on this machine, not part of the submission.
+CLAUDE.md
