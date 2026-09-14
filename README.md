@@ -1,5 +1,7 @@
 # Smart-X
 
+[![CI](https://github.com/UsmarTayler/smartx-poe/actions/workflows/ci.yml/badge.svg)](https://github.com/UsmarTayler/smartx-poe/actions/workflows/ci.yml)
+
 An IoT telemetry ingestion and mesh-management system, built as a university Portfolio of Evidence.
 
 Smart-X sits between a field network of sensors and the people who operate it. Sensors are registered
