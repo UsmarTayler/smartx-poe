@@ -9,6 +9,16 @@ var builder = WebAssemblyHostBuilder.CreateDefault(args);
 builder.RootComponents.Add<App>("#app");
 builder.RootComponents.Add<HeadOutlet>("head::after");
 
+// The WebAssembly host does not apply the "Logging" section of appsettings.json by itself. Without this
+// the configured Warning level is ignored, and every HTTP request writes four Information lines to the
+// browser console — hundreds a minute on the trust and telemetry pages, burying any real error. Only the
+// default level is read, which is all this app sets; binding per-category levels would take an extra
+// package for no gain.
+if (Enum.TryParse<LogLevel>(builder.Configuration["Logging:LogLevel:Default"], out var minimumLevel))
+{
+    builder.Logging.SetMinimumLevel(minimumLevel);
+}
+
 builder.Services.AddMudServices();
 
 // The API address is configuration rather than a constant. The client is a static site deployed
