@@ -47,6 +47,14 @@ public interface ITrustEngine
     /// <summary>Records one outcome for a node and recomputes its trust.</summary>
     void Record(string macAddress, TrustOutcome outcome);
 
+    /// <summary>Records one outcome as observed at a given moment, and recomputes the node's trust.</summary>
+    /// <remarks>
+    /// For replaying history rather than live ingestion: the seeder uses it to backfill a node's
+    /// evidence and sparkline with the timestamps the readings would have had. A moment in the future is
+    /// treated as now, and replay is expected to run oldest first.
+    /// </remarks>
+    void Record(string macAddress, TrustOutcome outcome, DateTimeOffset observedAt);
+
     /// <summary>
     /// Applies a penalty for each whole reporting interval the node has been silent that has not
     /// already been penalised.

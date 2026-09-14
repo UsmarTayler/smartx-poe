@@ -83,7 +83,7 @@ public class AttachmentStorageTests
 
         var needle = Encoding.UTF8.GetBytes(marker);
 
-        foreach (var file in host.StoredFiles())
+        foreach (var file in host.StoredFiles().Concat(host.IndexFiles()))
         {
             Assert.False(await ContainsAsync(file, needle), $"{file} contains plaintext.");
         }
@@ -145,8 +145,44 @@ public class AttachmentStorageTests
         Assert.Equal(HttpStatusCode.NoContent, (await host.Client.DeleteAsync($"/api/attachments/{attachment.Id}")).StatusCode);
 
         Assert.Empty(host.StoredFiles());
+        Assert.Empty(host.IndexFiles());
         Assert.Equal(HttpStatusCode.NotFound, (await host.Client.GetAsync($"/api/attachments/{attachment.Id}")).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await host.Client.DeleteAsync($"/api/attachments/{attachment.Id}")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Attachments_survive_a_restart_with_the_same_key()
+    {
+        using var host = await AttachmentTestHost.CreateAsync();
+        var attachment = await UploadAsync(host, new GeneratedLogStream(300_000), "before-restart.log");
+
+        using var restarted = await host.RestartAsync();
+
+        var listed = await restarted.Client.GetFromJsonAsync<List<AttachmentMetadata>>($"/api/sensors/{Thermometer}/attachments");
+        Assert.Equal(attachment, Assert.Single(listed!));
+
+        await using var body = await restarted.Client.GetStreamAsync($"/api/attachments/{attachment.Id}");
+        Assert.Equal(await GeneratedLogStream.HashAsync(300_000), await System.Security.Cryptography.SHA256.HashDataAsync(body));
+    }
+
+    [Fact]
+    public async Task Attachments_under_a_different_key_are_hidden_but_kept()
+    {
+        using var host = await AttachmentTestHost.CreateAsync();
+        var attachment = await UploadAsync(host, new MemoryStream("threshold=42\n"u8.ToArray()), "device.conf");
+
+        var otherKey = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+
+        using (var wrongKey = await host.RestartAsync(otherKey))
+        {
+            // Listing a file that can only fail to decrypt would just offer a broken download.
+            Assert.Empty((await wrongKey.Client.GetFromJsonAsync<List<AttachmentMetadata>>($"/api/sensors/{Thermometer}/attachments"))!);
+            Assert.Equal(HttpStatusCode.NotFound, (await wrongKey.Client.GetAsync($"/api/attachments/{attachment.Id}")).StatusCode);
+        }
+
+        // Nothing was deleted, so the original key opens it again.
+        using var rightKey = await host.RestartAsync();
+        Assert.Equal(HttpStatusCode.OK, (await rightKey.Client.GetAsync($"/api/attachments/{attachment.Id}")).StatusCode);
     }
 
     [Fact]

@@ -92,7 +92,11 @@ internal sealed class TrustEngine : ITrustEngine
     }
 
     /// <inheritdoc />
-    public void Record(string macAddress, TrustOutcome outcome)
+    public void Record(string macAddress, TrustOutcome outcome) =>
+        Record(macAddress, outcome, _time.GetUtcNow());
+
+    /// <inheritdoc />
+    public void Record(string macAddress, TrustOutcome outcome, DateTimeOffset observedAt)
     {
         if (!MacAddressValidator.TryNormalise(macAddress, out var mac))
         {
@@ -104,15 +108,23 @@ internal sealed class TrustEngine : ITrustEngine
         lock (_gate)
         {
             var now = _time.GetUtcNow();
-            var node = GetOrTrack(mac, now);
+            var at = observedAt > now ? now : observedAt;
+            var node = GetOrTrack(mac, at);
 
-            node.Outcomes.Add(new OutcomeRecord(outcome, now));
+            node.Outcomes.Add(new OutcomeRecord(outcome, at));
 
-            // Any packet, good or bad, proves the node is not silent.
-            node.LastSeen = now;
+            // Any packet, good or bad, proves the node is not silent. The later of the two moments is
+            // kept, so an out-of-order replay cannot make a node look as if it went quiet earlier.
+            if (node.LastSeen is not { } lastSeen || at > lastSeen)
+            {
+                node.LastSeen = at;
+            }
+
             node.PenalisedIntervals = 0;
 
-            transition = Evaluate(node, now);
+            // Never evaluated at a moment before its previous evaluation, so the sparkline's points stay
+            // in time order even if a replayed outcome arrives late.
+            transition = Evaluate(node, at > node.EvaluatedAt ? at : node.EvaluatedAt);
         }
 
         Raise(transition);

@@ -17,19 +17,26 @@ namespace SmartX.Tests;
 /// </remarks>
 internal sealed class AttachmentTestHost : IDisposable
 {
-    private AttachmentTestHost(long maxFileBytes)
+    private readonly long _maxFileBytes;
+    private readonly bool _ownsDirectory;
+
+    private AttachmentTestHost(long maxFileBytes, string? storageDirectory = null, string? key = null)
     {
-        StorageDirectory = Path.Combine(Path.GetTempPath(), "smartx-tests", Guid.NewGuid().ToString("N"), "attachments");
+        _maxFileBytes = maxFileBytes;
+        _ownsDirectory = storageDirectory is null;
+
+        StorageDirectory = storageDirectory
+            ?? Path.Combine(Path.GetTempPath(), "smartx-tests", Guid.NewGuid().ToString("N"), "attachments");
         Directory.CreateDirectory(StorageDirectory);
 
-        var key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        Key = key ?? Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
 
         Factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
             builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(
                 new Dictionary<string, string?>
                 {
                     ["Attachments:StoragePath"] = StorageDirectory,
-                    ["Attachments:EncryptionKey"] = key,
+                    ["Attachments:EncryptionKey"] = Key,
                     ["Attachments:MaxFileBytes"] = maxFileBytes.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 })));
 
@@ -42,18 +49,42 @@ internal sealed class AttachmentTestHost : IDisposable
 
     public string StorageDirectory { get; }
 
+    public string Key { get; }
+
     /// <summary>A host with the sensor <see cref="ApiTestHost.Thermometer"/> already registered.</summary>
-    public static async Task<AttachmentTestHost> CreateAsync(long maxFileBytes = 100L * 1024 * 1024)
+    public static async Task<AttachmentTestHost> CreateAsync(long maxFileBytes = 100L * 1024 * 1024) =>
+        await RegisterThermometerAsync(new AttachmentTestHost(maxFileBytes));
+
+    /// <summary>A second API process over this host's storage directory, as if the API had restarted.</summary>
+    /// <param name="key">The key the restarted API is given; this host's own key when omitted.</param>
+    /// <remarks>The restarted host does not delete the directory when disposed; this one still owns it.</remarks>
+    public async Task<AttachmentTestHost> RestartAsync(string? key = null) =>
+        await RegisterThermometerAsync(new AttachmentTestHost(_maxFileBytes, StorageDirectory, key ?? Key));
+
+    /// <summary>Attachment content files in the storage directory, including any partial files.</summary>
+    /// <remarks>
+    /// Completed index entries (*.json) are left out, so assertions about content — one ciphertext file, no
+    /// partial left behind — read the same as before the index was written to disk. A partial index entry
+    /// still counts, because one left behind would be a leak just the same.
+    /// </remarks>
+    public string[] StoredFiles() =>
+    [
+        .. Directory.GetFiles(StorageDirectory, "*", SearchOption.AllDirectories)
+            .Where(path => !path.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+    ];
+
+    /// <summary>Completed attachment index entries.</summary>
+    public string[] IndexFiles() => Directory.GetFiles(StorageDirectory, "*.json");
+
+    private static async Task<AttachmentTestHost> RegisterThermometerAsync(AttachmentTestHost host)
     {
-        var host = new AttachmentTestHost(maxFileBytes);
+        // Sensors are held in memory, so a restarted API needs the sensor registering again, as the seeder
+        // does for the demo mesh on every start.
         var response = await host.Client.PostAsync("/api/sensors", ApiTestHost.Thermometer10To30());
         response.EnsureSuccessStatusCode();
 
         return host;
     }
-
-    /// <summary>Every file in the storage directory, including any partial files.</summary>
-    public string[] StoredFiles() => Directory.GetFiles(StorageDirectory, "*", SearchOption.AllDirectories);
 
     /// <summary>Uploads one file as a streamed multipart section.</summary>
     public Task<HttpResponseMessage> UploadAsync(
@@ -83,6 +114,11 @@ internal sealed class AttachmentTestHost : IDisposable
     {
         Client.Dispose();
         Factory.Dispose();
+
+        if (!_ownsDirectory)
+        {
+            return;
+        }
 
         try
         {

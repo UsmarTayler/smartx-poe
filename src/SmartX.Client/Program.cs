@@ -9,6 +9,16 @@ var builder = WebAssemblyHostBuilder.CreateDefault(args);
 builder.RootComponents.Add<App>("#app");
 builder.RootComponents.Add<HeadOutlet>("head::after");
 
+// The WebAssembly host does not apply the "Logging" section of appsettings.json by itself. Without this
+// the configured Warning level is ignored, and every HTTP request writes four Information lines to the
+// browser console — hundreds a minute on the trust and telemetry pages, burying any real error. Only the
+// default level is read, which is all this app sets; binding per-category levels would take an extra
+// package for no gain.
+if (Enum.TryParse<LogLevel>(builder.Configuration["Logging:LogLevel:Default"], out var minimumLevel))
+{
+    builder.Logging.SetMinimumLevel(minimumLevel);
+}
+
 builder.Services.AddMudServices();
 
 // The API address is configuration rather than a constant. The client is a static site deployed
@@ -17,7 +27,12 @@ builder.Services.AddMudServices();
 var apiBaseAddress = builder.Configuration["ApiBaseAddress"]
     ?? throw new InvalidOperationException("ApiBaseAddress is missing from wwwroot/appsettings.json.");
 
-builder.Services.AddHttpClient<SmartXApiClient>(client => client.BaseAddress = new Uri(apiBaseAddress));
+// Resolved against the page's own address, so the setting may be relative. In development it is absolute,
+// pointing at the API's own port. In Docker it is "/", because the client's web server forwards /api to the
+// API container and the browser only ever talks to one origin. An absolute value ignores the base entirely.
+var apiBaseUri = new Uri(new Uri(builder.HostEnvironment.BaseAddress), apiBaseAddress);
+
+builder.Services.AddHttpClient<SmartXApiClient>(client => client.BaseAddress = apiBaseUri);
 
 // Scoped, which in WebAssembly means one instance per browser tab. State that must survive
 // navigation lives in these rather than in page components, which are rebuilt on every visit.

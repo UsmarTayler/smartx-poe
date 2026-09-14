@@ -1,0 +1,25 @@
+# Keeps the build context small and free of anything that should not end up in an image.
+
+# Build output. Copying a Windows bin/obj into a Linux build would also confuse restore.
+**/bin/
+**/obj/
+
+# Source control and editor state.
+.git/
+.gitignore
+.gitattributes
+.vs/
+.vscode/
+.idea/
+.claude/
+
+# Runtime data and secrets.
+**/App_Data/
+.env
+
+# Not needed to build either image.
+tests/
+docs/
+*.md
+docker-compose.yml
+.env.example
