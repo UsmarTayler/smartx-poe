@@ -24,6 +24,13 @@ public enum SimulationScenario
     /// <summary>Mostly normal readings with occasional payloads of the wrong type.</summary>
     TypeViolation,
 
+    /// <summary>Extreme but still valid readings: a power spike or a moisture crash.</summary>
+    /// <remarks>
+    /// The device does not decide that a reading is an alert. It sends a real value near the edge of its
+    /// registered range, and the API classifies it against its configured critical thresholds.
+    /// </remarks>
+    Critical,
+
     /// <summary>Stops reporting entirely.</summary>
     Disconnect
 }

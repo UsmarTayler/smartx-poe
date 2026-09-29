@@ -43,4 +43,14 @@ public interface ITelemetryPacket
 
     /// <summary>The unit the reading is expressed in.</summary>
     string Unit { get; }
+
+    /// <summary>The reading as a number, when it is one.</summary>
+    /// <returns><see langword="false"/> for a packet whose payload is not numeric, such as a state.</returns>
+    /// <remarks>
+    /// For rules that have to compare readings of different payload types against one limit — the critical
+    /// thresholds on the ingestion path are the first — without knowing which type they hold. The conversion
+    /// uses <c>double.CreateChecked</c> inside the generic packet, so the value never passes through
+    /// <c>object</c> and is never boxed.
+    /// </remarks>
+    bool TryGetNumericValue(out double value);
 }
