@@ -18,6 +18,7 @@ reconstructed afterwards.
 | [U4](#u4-inconsistent-configuration-binding) | 2026-09-11 | API | Bind telemetry retention through `IOptions` | `01d1a19` |
 | [U5](#u5-n1-requests-on-the-trust-panel) | 2026-09-13 | Trust, client | Carry recent history in the trust list | `72596d6` |
 | [U6](#u6-attachments-lost-on-restart) | 2026-09-14 | Attachments | Persist the attachment index and use a fixed development key | `432643a`, `7d08321` |
+| [U7](#u7-simulated-data-did-not-arrive-like-a-devices) | 2026-09-29 | Simulation, ingestion | Move the simulator out of the API so it reports over HTTP, and queue accepted readings | `7216026`, `e6f8f0b` |
 
 ---
 
@@ -205,10 +206,57 @@ Files:
 
 ---
 
+## U7. Simulated data did not arrive like a device's
+
+**Source:** Part 2 brief, which says simulated data "has to hit the API like it was a device"
+
+**What was wrong.** Part 1's seeder ran inside the API process. It registered sensors by calling the sensor
+registry directly, and injected readings by calling the telemetry store and trust engine directly. The
+brief's Part 2 requirement is that simulated data reaches the API the way a real device's would.
+
+**Why it mattered.** Nothing the seeder did went through HTTP, routing, validation or serialisation, so it
+proved nothing about how the API behaves under real traffic. A bug in any of those layers would have been
+invisible in the demo. It also meant the "device" and the gateway were one program, which is not how the
+system is deployed.
+
+**What changed.**
+
+- A new project, `SmartX.DeviceSimulator`, registers its devices with `POST /api/sensors`, posts telemetry
+  with `POST /api/telemetry`, and backfills history through the same endpoint using timestamps. It references
+  `SmartX.Shared` only, so it has no route into the API's code.
+- The in-process seeder is deleted. The zone hierarchy stays in the API, selected with `Zones:Hierarchy`,
+  because zones are gateway configuration and not device data.
+- The simulator can no longer be told to change scenario by a method call, so scenario control became a
+  device shadow: the API stores desired state and each device polls for its own.
+- With real traffic arriving, validating and processing on the same thread no longer suited the API.
+  Validation stays synchronous, so rejections still return the same status codes and the same text as in
+  Part 1, and processing moved behind a bounded FIFO queue and a priority queue for critical alerts.
+
+One Part 1 behaviour did change, and is stated here rather than left to be discovered: an accepted reading's
+response body is now a receipt (lane and queue position) instead of the stored packet, because at the moment
+the response is written the packet has not been stored yet. `POST /api/telemetry/batch` no longer reports how
+many readings the node's buffer holds, for the same reason. The Part 1 tests that read the response body were
+changed to wait for the worker and read the stored packet back from history, which asserts what was actually
+retained. No other Part 1 test needed changing.
+
+- `src/SmartX.DeviceSimulator/`
+- `src/SmartX.Api/Ingestion/`
+- `src/SmartX.Api/Endpoints/TelemetryEndpoints.cs`
+- `src/SmartX.Api/Endpoints/SimulationEndpoints.cs`
+- `tests/SmartX.Tests/DeviceSimulatorTests.cs`
+- `tests/SmartX.Tests/IngestionQueueTests.cs`
+
+**Commits:**
+
+- `7216026` feat(api): validate at the edge and process readings behind two queues
+- `e6f8f0b` feat(simulator): add device simulator that reports over http
+
+---
+
 ## Entry template
 
 ```markdown
-## U7. Short title of the problem
+## U8. Short title of the problem
 
 **Source:** where the feedback came from (lecturer feedback on Part 1, code review, testing)
 
