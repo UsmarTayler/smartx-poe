@@ -86,7 +86,23 @@ public sealed class TelemetryService(SmartXApiClient api, ApiConnection connecti
         {
             // Re-read the history from the API rather than appending locally, so what is shown is
             // what the ring buffer actually retained.
-            await LoadRecentAsync(sensor.MacAddress, cancellationToken);
+            //
+            // The API now answers as soon as the reading is validated and stores it just afterwards, so the
+            // first read can land before the worker has caught up. Rather than guess at a delay, the page
+            // re-reads until the reading appears, a few times, and then settles for what is there — a
+            // dropped reading must not leave the view spinning.
+            for (var attempt = 0; attempt < 5; attempt++)
+            {
+                await LoadRecentAsync(sensor.MacAddress, cancellationToken);
+
+                if (For(sensor.MacAddress).Recent.Count > 0
+                    && For(sensor.MacAddress).Recent[^1].Timestamp >= result.Value.AcceptedAt.AddSeconds(-1))
+                {
+                    break;
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(80), cancellationToken);
+            }
         }
         else
         {

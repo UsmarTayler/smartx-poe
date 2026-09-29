@@ -33,6 +33,10 @@ public class TrustEndpointTests
 
         await client.PostAsync("/api/telemetry", Reading(Meter, "21.5"));
 
+        // The three accepted readings are scored by the worker. The rejected one was scored on the request
+        // thread, so it is already counted.
+        await DrainAsync(client, expectedProcessed: 3);
+
         return client;
     }
 
@@ -97,6 +101,7 @@ public class TrustEndpointTests
 
         await client.PostAsync("/api/telemetry/batch",
             Json($$"""{ "macAddress": "{{Thermometer}}", "windows": [[21.5, 40.0], [22.0]] }"""));
+        await DrainAsync(client, expectedProcessed: 2);
 
         var trust = await client.GetFromJsonAsync<NodeTrustSnapshot>($"/api/trust/{Thermometer}");
         Assert.Equal(2, trust?.RecentSuccesses);

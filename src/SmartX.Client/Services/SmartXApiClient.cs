@@ -58,12 +58,16 @@ public sealed class SmartXApiClient(HttpClient http)
     /// server then decides which packet type it becomes from the sensor's registration, exactly as it
     /// would for a real device.
     /// </remarks>
-    public Task<ApiResult<ITelemetryPacket>> SendReadingAsync<T>(
+    /// <returns>
+    /// The gateway's receipt. The API validates the reading while the caller waits and processes it just
+    /// afterwards, so a success here means accepted for processing, not yet stored.
+    /// </returns>
+    public Task<ApiResult<TelemetryReceipt>> SendReadingAsync<T>(
         string macAddress,
         T value,
         CancellationToken cancellationToken = default)
         where T : struct =>
-        SendAsync<ITelemetryPacket>(
+        SendAsync<TelemetryReceipt>(
             token => http.PostAsJsonAsync(
                 "api/telemetry",
                 new TelemetryIngestionRequest(macAddress, JsonSerializer.SerializeToElement(value)),

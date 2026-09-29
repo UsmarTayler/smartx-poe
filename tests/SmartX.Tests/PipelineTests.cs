@@ -40,7 +40,6 @@ public class PipelineTests
 
         Assert.Equal(6, result?.Accepted);
         Assert.Equal(0, result?.Rejected);
-        Assert.Equal(6, result?.Retained);
         Assert.Equal(3, result?.Staging.WindowCount);
     }
 
@@ -117,6 +116,7 @@ public class PipelineTests
         var client = await WithSensorsAsync(api);
 
         await client.PostAsync("/api/telemetry/batch", Batch(Thermometer, "[[21.5, 22.0], [23.5]]"));
+        await DrainAsync(client, expectedProcessed: 3);
 
         var history = await client.GetFromJsonAsync<List<ITelemetryPacket>>(
             $"/api/sensors/{Thermometer}/telemetry");
@@ -167,7 +167,9 @@ public class PipelineTests
         var result = await response.Content.ReadFromJsonAsync<TelemetryBatchResult>();
 
         Assert.Equal(300, result?.Accepted);
-        Assert.Equal(256, result?.Retained);
+
+        // Retention happens in the worker now, so wait for all 300 before looking at what the window kept.
+        await DrainAsync(client, expectedProcessed: 300);
 
         var history = await client.GetFromJsonAsync<List<ITelemetryPacket>>(
             $"/api/sensors/{Meter}/telemetry");

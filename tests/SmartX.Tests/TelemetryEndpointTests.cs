@@ -30,20 +30,42 @@ public class TelemetryEndpointTests
         return client;
     }
 
+    /// <summary>
+    /// Sends one reading, waits for the ingestion worker, and returns the packet as it was stored.
+    /// </summary>
+    /// <remarks>
+    /// The API answers with a receipt as soon as the reading is validated and stores it just afterwards, so
+    /// the packet a reading became is read back from history rather than from the response. That is also the
+    /// stronger assertion: it checks what the worker actually retained, not what the endpoint said it would.
+    /// </remarks>
+    private static async Task<TPacket> SendAndReadBackAsync<TPacket>(HttpClient client, string mac, string rawValue)
+        where TPacket : class, ITelemetryPacket
+    {
+        var response = await client.PostAsync("/api/telemetry", Reading(mac, rawValue));
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+
+        var receipt = await response.Content.ReadFromJsonAsync<TelemetryReceipt>();
+        Assert.Equal("standard", receipt?.Lane);
+
+        await DrainAsync(client, expectedProcessed: 1);
+
+        var history = await client.GetFromJsonAsync<List<ITelemetryPacket>>($"/api/sensors/{mac}/telemetry");
+
+        return Assert.IsType<TPacket>(Assert.Single(history!));
+    }
+
     [Fact]
     public async Task A_fractional_reading_becomes_a_float_packet()
     {
         using var api = New();
         var client = await WithSensorsAsync(api);
 
-        var response = await client.PostAsync("/api/telemetry", Reading(Thermometer, "21.5"));
+        var packet = await SendAndReadBackAsync<NumericPacket<float>>(client, Thermometer, "21.5");
 
-        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
-
-        var packet = await response.Content.ReadFromJsonAsync<NumericPacket<float>>();
-        Assert.Equal(21.5f, packet?.Value);
-        Assert.Equal(SensorCategory.Environmental, packet?.Category);
-        Assert.Equal(Thermometer, packet?.NodeId);
+        Assert.Equal(21.5f, packet.Value);
+        Assert.Equal(SensorCategory.Environmental, packet.Category);
+        Assert.Equal(Thermometer, packet.NodeId);
     }
 
     [Fact]
@@ -54,13 +76,10 @@ public class TelemetryEndpointTests
         using var api = New();
         var client = await WithSensorsAsync(api);
 
-        var response = await client.PostAsync("/api/telemetry", Reading(Meter, "1200"));
+        var packet = await SendAndReadBackAsync<NumericPacket<int>>(client, Meter, "1200");
 
-        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
-
-        var packet = await response.Content.ReadFromJsonAsync<NumericPacket<int>>();
-        Assert.Equal(1200, packet?.Value);
-        Assert.Equal("kWh", packet?.Unit);
+        Assert.Equal(1200, packet.Value);
+        Assert.Equal("kWh", packet.Unit);
     }
 
     [Fact]
@@ -72,10 +91,9 @@ public class TelemetryEndpointTests
         using var api = New();
         var client = await WithSensorsAsync(api);
 
-        var response = await client.PostAsync("/api/telemetry", Reading(Thermometer, "21"));
+        var packet = await SendAndReadBackAsync<NumericPacket<float>>(client, Thermometer, "21");
 
-        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
-        Assert.Equal(21f, (await response.Content.ReadFromJsonAsync<NumericPacket<float>>())?.Value);
+        Assert.Equal(21f, packet.Value);
     }
 
     [Fact]
@@ -84,13 +102,10 @@ public class TelemetryEndpointTests
         using var api = New();
         var client = await WithSensorsAsync(api);
 
-        var response = await client.PostAsync("/api/telemetry", Reading(Switch, "true"));
+        var packet = await SendAndReadBackAsync<StatePacket>(client, Switch, "true");
 
-        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
-
-        var packet = await response.Content.ReadFromJsonAsync<StatePacket>();
-        Assert.True(packet?.Value);
-        Assert.Equal(SensorCategory.Actuator, packet?.Category);
+        Assert.True(packet.Value);
+        Assert.Equal(SensorCategory.Actuator, packet.Category);
     }
 
     [Fact]
