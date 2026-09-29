@@ -44,7 +44,7 @@ public class DeviceSimulatorTests
 
         Assert.Equal(40, sensors?.Count);
         Assert.Equal(Enum.GetValues<SensorCategory>(), sensors!.Select(sensor => sensor.Category).Distinct().Order());
-        Assert.Equal(Enum.GetValues<TelemetryPayloadKind>(), sensors.Select(sensor => sensor.PayloadKind).Distinct().Order());
+        Assert.Equal(Enum.GetValues<TelemetryPayloadKind>(), sensors!.Select(sensor => sensor.PayloadKind).Distinct().Order());
     }
 
     [Fact]
