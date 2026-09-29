@@ -54,9 +54,10 @@ internal sealed class GatewayClient(HttpClient http, ILogger<GatewayClient> logg
                     return true;
                 }
             }
-            catch (HttpRequestException)
+            catch (Exception exception) when (IsTransient(exception, cancellationToken))
             {
-                // Not up yet. Expected, and not worth a stack trace each time.
+                // Not up yet: refused outright, or accepting connections and not answering. Expected, and
+                // not worth a stack trace each time.
             }
 
             if (!reported)
@@ -97,13 +98,25 @@ internal sealed class GatewayClient(HttpClient http, ILogger<GatewayClient> logg
 
             return false;
         }
-        catch (HttpRequestException exception)
+        catch (Exception exception) when (IsTransient(exception, cancellationToken))
         {
             logger.LogWarning(exception, "Could not register {Mac}.", registration.MacAddress);
 
             return false;
         }
     }
+
+    /// <summary>Is this the network being unavailable, as opposed to the program being asked to stop?</summary>
+    /// <remarks>
+    /// A refused connection throws <see cref="HttpRequestException"/>. A connection that is accepted but never
+    /// answered surfaces as a <see cref="TaskCanceledException"/> when the client's own timeout fires. Both
+    /// mean "try again", and treating only the first that way made the second crash the wait loop — which is
+    /// exactly what a gateway that is still starting up looks like. Cancellation the caller asked for is
+    /// different, and is left to propagate.
+    /// </remarks>
+    private static bool IsTransient(Exception exception, CancellationToken cancellationToken) =>
+        exception is HttpRequestException
+        || (exception is TaskCanceledException && !cancellationToken.IsCancellationRequested);
 
     /// <summary>Posts one reading.</summary>
     /// <param name="macAddress">The device sending it.</param>
