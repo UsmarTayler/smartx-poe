@@ -249,7 +249,7 @@ internal sealed class DeviceFleet(
     /// and tries once more; if it is still busy, the reading is dropped and the next one is along shortly.
     /// Dropping is the honest behaviour for a device with no storage of its own.
     /// </remarks>
-    private async Task<bool> SendWithBackpressureAsync(
+    internal async Task<bool> SendWithBackpressureAsync(
         SimulatedDevice device,
         JsonElement reading,
         DateTimeOffset? timestamp,
@@ -270,6 +270,18 @@ internal sealed class DeviceFleet(
 
                 case SendOutcome.Busy:
                     await Task.Delay(TimeSpan.FromMilliseconds(250 * (attempt + 1)), cancellationToken);
+                    break;
+
+                case SendOutcome.NotRegistered:
+                    // The gateway restarted and lost its device list. Register again and send this reading
+                    // once more; if that does not work, the next tick will try the whole thing again.
+                    logger.LogWarning("The gateway does not know {Mac}. Registering it again.", device.MacAddress);
+
+                    if (!await gateway.RegisterAsync(device.Registration, cancellationToken))
+                    {
+                        return false;
+                    }
+
                     break;
 
                 case SendOutcome.Unreachable:

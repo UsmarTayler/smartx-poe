@@ -316,6 +316,78 @@ public class DeviceSimulatorTests
         Assert.True(await gateway.RegisterAsync(DemoDevices.All[0].Registration, CancellationToken.None));
     }
 
+    [Fact]
+    public async Task A_device_the_gateway_has_not_heard_of_is_reported_as_not_registered()
+    {
+        using var api = DemoApi();
+        var gateway = Gateway(api.CreateClient());
+        var device = new SimulatedDevice(DemoDevices.All[0]);
+
+        var outcome = await gateway.SendReadingAsync(
+            device.MacAddress, device.NextReading(SimulationScenario.Nominal, new Random(1)), timestamp: null, CancellationToken.None);
+
+        Assert.Equal(SendOutcome.NotRegistered, outcome);
+    }
+
+    [Fact]
+    public async Task A_device_registers_itself_again_when_the_gateway_restarts_and_forgets_it()
+    {
+        // The gateway keeps its device list in memory, so a restart wipes it while the fleet is still
+        // running. Swapping a fresh, empty API in under a running fleet is exactly that.
+        using var before = DemoApi();
+        using var after = DemoApi();
+        var swappable = new SwappableHandler(before.CreateClient());
+        var gateway = Gateway(new HttpClient(swappable) { BaseAddress = before.CreateClient().BaseAddress });
+
+        var definition = DemoDevices.All[0];
+        var fleet = new DeviceFleet(
+            gateway,
+            Microsoft.Extensions.Options.Options.Create(new SimulatorOptions()),
+            TimeProvider.System,
+            new NoopHostLifetime(),
+            NullLogger<DeviceFleet>.Instance);
+        var device = new SimulatedDevice(definition);
+        var reading = device.NextReading(SimulationScenario.Nominal, new Random(1));
+
+        await gateway.RegisterAsync(definition.Registration, CancellationToken.None);
+        Assert.True(await fleet.SendWithBackpressureAsync(device, reading, timestamp: null, CancellationToken.None));
+
+        // The gateway "restarts": same address, no memory of anything.
+        swappable.Inner = after.CreateClient();
+        Assert.Empty((await swappable.Inner.GetFromJsonAsync<List<SensorRegistration>>("/api/sensors"))!);
+
+        Assert.True(await fleet.SendWithBackpressureAsync(device, reading, timestamp: null, CancellationToken.None));
+
+        var registered = await swappable.Inner.GetFromJsonAsync<List<SensorRegistration>>("/api/sensors");
+        Assert.Equal(definition.MacAddress, Assert.Single(registered!).MacAddress);
+    }
+
+    /// <summary>Forwards to whichever client it currently holds, so a test can replace the gateway mid-run.</summary>
+    private sealed class SwappableHandler(HttpClient inner) : HttpMessageHandler
+    {
+        public HttpClient Inner { get; set; } = inner;
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            using var forwarded = new HttpRequestMessage(request.Method, request.RequestUri) { Content = request.Content };
+
+            return await Inner.SendAsync(forwarded, cancellationToken);
+        }
+    }
+
+    private sealed class NoopHostLifetime : Microsoft.Extensions.Hosting.IHostApplicationLifetime
+    {
+        public CancellationToken ApplicationStarted => CancellationToken.None;
+
+        public CancellationToken ApplicationStopping => CancellationToken.None;
+
+        public CancellationToken ApplicationStopped => CancellationToken.None;
+
+        public void StopApplication()
+        {
+        }
+    }
+
     /// <summary>Answers 503 to the first few requests, then forwards everything to a real client.</summary>
     private sealed class FlakyHandler(HttpClient inner, int refusalsBeforeUp, Action onRefusal) : HttpMessageHandler
     {

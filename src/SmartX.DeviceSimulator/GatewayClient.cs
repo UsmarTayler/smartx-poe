@@ -17,6 +17,9 @@ internal enum SendOutcome
     /// <summary>The gateway is saturated and asked for the reading again later.</summary>
     Busy,
 
+    /// <summary>The gateway has no record of this device, which usually means the gateway restarted.</summary>
+    NotRegistered,
+
     /// <summary>The gateway could not be reached at all.</summary>
     Unreachable,
 }
@@ -140,8 +143,17 @@ internal sealed class GatewayClient(HttpClient http, ILogger<GatewayClient> logg
                 return SendOutcome.Accepted;
             }
 
-            // 503 is backpressure, not failure: the gateway is telling the fleet to slow down.
-            return response.StatusCode == HttpStatusCode.ServiceUnavailable ? SendOutcome.Busy : SendOutcome.Refused;
+            return response.StatusCode switch
+            {
+                // 503 is backpressure, not failure: the gateway is telling the fleet to slow down.
+                HttpStatusCode.ServiceUnavailable => SendOutcome.Busy,
+
+                // The gateway holds its device list in memory, so a restarted gateway has forgotten every
+                // device. A device that is told it is unknown introduces itself again.
+                HttpStatusCode.NotFound => SendOutcome.NotRegistered,
+
+                _ => SendOutcome.Refused,
+            };
         }
         catch (HttpRequestException)
         {
