@@ -1,0 +1,103 @@
+namespace SmartX.Shared;
+
+/// <summary>One simulated device: how it registers itself, and how it behaves by default.</summary>
+/// <param name="Registration">The body the device POSTs to /api/sensors when it starts.</param>
+/// <param name="Scenario">Its behaviour until an operator changes the desired state.</param>
+public sealed record DemoDevice(SensorRegistrationRequest Registration, SimulationScenario Scenario)
+{
+    public string MacAddress => Registration.MacAddress;
+}
+
+/// <summary>
+/// The fleet the device simulator runs: forty devices across the demo deployment.
+/// </summary>
+/// <remarks>
+/// Lives in SmartX.Shared because the simulator is a separate program that may not reference the API, and
+/// the tests check the fleet against the zone rules the API enforces. The zones themselves stay in the API:
+/// a deployment hierarchy is gateway configuration, not something a device carries.
+/// <para>
+/// Each entry is a registration request rather than a <see cref="SensorRegistration"/>, because that is what
+/// a device actually sends. The API validates it exactly as it would a real device's.
+/// </para>
+/// </remarks>
+public static class DemoDevices
+{
+    private const string Celsius = "°C";
+    private const string Humidity = "%RH";
+    private const string Co2 = "ppm";
+    private const string Watts = "W";
+    private const string Kilowatts = "kW";
+    private const string Percent = "%";
+    private const string OnOff = "state";
+
+    /// <summary>Every device in the demo fleet, with the scenario it starts in.</summary>
+    public static IReadOnlyList<DemoDevice> All { get; } =
+    [
+        Device(0x01, "Rack Row 1", "sub-zone-b", "GW-A1", SensorCategory.Environmental, Celsius, 18, 32, TelemetryPayloadKind.Real, 5, SimulationScenario.Nominal),
+        Device(0x02, "Rack Row 2", "sub-zone-b", "GW-A1", SensorCategory.Environmental, Celsius, 18, 32, TelemetryPayloadKind.Real, 5, SimulationScenario.Drift),
+        Device(0x03, "Rack Row 3", "sub-zone-b", "GW-A1", SensorCategory.Environmental, Celsius, 18, 32, TelemetryPayloadKind.Real, 5, SimulationScenario.Nominal),
+        Device(0x04, "Rack Row 1", "sub-zone-b", "GW-A1", SensorCategory.Environmental, Humidity, 30, 70, TelemetryPayloadKind.Real, 5, SimulationScenario.Critical),
+        Device(0x05, "Rack Row 2", "sub-zone-b", "GW-A1", SensorCategory.Environmental, Humidity, 30, 70, TelemetryPayloadKind.Real, 5, SimulationScenario.Spike),
+        Device(0x06, "CRAC Unit", "sub-zone-b", "GW-A1", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal),
+        Device(0x07, "Rack Row 3", "sub-zone-b", "GW-A1", SensorCategory.Environmental, Humidity, 30, 70, TelemetryPayloadKind.Real, 5, SimulationScenario.TypeViolation),
+        Device(0x08, "Line 1 Drive", "sub-zone-c", "GW-A2", SensorCategory.PowerConsumption, Watts, 0, 5500, TelemetryPayloadKind.Integer, 10, SimulationScenario.Nominal),
+        Device(0x09, "Line 2 Drive", "sub-zone-c", "GW-A2", SensorCategory.PowerConsumption, Watts, 0, 5500, TelemetryPayloadKind.Integer, 10, SimulationScenario.Spike),
+        Device(0x0A, "Line 1 Conveyor", "sub-zone-c", "GW-A2", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal),
+        Device(0x0B, "Line 2 Conveyor", "sub-zone-c", "GW-A2", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Disconnect),
+        Device(0x0C, "Compressor", "sub-zone-c", "GW-A2", SensorCategory.PowerConsumption, Watts, 0, 7500, TelemetryPayloadKind.Integer, 10, SimulationScenario.Critical),
+        Device(0x0D, "Production Floor", "zone-1", "GW-A1", SensorCategory.Environmental, Celsius, 5, 45, TelemetryPayloadKind.Real, 5, SimulationScenario.Nominal),
+        Device(0x0E, "Mezzanine", "zone-1", "GW-A1", SensorCategory.Environmental, Celsius, 5, 45, TelemetryPayloadKind.Real, 5, SimulationScenario.TypeViolation),
+        Device(0x0F, "Main Incomer", "zone-2", "GW-A3", SensorCategory.PowerConsumption, Kilowatts, 0, 450, TelemetryPayloadKind.Real, 10, SimulationScenario.Nominal),
+        Device(0x10, "Feeder 1", "sub-zone-d", "GW-A3", SensorCategory.PowerConsumption, Kilowatts, 0, 200, TelemetryPayloadKind.Real, 10, SimulationScenario.Nominal),
+        Device(0x11, "Feeder 2", "sub-zone-d", "GW-A3", SensorCategory.PowerConsumption, Kilowatts, 0, 200, TelemetryPayloadKind.Real, 10, SimulationScenario.Drift),
+        Device(0x12, "Feeder 3", "sub-zone-d", "GW-A3", SensorCategory.PowerConsumption, Kilowatts, 0, 200, TelemetryPayloadKind.Real, 10, SimulationScenario.Nominal),
+        Device(0x13, "Feeder 4", "sub-zone-d", "GW-A3", SensorCategory.PowerConsumption, Kilowatts, 0, 200, TelemetryPayloadKind.Real, 10, SimulationScenario.Disconnect),
+        Device(0x14, "String 1", "sub-zone-e", "GW-A4", SensorCategory.PowerConsumption, Kilowatts, 0, 100, TelemetryPayloadKind.Real, 10, SimulationScenario.Nominal),
+        Device(0x15, "String 2", "sub-zone-e", "GW-A4", SensorCategory.PowerConsumption, Kilowatts, 0, 100, TelemetryPayloadKind.Real, 10, SimulationScenario.Nominal),
+        Device(0x16, "String 3", "sub-zone-e", "GW-A4", SensorCategory.PowerConsumption, Kilowatts, 0, 100, TelemetryPayloadKind.Real, 10, SimulationScenario.Spike),
+        Device(0x17, "Freezer 1", "sub-zone-f", "GW-A5", SensorCategory.Environmental, Celsius, -28, -12, TelemetryPayloadKind.Real, 5, SimulationScenario.Nominal),
+        Device(0x18, "Freezer 2", "sub-zone-f", "GW-A5", SensorCategory.Environmental, Celsius, -28, -12, TelemetryPayloadKind.Real, 5, SimulationScenario.Drift),
+        Device(0x19, "Freezer Door", "sub-zone-f", "GW-A5", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal),
+        Device(0x1A, "Chiller 1", "sub-zone-g", "GW-A5", SensorCategory.Environmental, Celsius, 0, 8, TelemetryPayloadKind.Real, 5, SimulationScenario.Nominal),
+        Device(0x1B, "Chiller 2", "sub-zone-g", "GW-A5", SensorCategory.Environmental, Celsius, 0, 8, TelemetryPayloadKind.Real, 5, SimulationScenario.TypeViolation),
+        Device(0x1C, "Chiller Valve", "sub-zone-g", "GW-A5", SensorCategory.Actuator, Percent, 0, 100, TelemetryPayloadKind.Integer, 5, SimulationScenario.Nominal),
+        Device(0x1D, "Dock Apron", "zone-4", "GW-B1", SensorCategory.Environmental, Celsius, -15, 50, TelemetryPayloadKind.Real, 5, SimulationScenario.Nominal),
+        Device(0x1E, "Door 1", "sub-zone-h", "GW-B1", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal),
+        Device(0x1F, "Door 2", "sub-zone-h", "GW-B1", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.TypeViolation),
+        Device(0x20, "Door 3", "sub-zone-h", "GW-B1", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Disconnect),
+        Device(0x21, "Door 4", "sub-zone-h", "GW-B1", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal),
+        Device(0x22, "Open Office", "zone-5", "GW-B2", SensorCategory.Environmental, Celsius, 15, 30, TelemetryPayloadKind.Real, 5, SimulationScenario.Nominal),
+        Device(0x23, "Open Office", "zone-5", "GW-B2", SensorCategory.Environmental, Co2, 400, 2500, TelemetryPayloadKind.Integer, 5, SimulationScenario.Nominal),
+        Device(0x24, "Room J1", "sub-zone-j", "GW-B2", SensorCategory.Environmental, Co2, 400, 2000, TelemetryPayloadKind.Integer, 5, SimulationScenario.Nominal),
+        Device(0x25, "Room J2", "sub-zone-j", "GW-B2", SensorCategory.Environmental, Co2, 400, 2000, TelemetryPayloadKind.Integer, 5, SimulationScenario.Spike),
+        Device(0x26, "Room J2", "sub-zone-j", "GW-B2", SensorCategory.Environmental, Humidity, 30, 70, TelemetryPayloadKind.Real, 5, SimulationScenario.Disconnect),
+        Device(0x27, "Office Lights", "sub-zone-k", "GW-B3", SensorCategory.Actuator, Percent, 0, 100, TelemetryPayloadKind.Integer, 5, SimulationScenario.Drift),
+        Device(0x28, "Lighting Circuit", "sub-zone-k", "GW-B3", SensorCategory.PowerConsumption, Watts, 0, 3000, TelemetryPayloadKind.Integer, 10, SimulationScenario.Nominal),
+    ];
+
+    /// <summary>Builds one device's registration request.</summary>
+    private static DemoDevice Device(
+        byte suffix,
+        string room,
+        string zoneId,
+        string nodeId,
+        SensorCategory category,
+        string unit,
+        double minimum,
+        double maximum,
+        TelemetryPayloadKind payloadKind,
+        int heartbeatSeconds,
+        SimulationScenario scenario) =>
+        new(new SensorRegistrationRequest(
+                $"B8:27:EB:10:00:{suffix:X2}",
+                room,
+                zoneId,
+                nodeId,
+                category,
+                unit,
+                minimum,
+                maximum,
+                payloadKind,
+                heartbeatSeconds),
+            scenario);
+}

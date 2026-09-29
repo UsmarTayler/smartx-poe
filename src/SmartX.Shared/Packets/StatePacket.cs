@@ -127,4 +127,17 @@ public sealed class StatePacket : TelemetryPacket<bool>
     /// <inheritdoc />
     /// <remarks>Declared alongside <see cref="Equals(object?)"/> for the same reason.</remarks>
     public override int GetHashCode() => base.GetHashCode();
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// A state is engaged or not. Reporting it as 1 and 0 would let a numeric threshold be compared against
+    /// it, and "humidity below 35" has no meaning for a door contact, so this reports that there is no
+    /// number rather than inventing one.
+    /// </remarks>
+    public override bool TryGetNumericValue(out double value)
+    {
+        value = 0;
+
+        return false;
+    }
 }

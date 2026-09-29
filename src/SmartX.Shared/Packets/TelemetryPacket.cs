@@ -98,6 +98,13 @@ public abstract class TelemetryPacket<T> : ITelemetryPacket, IEquatable<Telemetr
     /// <summary>The kind of device that produced this reading.</summary>
     public SensorCategory Category { get; }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Abstract rather than implemented here, because whether a payload has a numeric reading at all
+    /// depends on what <typeparamref name="T"/> is, and only the concrete packet knows that.
+    /// </remarks>
+    public abstract bool TryGetNumericValue(out double value);
+
     /// <summary>The unit the reading is expressed in, such as "°C" or "kWh".</summary>
     public string Unit { get; }
 

@@ -1,5 +1,8 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Text.Json;
+using Microsoft.Extensions.Options;
+using SmartX.Api.Ingestion;
 using SmartX.Api.Storage;
 using SmartX.Api.Trust;
 using SmartX.Shared;
@@ -64,11 +67,18 @@ internal static class TelemetryEndpoints
     }
 
     /// <summary>Accepts a single reading.</summary>
+    /// <remarks>
+    /// Validation happens here, while the caller waits. Storage and scoring happen behind the queue, in
+    /// <see cref="TelemetryProcessor"/>. See the queue's own comments for why the line is drawn there.
+    /// </remarks>
     private static async Task<IResult> IngestAsync(
+        HttpContext context,
         TelemetryIngestionRequest request,
         ISensorRegistry registry,
-        ITelemetryStore store,
         ITrustEngine trust,
+        TelemetryIngestionQueue queue,
+        CriticalClassifier classifier,
+        IOptions<IngestionOptions> options,
         CancellationToken cancellationToken)
     {
         var sensor = await registry.FindAsync(request.MacAddress, cancellationToken);
@@ -86,17 +96,54 @@ internal static class TelemetryEndpoints
 
         if (!TryCreatePacket(sensor, request.Value, timestamp, out var packet, out var rejection))
         {
+            // Scored on the request thread, not in the worker: a rejected reading never enters a queue, and
+            // the node has still told us something about itself.
             trust.Record(sensor.MacAddress, rejection.Outcome);
 
             return Rejected(rejection.Reason);
         }
 
-        await store.AddAsync(packet, cancellationToken);
-        trust.Record(sensor.MacAddress, TrustOutcome.Success);
+        return Enqueue(context, queue, classifier, options, packet);
+    }
 
-        // 202 rather than 201: telemetry is an event stream, and an individual reading is not a
-        // resource with a URL of its own to point a Location header at.
-        return TypedResults.Accepted((string?)null, packet);
+    /// <summary>Puts a validated packet into its lane, or reports that the gateway is saturated.</summary>
+    /// <remarks>
+    /// 202 rather than 201: telemetry is an event stream, and an individual reading is not a resource with
+    /// a URL of its own to point a Location header at. The body is a receipt rather than the packet, because
+    /// at this moment the packet has not been processed yet — saying otherwise would be a lie the caller
+    /// could act on.
+    /// </remarks>
+    private static IResult Enqueue(
+        HttpContext context,
+        TelemetryIngestionQueue queue,
+        CriticalClassifier classifier,
+        IOptions<IngestionOptions> options,
+        ITelemetryPacket packet)
+    {
+        var alert = classifier.IsCritical(packet, out var found) ? found : (CriticalAlert?)null;
+
+        if (queue.TryEnqueue(packet, alert, out var receipt))
+        {
+            return TypedResults.Accepted((string?)null, receipt);
+        }
+
+        return QueueFull(context, options);
+    }
+
+    /// <summary>The backpressure answer: 503 with Retry-After, rather than dropping the reading silently.</summary>
+    /// <remarks>
+    /// A device that is told to come back can come back. A reading accepted into an unbounded queue and then
+    /// never processed is lost without anyone being told, which is the failure mode this exists to avoid.
+    /// </remarks>
+    private static IResult QueueFull(HttpContext context, IOptions<IngestionOptions> options)
+    {
+        var seconds = options.Value.RetryAfterSeconds;
+        context.Response.Headers.RetryAfter = seconds.ToString(CultureInfo.InvariantCulture);
+
+        return Results.Problem(
+            statusCode: StatusCodes.Status503ServiceUnavailable,
+            title: "The ingestion queue is full",
+            detail: $"The gateway is behind on processing. Retry in {seconds} seconds.");
     }
 
     /// <summary>The readings currently retained for one node, oldest first.</summary>
@@ -127,10 +174,13 @@ internal static class TelemetryEndpoints
     /// request body to the node's trust.
     /// </remarks>
     private static async Task<IResult> IngestBatchAsync(
+        HttpContext context,
         TelemetryBatchRequest request,
         ISensorRegistry registry,
-        ITelemetryStore store,
         ITrustEngine trust,
+        TelemetryIngestionQueue queue,
+        CriticalClassifier classifier,
+        IOptions<IngestionOptions> options,
         CancellationToken cancellationToken)
     {
         var sensor = await registry.FindAsync(request.MacAddress, cancellationToken);
@@ -169,28 +219,33 @@ internal static class TelemetryEndpoints
             // STAGE 4 — validate and convert.
             if (TryCreatePacket(sensor, raw[index], timestamp, out var packet, out var rejection))
             {
-                // STAGE 5 — into the node's sliding window.
-                await store.AddAsync(packet, cancellationToken);
+                // STAGE 5 — into its lane, one reading at a time so the batch keeps its order in the queue.
+                var alert = classifier.IsCritical(packet, out var found) ? found : (CriticalAlert?)null;
 
-                // STAGE 6 — score it.
-                trust.Record(sensor.MacAddress, TrustOutcome.Success);
+                if (!queue.TryEnqueue(packet, alert, out _))
+                {
+                    // The rest of the batch would only be refused too, so the caller is told to retry the
+                    // whole thing rather than left to work out which readings got through.
+                    return QueueFull(context, options);
+                }
+
                 accepted++;
             }
             else
             {
-                // A rejected reading is not retained, but it is still scored. One bad sample does not
+                // A rejected reading is never queued, but it is still scored. One bad sample does not
                 // discard the batch, and its position is reported so the caller can find it.
                 trust.Record(sensor.MacAddress, rejection.Outcome);
                 errors.Add($"Reading {index}: {rejection.Reason}");
             }
         }
 
-        var retained = await store.CountForAsync(sensor.MacAddress, cancellationToken);
-
+        // STAGE 6 — retention and scoring now happen in the worker, so what is reported here is how many
+        // readings were queued, not how many are already stored.
         return TypedResults.Accepted(
             (string?)null,
             new TelemetryBatchResult(
-                sensor.MacAddress, accepted, errors.Count, retained, statistics, errors));
+                sensor.MacAddress, accepted, errors.Count, statistics, errors));
     }
 
     /// <summary>

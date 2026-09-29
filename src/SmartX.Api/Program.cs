@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Options;
 using SmartX.Api.Attachments;
 using SmartX.Api.Endpoints;
-using SmartX.Api.Simulation;
+using SmartX.Api.Ingestion;
 using SmartX.Api.Storage;
 using SmartX.Api.Trust;
 
@@ -39,20 +39,36 @@ builder.Services
 
 builder.Services.AddSingleton<ITelemetryStore, InMemoryTelemetryStore>();
 
-// Simulation is off unless configured on. When it is on, the demo mesh's larger hierarchy replaces the
-// brief's, so the seeded sensors have somewhere valid to be registered. Decided in a factory rather than
-// by reading builder.Configuration here, so configuration a test host adds is seen too.
+// Which deployment hierarchy this gateway manages. Decided in a factory rather than by reading
+// builder.Configuration here, so configuration a test host adds is seen too.
 builder.Services
-    .AddOptions<SimulationOptions>()
-    .Bind(builder.Configuration.GetSection(SimulationOptions.SectionName))
-    .Validate(options => options.BackfillDuration >= TimeSpan.Zero, "Simulation:BackfillDuration cannot be negative.")
-    .Validate(options => options.TickInterval > TimeSpan.Zero, "Simulation:TickInterval must be positive.")
+    .AddOptions<ZoneOptions>()
+    .Bind(builder.Configuration.GetSection(ZoneOptions.SectionName))
+    .Validate(options => Enum.IsDefined(options.Hierarchy), "Zones:Hierarchy must be Brief or Demo.")
     .ValidateOnStart();
 
 builder.Services.AddSingleton<IZoneStore>(services => new InMemoryZoneStore(
-    services.GetRequiredService<IOptions<SimulationOptions>>().Value.Enabled
-        ? new SmartX.Shared.ZoneCatalogue(DemoMesh.Zones)
+    services.GetRequiredService<IOptions<ZoneOptions>>().Value.Hierarchy == ZoneHierarchy.Demo
+        ? new SmartX.Shared.ZoneCatalogue(DemoZoneHierarchy.Zones)
         : InMemoryZoneStore.BriefHierarchy));
+
+// Device management. An operator writes the desired state here; each device polls for its own and applies
+// it, which is the device-shadow pattern named in SimulationEndpoints.
+builder.Services.AddSingleton<IDeviceShadowStore, InMemoryDeviceShadowStore>();
+
+// Ingestion. Readings are validated on the request thread and processed behind the queues by one worker.
+builder.Services
+    .AddOptions<IngestionOptions>()
+    .Bind(builder.Configuration.GetSection(IngestionOptions.SectionName))
+    .Validate(options => options.MaxQueueDepth > 0, "Ingestion:MaxQueueDepth must be positive.")
+    .Validate(options => options.MaxCriticalQueueDepth > 0, "Ingestion:MaxCriticalQueueDepth must be positive.")
+    .Validate(options => options.MaxConsecutiveCritical > 0, "Ingestion:MaxConsecutiveCritical must be positive.")
+    .Validate(options => options.RetryAfterSeconds > 0, "Ingestion:RetryAfterSeconds must be positive.")
+    .ValidateOnStart();
+
+builder.Services.AddSingleton<TelemetryIngestionQueue>();
+builder.Services.AddSingleton<CriticalClassifier>();
+builder.Services.AddHostedService<TelemetryProcessor>();
 
 // Trust. The clock is injected rather than read from DateTimeOffset.UtcNow so that decay and
 // heartbeats — both entirely about the passage of time — can be tested without waiting for it.
@@ -84,11 +100,6 @@ builder.Services.AddSingleton<AttachmentStorage>();
 builder.Services.AddSingleton<IAttachmentStore, FileAttachmentStore>();
 builder.Services.AddSingleton<AttachmentUploader>();
 
-// One instance serves as both the hosted service and the thing the scenario endpoint talks to. Registering
-// it with AddHostedService<MeshSimulator>() alone would create a second, unreachable instance.
-builder.Services.AddSingleton<MeshSimulator>();
-builder.Services.AddHostedService(services => services.GetRequiredService<MeshSimulator>());
-
 var app = builder.Build();
 
 app.UseCors(ClientCorsPolicy);
@@ -102,6 +113,7 @@ api.MapZoneEndpoints();
 api.MapTrustEndpoints();
 api.MapAttachmentEndpoints();
 api.MapSimulationEndpoints();
+api.MapPipelineEndpoints();
 
 app.Run();
 

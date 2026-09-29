@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>smartx-device-simulator</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SmartX.Tests" />
+    <!-- Shared contracts only. The simulator stands in for hardware, and hardware cannot reference the
+         gateway it reports to. -->
+    <ProjectReference Include="..\SmartX.Shared\SmartX.Shared.csproj" />
+  </ItemGroup>
+
+</Project>

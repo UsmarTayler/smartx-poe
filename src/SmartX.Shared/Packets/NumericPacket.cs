@@ -178,4 +178,17 @@ public sealed class NumericPacket<T> : TelemetryPacket<T>
     /// <inheritdoc />
     /// <remarks>Declared alongside <see cref="Equals(object?)"/> for the same reason.</remarks>
     public override int GetHashCode() => base.GetHashCode();
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// <see cref="double.CreateChecked{TOther}(TOther)"/> is a static abstract member of
+    /// <see cref="INumberBase{TSelf}"/>, so the conversion is resolved at compile time for the concrete
+    /// payload type. No cast through <c>object</c>, and nothing boxed.
+    /// </remarks>
+    public override bool TryGetNumericValue(out double value)
+    {
+        value = double.CreateChecked(Value);
+
+        return true;
+    }
 }

@@ -27,6 +27,39 @@ internal static class ApiTestHost
     /// <summary>A host with empty stores and the seeded zone hierarchy.</summary>
     internal static WebApplicationFactory<Program> New() => new();
 
+
+    /// <summary>
+    /// Waits until the ingestion worker has finished processing every reading accepted so far.
+    /// </summary>
+    /// <remarks>
+    /// The API validates a reading while the caller waits and stores and scores it just afterwards, so a test
+    /// that posts a reading and immediately reads history would race the worker. Waiting on the pipeline's own
+    /// stats — depth zero, and processed equal to accepted — is deterministic where a fixed sleep is not: it
+    /// returns the moment the work is done, and fails loudly with the stats if it never is.
+    /// </remarks>
+    internal static async Task DrainAsync(HttpClient client, int expectedProcessed, TimeSpan? timeout = null)
+    {
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(10));
+        SmartX.Shared.PipelineStats? stats = null;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            stats = await System.Net.Http.Json.HttpClientJsonExtensions.GetFromJsonAsync<SmartX.Shared.PipelineStats>(
+                client, "/api/pipeline/stats");
+
+            if (stats!.TotalDepth == 0 && stats.TotalProcessed >= expectedProcessed)
+            {
+                return;
+            }
+
+            await Task.Delay(10);
+        }
+
+        throw new TimeoutException(
+            $"The worker did not process {expectedProcessed} readings in time. " +
+            $"Depth {stats?.TotalDepth}, processed {stats?.TotalProcessed}.");
+    }
+
     /// <summary>Wraps a JSON literal as a request body.</summary>
     internal static StringContent Json(string json)
     {
