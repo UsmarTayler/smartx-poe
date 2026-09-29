@@ -127,7 +127,10 @@ internal sealed class DeviceFleet(
 
             try
             {
-                sent += await BackfillDeviceAsync(device, started, cancellationToken);
+                // Interlocked, and the await first: `sent += await ...` reads sent before the await and writes it
+                // after, so two devices finishing together overwrite each other and the total comes out short.
+                var posted = await BackfillDeviceAsync(device, started, cancellationToken);
+                Interlocked.Add(ref sent, posted);
             }
             finally
             {
