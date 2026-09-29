@@ -46,11 +46,24 @@ internal sealed class DeviceFleet(
         await ReportAsync(stoppingToken);
     }
 
+    /// <summary>The fleet as it stands, so a test can inspect what registration produced.</summary>
+    internal IReadOnlyList<SimulatedDevice> DevicesForTest => _devices;
+
+    /// <summary>Registration on its own, so a test can run it without starting the reporting loop.</summary>
+    internal Task<bool> RegisterFleetForTestAsync() => RegisterFleetAsync(CancellationToken.None);
+
     /// <summary>Introduces every device to the gateway.</summary>
     private async Task<bool> RegisterFleetAsync(CancellationToken cancellationToken)
     {
         var fleet = DemoDevices.All.Take(Math.Clamp(_options.DeviceCount, 0, DemoDevices.All.Count));
         var registered = 0;
+
+        // Keys are normalised so a MAC written for an environment variable (underscores or hyphens) finds
+        // the device it names.
+        var overrides = _options.Scenarios.ToDictionary(
+            pair => pair.Key.Replace('_', ':').Replace('-', ':').ToUpperInvariant(),
+            pair => pair.Value,
+            StringComparer.Ordinal);
 
         foreach (var definition in fleet)
         {
@@ -65,7 +78,12 @@ internal sealed class DeviceFleet(
 
             var device = new SimulatedDevice(definition);
 
-            if (_options.Scenarios.TryGetValue(device.MacAddress, out var scenario))
+            if (_options.Mix == FleetMix.Nominal)
+            {
+                device.StartIn(SimulationScenario.Nominal);
+            }
+
+            if (overrides.TryGetValue(device.MacAddress, out var scenario))
             {
                 device.StartIn(scenario);
             }
