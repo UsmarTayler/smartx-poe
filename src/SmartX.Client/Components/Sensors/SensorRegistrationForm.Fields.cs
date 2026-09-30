@@ -25,6 +25,12 @@ public partial class SensorRegistrationForm
     private string? ValidateUnit(string value) =>
         SensorRegistrationRules.Unit(value) ?? ServerError(UnitField);
 
+    // The form insists on a kind whenever Actuator is chosen (required: true). The API does not, so that
+    // Part 1 registrations without one keep working; the form is where new registrations get it right.
+    private string? ValidateActuatorKind(ActuatorKind? kind) =>
+        SensorRegistrationRules.ActuatorKind(kind, Model.Category, Model.PayloadKind, required: true)
+        ?? ServerError(ActuatorKindField);
+
     private string? ValidatePayload(TelemetryPayloadKind kind) =>
         SensorRegistrationRules.PayloadKind(kind, Model.Category) ?? ServerError(PayloadField);
 
@@ -88,12 +94,35 @@ public partial class SensorRegistrationForm
         {
             await _payloadField.ValidateAsync();
         }
+
+        // Picking Actuator brings the kind field into view, and its rule depends on the payload chosen.
+        if (_actuatorKindField is not null)
+        {
+            await _actuatorKindField.ValidateAsync();
+        }
     }
 
-    private void OnPayloadChanged(TelemetryPayloadKind kind)
+    private async Task OnActuatorKindChanged(ActuatorKind? kind)
+    {
+        Model.ActuatorKind = kind;
+        _serverErrors.Remove(ActuatorKindField);
+
+        // A Dimmer wants a numeric payload and everything else wants State, so the payload is re-checked.
+        if (_payloadField is not null)
+        {
+            await _payloadField.ValidateAsync();
+        }
+    }
+
+    private async Task OnPayloadChanged(TelemetryPayloadKind kind)
     {
         Model.PayloadKind = kind;
         _serverErrors.Remove(PayloadField);
+
+        if (_actuatorKindField is not null)
+        {
+            await _actuatorKindField.ValidateAsync();
+        }
     }
 
     private void OnMinimumChanged(double? value)

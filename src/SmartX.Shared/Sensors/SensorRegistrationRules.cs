@@ -61,6 +61,45 @@ public static class SensorRegistrationRules
             : null;
 
     /// <summary>An optional heartbeat interval, which if given must be positive.</summary>
+    /// <summary>Checks an actuator's kind against its category and payload.</summary>
+    /// <param name="kind">The declared kind, if any.</param>
+    /// <param name="category">The device's category. The kind is ignored unless this is an actuator.</param>
+    /// <param name="payloadKind">What the device reports, which has to suit the kind.</param>
+    /// <param name="required">
+    /// True for the registration form, which asks for a kind whenever Actuator is chosen. False for the API,
+    /// which accepts an actuator without one so that Part 1 registrations keep working.
+    /// </param>
+    public static string? ActuatorKind(
+        ActuatorKind? kind,
+        SensorCategory category,
+        TelemetryPayloadKind payloadKind,
+        bool required = false)
+    {
+        if (category != SensorCategory.Actuator)
+        {
+            return null;
+        }
+
+        if (kind is null)
+        {
+            return required ? "Choose what kind of actuator this is, so it can be sent the right commands." : null;
+        }
+
+        if (!Enum.IsDefined(kind.Value))
+        {
+            return "That is not an actuator kind. Use Pump, Relay, Valve or Dimmer.";
+        }
+
+        // A dimmer holds a level, so it reports a number. Everything else is on or off, or open or closed.
+        return kind == Shared.ActuatorKind.Dimmer
+            ? payloadKind == TelemetryPayloadKind.State
+                ? "A Dimmer reports a level, so its payload must be Integer or Real, not State."
+                : null
+            : payloadKind != TelemetryPayloadKind.State
+                ? $"A {kind} is either on or off, so its payload must be State."
+                : null;
+    }
+
     public static string? HeartbeatIntervalSeconds(int? seconds) =>
         seconds is <= 0 ? "A heartbeat interval must be a positive number of seconds." : null;
 

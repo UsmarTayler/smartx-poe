@@ -21,6 +21,12 @@ namespace SmartX.Shared;
 /// <param name="Minimum">Lowest value it is expected to report.</param>
 /// <param name="Maximum">Highest value it is expected to report.</param>
 /// <param name="PayloadKind">The shape of reading it emits.</param>
+/// <param name="ActuatorKind">
+/// What kind of actuator this is, which decides the commands it can be sent. Optional, and ignored unless the
+/// category is <see cref="SensorCategory.Actuator"/>. Part 1 requests never carried it and must keep working, so
+/// its absence is accepted; an actuator registered without one is simply not commandable, and a command aimed at
+/// it is refused with that reason.
+/// </param>
 /// <param name="HeartbeatIntervalSeconds">
 /// How often, in seconds, the device is expected to report. Omit to use the gateway default.
 /// Whole seconds rather than a TimeSpan string, because "60" is what a device author writes and
@@ -36,7 +42,8 @@ public sealed record SensorRegistrationRequest(
     double Minimum,
     double Maximum,
     TelemetryPayloadKind PayloadKind,
-    int? HeartbeatIntervalSeconds = null)
+    int? HeartbeatIntervalSeconds = null,
+    ActuatorKind? ActuatorKind = null)
 {
     /// <summary>
     /// Turns the request into a registration, or reports everything wrong with it.
@@ -69,6 +76,8 @@ public sealed record SensorRegistrationRequest(
         Collect(errors, nameof(PayloadKind), SensorRegistrationRules.PayloadKind(PayloadKind, Category));
         Collect(errors, nameof(HeartbeatIntervalSeconds),
             SensorRegistrationRules.HeartbeatIntervalSeconds(HeartbeatIntervalSeconds));
+        Collect(errors, nameof(ActuatorKind),
+            SensorRegistrationRules.ActuatorKind(ActuatorKind, Category, PayloadKind));
 
         if (errors.Count > 0)
         {
@@ -82,7 +91,9 @@ public sealed record SensorRegistrationRequest(
             Unit,
             new ValueRange(Minimum, Maximum),
             PayloadKind,
-            HeartbeatIntervalSeconds is { } seconds ? TimeSpan.FromSeconds(seconds) : null);
+            HeartbeatIntervalSeconds is { } seconds ? TimeSpan.FromSeconds(seconds) : null,
+            // Ignored unless it is an actuator, as documented on the parameter.
+            Category == SensorCategory.Actuator ? ActuatorKind : null);
 
         return true;
     }

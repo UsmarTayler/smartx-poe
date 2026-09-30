@@ -80,6 +80,23 @@
             </MudSelect>
         </MudItem>
 
+        @* Only an actuator can be sent commands, so only an actuator is asked what kind it is. *@
+        @if (Model.Category == SensorCategory.Actuator)
+        {
+            <MudItem xs="12" sm="6">
+                <MudSelect T="ActuatorKind?" @ref="_actuatorKindField" Label="Actuator kind"
+                           Value="Model.ActuatorKind" ValueChanged="OnActuatorKindChanged"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" AnchorOrigin="Origin.BottomCenter"
+                           Validation="@(new Func<ActuatorKind?, string?>(ValidateActuatorKind))"
+                           HelperText="Decides which commands it can be sent">
+                    <MudSelectItem T="ActuatorKind?" Value="@((ActuatorKind?)ActuatorKind.Pump)">Pump: on or off</MudSelectItem>
+                    <MudSelectItem T="ActuatorKind?" Value="@((ActuatorKind?)ActuatorKind.Relay)">Relay: on or off</MudSelectItem>
+                    <MudSelectItem T="ActuatorKind?" Value="@((ActuatorKind?)ActuatorKind.Valve)">Valve: open or closed</MudSelectItem>
+                    <MudSelectItem T="ActuatorKind?" Value="@((ActuatorKind?)ActuatorKind.Dimmer)">Dimmer: a level, 0 to 100</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+        }
+
         <MudItem xs="12" sm="4">
             <MudTextField T="string" Label="Unit" Placeholder="°C"
                           Value="Model.Unit" ValueChanged="@(value => OnTextChanged(value, v => Model.Unit = v, UnitField))"
