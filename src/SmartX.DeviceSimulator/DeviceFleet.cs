@@ -217,6 +217,12 @@ internal sealed class DeviceFleet(
 
     internal async Task TickDeviceAsync(SimulatedDevice device, DateTimeOffset now, CancellationToken cancellationToken)
     {
+        // TWO CHANNELS, deliberately kept apart. Telemetry is the data plane: it is what the simulated device
+        // is "sending", and the Disconnect scenario switches it off. Polling the shadow is the harness's
+        // control plane: it is how an operator tells the harness what the device should be doing, and it is
+        // not something the simulated device is doing. It therefore keeps running when the data channel is
+        // silent. If a Disconnect device also stopped polling, nothing would ever read the instruction to
+        // bring it back, and a silent device could never be switched to Nominal again.
         if (device.NextShadowPoll <= now)
         {
             device.NextShadowPoll = now + _options.ShadowPollInterval;

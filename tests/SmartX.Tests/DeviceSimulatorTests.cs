@@ -402,6 +402,42 @@ public class DeviceSimulatorTests
         Assert.Equal(13, counter.Registrations);
     }
 
+    [Fact]
+    public async Task A_silent_device_can_be_switched_back_to_nominal_because_its_control_channel_keeps_polling()
+    {
+        // A Disconnect device stops sending telemetry, but the harness keeps polling its shadow. If it did
+        // not, an operator could never bring a silent device back: nothing would ever read the instruction.
+        using var api = DemoApi();
+        var http = api.CreateClient();
+        var gateway = Gateway(http);
+        var fleet = new DeviceFleet(
+            gateway,
+            Microsoft.Extensions.Options.Options.Create(new SimulatorOptions { DeviceCount = 13 }),
+            TimeProvider.System,
+            new NoopHostLifetime(),
+            NullLogger<DeviceFleet>.Instance);
+
+        await fleet.RegisterFleetForTestAsync();
+        var silent = fleet.DevicesForTest.Single(device => device.Scenario == SimulationScenario.Disconnect);
+        var now = DateTimeOffset.UtcNow;
+
+        // While silent: no telemetry.
+        await fleet.TickDeviceForTestAsync(silent, now, CancellationToken.None);
+        Assert.Empty((await http.GetFromJsonAsync<List<ITelemetryPacket>>($"/api/sensors/{silent.MacAddress}/telemetry"))!);
+
+        // The operator brings it back.
+        await http.PostAsync($"/api/simulation/{silent.MacAddress}/scenario", Json("""{ "scenario": "Nominal" }"""));
+
+        // Its next poll hears the instruction; the tick after that reports.
+        await fleet.TickDeviceForTestAsync(silent, now.AddSeconds(6), CancellationToken.None);
+        Assert.Equal(SimulationScenario.Nominal, silent.Scenario);
+
+        await fleet.TickDeviceForTestAsync(silent, now.AddSeconds(7), CancellationToken.None);
+        await DrainAsync(http, expectedProcessed: 1);
+
+        Assert.NotEmpty((await http.GetFromJsonAsync<List<ITelemetryPacket>>($"/api/sensors/{silent.MacAddress}/telemetry"))!);
+    }
+
     /// <summary>Counts registrations passing through, and forwards everything.</summary>
     private sealed class CountingHandler(HttpMessageHandler inner) : DelegatingHandler(inner)
     {
