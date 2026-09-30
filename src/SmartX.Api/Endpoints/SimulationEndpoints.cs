@@ -1,3 +1,4 @@
+using SmartX.Api.Commands;
 using SmartX.Api.Storage;
 using SmartX.Shared;
 
@@ -70,18 +71,42 @@ internal static class SimulationEndpoints
     private static async Task<IResult> ListAsync(IDeviceShadowStore shadows, CancellationToken cancellationToken) =>
         Results.Ok(await shadows.ListAsync(cancellationToken));
 
-    /// <summary>One device's desired state, polled by the device itself.</summary>
+    /// <summary>The device's check-in: its desired state, and any commands waiting for it.</summary>
     /// <remarks>
-    /// Answers 404 when nothing has been asked of the device, which a device reads as "carry on as you are".
-    /// That keeps the common case a single cheap request with no body.
+    /// One call, not two. A real ESP32 wakes, makes one request, acts on what it finds and sleeps again, so
+    /// commands travel in the same response as the desired scenario.
+    /// <para>
+    /// Answers 404 when nothing has been asked of the device and no command is waiting, which a device reads
+    /// as "carry on as you are". That keeps the common case a single cheap request with no body.
+    /// </para>
+    /// <para>
+    /// <b>Fetching a command delivers it.</b> Each pending command is marked delivered as it is handed over
+    /// and is never handed over again, so a second check-in before the acknowledgement lands gets nothing.
+    /// <c>deliver=false</c> looks at the desired scenario without collecting commands. It exists for the
+    /// simulator's control plane: a device the harness has switched off is not there to collect anything, so
+    /// its commands must stay pending and time out, while the harness still hears an instruction to bring it
+    /// back. A real device never sends it.
+    /// </para>
     /// </remarks>
     private static async Task<IResult> GetDesiredAsync(
         string mac,
+        bool? deliver,
         IDeviceShadowStore shadows,
-        CancellationToken cancellationToken) =>
-        await shadows.FindAsync(mac, cancellationToken) is { } desired
-            ? Results.Ok(desired)
-            : NotRegistered(mac);
+        CommandService commands,
+        CancellationToken cancellationToken)
+    {
+        if (!MacAddressValidator.TryNormalise(mac, out var canonical))
+        {
+            return NotRegistered(mac);
+        }
+
+        var desired = await shadows.FindAsync(canonical, cancellationToken);
+        var waiting = deliver == false ? [] : commands.Collect(canonical);
+
+        return desired is null && waiting.Count == 0
+            ? NotRegistered(mac)
+            : Results.Ok(new DeviceDesiredState(canonical, desired?.Scenario, desired?.Version ?? 0, desired?.UpdatedAt, waiting));
+    }
 
     private static IResult NotRegistered(string mac) =>
         Results.Problem(

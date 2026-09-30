@@ -27,7 +27,7 @@ public sealed class SimulatorOptions
 
     /// <summary>How many of the demo devices to run, from the top of the fleet list.</summary>
     /// <remarks>Lower it to watch a handful of devices, or leave it to run the whole forty.</remarks>
-    public int DeviceCount { get; set; } = 40;
+    public int DeviceCount { get; set; } = 48;
 
     /// <summary>How much history to post on first start, so the dashboard is not empty.</summary>
     /// <remarks>
@@ -48,6 +48,10 @@ public sealed class SimulatorOptions
 
     /// <summary>How often the fleet checks which devices are due to report.</summary>
     public TimeSpan TickInterval { get; set; } = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>The chance that an actuator fails to apply a command it was given, from 0 to 1.</summary>
+    /// <remarks>Zero by default, so commands succeed and demos are predictable. Raise it to see Failed commands.</remarks>
+    public double CommandFailureRate { get; set; }
 
     /// <summary>Seed for the generated values, so two runs produce the same readings.</summary>
     public int RandomSeed { get; set; } = 1729;

@@ -25,10 +25,12 @@ public partial class SensorRegistrationForm
     private const string MinimumField = nameof(SensorRegistrationRequest.Minimum);
     private const string PayloadField = nameof(SensorRegistrationRequest.PayloadKind);
     private const string HeartbeatField = nameof(SensorRegistrationRequest.HeartbeatIntervalSeconds);
+    private const string ActuatorKindField = nameof(SensorRegistrationRequest.ActuatorKind);
 
     private MudForm? _form;
     private MudNumericField<double?>? _minimumField;
     private MudSelect<TelemetryPayloadKind>? _payloadField;
+    private MudSelect<ActuatorKind?>? _actuatorKindField;
     private bool _isValid;
     private ApiProblem? _appliedProblem;
     private bool _revalidate;

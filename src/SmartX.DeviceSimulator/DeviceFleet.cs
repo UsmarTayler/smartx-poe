@@ -49,6 +49,10 @@ internal sealed class DeviceFleet(
     /// <summary>The fleet as it stands, so a test can inspect what registration produced.</summary>
     internal IReadOnlyList<SimulatedDevice> DevicesForTest => _devices;
 
+    /// <summary>One device's turn of the loop, so a test can drive it with a time of its choosing.</summary>
+    internal Task TickDeviceForTestAsync(SimulatedDevice device, DateTimeOffset now, CancellationToken cancellationToken) =>
+        TickDeviceAsync(device, now, cancellationToken);
+
     /// <summary>Registration on its own, so a test can run it without starting the reporting loop.</summary>
     internal Task<bool> RegisterFleetForTestAsync() => RegisterFleetAsync(CancellationToken.None);
 
@@ -211,13 +215,21 @@ internal sealed class DeviceFleet(
         }
     }
 
-    private async Task TickDeviceAsync(SimulatedDevice device, DateTimeOffset now, CancellationToken cancellationToken)
+    internal async Task TickDeviceAsync(SimulatedDevice device, DateTimeOffset now, CancellationToken cancellationToken)
     {
+        // TWO CHANNELS, deliberately kept apart. Telemetry is the data plane: it is what the simulated device
+        // is "sending", and the Disconnect scenario switches it off. Polling the shadow is the harness's
+        // control plane: it is how an operator tells the harness what the device should be doing, and it is
+        // not something the simulated device is doing. It therefore keeps running when the data channel is
+        // silent. If a Disconnect device also stopped polling, nothing would ever read the instruction to
+        // bring it back, and a silent device could never be switched to Nominal again.
         if (device.NextShadowPoll <= now)
         {
             device.NextShadowPoll = now + _options.ShadowPollInterval;
             await ApplyDesiredStateAsync(device, now, cancellationToken);
         }
+
+        await FlushAcknowledgementsAsync(device, cancellationToken);
 
         if (device.Scenario == SimulationScenario.Disconnect || device.NextDue > now)
         {
@@ -273,11 +285,11 @@ internal sealed class DeviceFleet(
                     break;
 
                 case SendOutcome.NotRegistered:
-                    // The gateway restarted and lost its device list. Register again and send this reading
-                    // once more; if that does not work, the next tick will try the whole thing again.
-                    logger.LogWarning("The gateway does not know {Mac}. Registering it again.", device.MacAddress);
-
-                    if (!await gateway.RegisterAsync(device.Registration, cancellationToken))
+                    // A 404 for one device means the gateway restarted, and a restart forgets every device
+                    // at once. Re-registering only this one would leave the silent ones (a Disconnect device
+                    // never sends, so it never hears a 404) unregistered for good. So the first 404 the
+                    // fleet sees re-registers the whole fleet, then this reading is sent again.
+                    if (!await ReRegisterFleetAsync(device, cancellationToken))
                     {
                         return false;
                     }
@@ -292,12 +304,101 @@ internal sealed class DeviceFleet(
         return false;
     }
 
+    private readonly SemaphoreSlim _reRegistration = new(1, 1);
+    private DateTimeOffset _lastFleetRegistration = DateTimeOffset.MinValue;
+
+    /// <summary>Registers every device again after the gateway has forgotten them.</summary>
+    /// <remarks>
+    /// Forty devices sending in the same tick all get their 404 together, and forty full re-registrations
+    /// would be forty times the work for one event. The first caller does it, holding the semaphore; the rest
+    /// wait for it, see that a registration finished moments ago, and go straight on to resend.
+    /// </remarks>
+    private async Task<bool> ReRegisterFleetAsync(SimulatedDevice reporter, CancellationToken cancellationToken)
+    {
+        var asked = time.GetUtcNow();
+
+        await _reRegistration.WaitAsync(cancellationToken);
+
+        try
+        {
+            if (_lastFleetRegistration >= asked)
+            {
+                return true;
+            }
+
+            logger.LogWarning(
+                "The gateway does not know {Mac}, which means it restarted. Registering all {Count} devices again.",
+                reporter.MacAddress,
+                _devices.Count);
+
+            foreach (var device in _devices.ToArray())
+            {
+                if (!await gateway.RegisterAsync(device.Registration, cancellationToken))
+                {
+                    return false;
+                }
+            }
+
+            _lastFleetRegistration = time.GetUtcNow();
+
+            return true;
+        }
+        finally
+        {
+            _reRegistration.Release();
+        }
+    }
+
+    /// <summary>Tells the gateway what came of the commands this device has applied.</summary>
+    /// <remarks>
+    /// An acknowledgement is kept until the gateway takes it, so a lost request or a brief outage does not
+    /// leave a command "delivered" until it times out. A silent device sends nothing at all, acknowledgements
+    /// included: it is switched off, and stays owing them until it is switched back on.
+    /// </remarks>
+    private async Task FlushAcknowledgementsAsync(SimulatedDevice device, CancellationToken cancellationToken)
+    {
+        if (device.PendingAcks.Count == 0 || device.Scenario == SimulationScenario.Disconnect)
+        {
+            return;
+        }
+
+        foreach (var (commandId, acknowledgement) in device.PendingAcks.ToArray())
+        {
+            var delivery = await gateway.AcknowledgeAsync(commandId, acknowledgement, cancellationToken);
+
+            if (delivery != AckDelivery.Retry)
+            {
+                // Taken, or refused for good. Either way there is nothing left to send for this command.
+                device.PendingAcks.Remove(commandId);
+            }
+        }
+    }
+
     /// <summary>Applies whatever an operator has asked of this device since its last poll.</summary>
     private async Task ApplyDesiredStateAsync(SimulatedDevice device, DateTimeOffset now, CancellationToken cancellationToken)
     {
-        var desired = await gateway.GetDesiredStateAsync(device.MacAddress, cancellationToken);
+        // A device the harness has switched off checks its scenario but collects nothing: it is not there to
+        // receive commands, and they must stay pending and time out like they would for hardware that is off.
+        var desired = await gateway.GetDesiredStateAsync(
+            device.MacAddress, cancellationToken, deliverCommands: device.Scenario != SimulationScenario.Disconnect);
 
-        if (desired is null || desired.Version == device.AppliedVersion)
+        if (desired is not null)
+        {
+            foreach (var command in desired.CommandList)
+            {
+                var outcome = device.ApplyCommand(command, _options.CommandFailureRate, _random);
+
+                logger.LogInformation(
+                    "{Mac} {Result} {Action}{Repeat} (command {Command}).",
+                    device.MacAddress,
+                    outcome.Success ? "applied" : "could not apply",
+                    command.Action,
+                    outcome.WasRepeat ? ", a repeat it already had" : string.Empty,
+                    command.Id);
+            }
+        }
+
+        if (desired is null || desired.Scenario is null || desired.Version == device.AppliedVersion)
         {
             return;
         }

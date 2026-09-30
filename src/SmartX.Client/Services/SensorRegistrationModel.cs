@@ -33,6 +33,9 @@ public sealed class SensorRegistrationModel
 
     public int? HeartbeatIntervalSeconds { get; set; } = 60;
 
+    /// <summary>What kind of actuator this is. Asked for only when the category is Actuator.</summary>
+    public ActuatorKind? ActuatorKind { get; set; }
+
     /// <summary>Builds the request the API expects.</summary>
     /// <remarks>
     /// An empty bound is sent as NaN rather than zero, so if validation were ever bypassed the server
@@ -48,7 +51,8 @@ public sealed class SensorRegistrationModel
         Minimum ?? double.NaN,
         Maximum ?? double.NaN,
         PayloadKind,
-        HeartbeatIntervalSeconds);
+        HeartbeatIntervalSeconds,
+        Category == SensorCategory.Actuator ? ActuatorKind : null);
 
     /// <summary>Clears the device-specific fields and keeps the location.</summary>
     /// <remarks>

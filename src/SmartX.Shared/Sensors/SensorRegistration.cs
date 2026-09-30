@@ -45,7 +45,8 @@ public sealed record SensorRegistration
         string unit,
         ValueRange expectedRange,
         TelemetryPayloadKind payloadKind,
-        TimeSpan? heartbeatInterval = null)
+        TimeSpan? heartbeatInterval = null,
+        ActuatorKind? actuatorKind = null)
     {
         ArgumentNullException.ThrowIfNull(location);
         ArgumentException.ThrowIfNullOrWhiteSpace(unit);
@@ -79,6 +80,7 @@ public sealed record SensorRegistration
         ExpectedRange = expectedRange;
         PayloadKind = payloadKind;
         HeartbeatInterval = heartbeatInterval;
+        ActuatorKind = category == SensorCategory.Actuator ? actuatorKind : null;
     }
 
     /// <summary>The device's MAC, uppercase and colon-separated. The unique key for a sensor.</summary>
@@ -98,6 +100,14 @@ public sealed record SensorRegistration
 
     /// <summary>The shape of reading it emits.</summary>
     public TelemetryPayloadKind PayloadKind { get; }
+
+    /// <summary>What kind of actuator this is, or null for anything that is not one (or predates the field).</summary>
+    /// <remarks>
+    /// Null on an actuator means it was registered without saying, as every Part 1 actuator was. It still
+    /// reports telemetry normally; it just cannot be sent commands, because there is no way to know which
+    /// ones it understands.
+    /// </remarks>
+    public ActuatorKind? ActuatorKind { get; }
 
     /// <summary>How often the device is expected to report, or null for the gateway default.</summary>
     /// <remarks>

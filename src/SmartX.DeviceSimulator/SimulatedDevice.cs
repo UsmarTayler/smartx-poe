@@ -3,6 +3,13 @@ using SmartX.Shared;
 
 namespace SmartX.DeviceSimulator;
 
+/// <summary>What a device did with a command.</summary>
+/// <param name="Success">Whether it applied it.</param>
+/// <param name="ResultingValue">The actuator's state afterwards.</param>
+/// <param name="Reason">Why it could not, when it could not.</param>
+/// <param name="WasRepeat">True when the command had been applied before and was not applied again.</param>
+internal sealed record CommandOutcome(bool Success, double ResultingValue, string? Reason, bool WasRepeat);
+
 /// <summary>
 /// One simulated ESP32: what it is registered as, how it is behaving, and when it next reports.
 /// </summary>
@@ -35,7 +42,21 @@ internal sealed class SimulatedDevice(DemoDevice definition)
     private const double CriticalChance = 0.15;
 
     private double _position = 0.5;
-    private bool _engaged;
+
+    // An actuator's state, in the terms commands use: 1 for on or open, 0 for off or closed, a dimmer's level.
+    // It only changes when the device applies a command. A pump does not decide to switch itself on.
+    private double _actuatorValue = InitialActuatorValue(definition.Registration.ActuatorKind);
+
+    // The ids of commands this device has already applied, with what came of them. A device can be handed
+    // the same command twice, and the standard answer is idempotency: applying it again would run a pump twice
+    // or toggle a relay back, so a repeat gets the first answer and changes nothing. Bounded, oldest first
+    // out, because a device that has been running for a year cannot remember every id it ever saw.
+    private const int RememberedCommands = 512;
+    private readonly Dictionary<Guid, CommandOutcome> _applied = [];
+    private readonly Queue<Guid> _appliedOrder = new();
+
+    /// <summary>Acknowledgements the device owes the gateway, until the gateway has taken them.</summary>
+    public Dictionary<Guid, CommandAckRequest> PendingAcks { get; } = [];
 
     public SensorRegistrationRequest Registration { get; } = definition.Registration;
 
@@ -63,33 +84,104 @@ internal sealed class SimulatedDevice(DemoDevice definition)
     public TimeSpan Cadence => Interval * 0.8;
 
     /// <summary>Whether this device can run a scenario at all.</summary>
-    /// <remarks>Drift and Spike need a numeric range, and a state device does not have one.</remarks>
+    /// <remarks>
+    /// Drift, Spike and Critical are about a measurement leaving its range. An actuator does not measure
+    /// anything: its state is whatever it was last commanded to, so there is nothing to drift.
+    /// </remarks>
     public bool Supports(SimulationScenario scenario) =>
-        Registration.PayloadKind != TelemetryPayloadKind.State
-        || scenario is not (SimulationScenario.Drift or SimulationScenario.Spike or SimulationScenario.Critical);
+        Registration.Category != SensorCategory.Actuator
+        || scenario is SimulationScenario.Nominal or SimulationScenario.TypeViolation or SimulationScenario.Disconnect;
 
     /// <summary>Applies a desired state fetched from the gateway.</summary>
     /// <returns><see langword="false"/> when the instruction is one this device cannot carry out.</returns>
     public bool TryApply(DeviceDesiredState desired, DateTimeOffset now)
     {
+        // Commands can arrive with no scenario ever having been set. There is nothing to apply then.
+        if (desired.Scenario is not { } wanted)
+        {
+            return true;
+        }
+
         AppliedVersion = desired.Version;
 
-        if (!Supports(desired.Scenario))
+        if (!Supports(wanted))
         {
             return false;
         }
 
-        if (Scenario == SimulationScenario.Disconnect && desired.Scenario != SimulationScenario.Disconnect)
+        if (Scenario == SimulationScenario.Disconnect && wanted != SimulationScenario.Disconnect)
         {
             // Reconnecting: report straight away rather than waiting out an interval from a schedule that
             // stopped minutes ago.
             NextDue = now;
         }
 
-        Scenario = desired.Scenario;
+        Scenario = wanted;
         _position = 0.5;
 
         return true;
+    }
+
+    /// <summary>What an actuator is doing before anyone has commanded it.</summary>
+    private static double InitialActuatorValue(ActuatorKind? kind) => kind switch
+    {
+        ActuatorKind.Valve => 1,
+        ActuatorKind.Dimmer => 50,
+        _ => 0,
+    };
+
+    /// <summary>The actuator's current state, for tests and for the fleet's own logging.</summary>
+    public double ActuatorValue => _actuatorValue;
+
+    /// <summary>
+    /// Applies a command fetched from the gateway, once.
+    /// </summary>
+    /// <remarks>
+    /// <b>At-least-once delivery, made safe by idempotency.</b> The gateway hands each command over once, but
+    /// networks repeat things and a real gateway might too. A command whose id has been applied before is not
+    /// applied again: the device returns what it said the first time, flagged as a repeat, so the gateway
+    /// still gets its acknowledgement if the first was lost.
+    /// </remarks>
+    public CommandOutcome ApplyCommand(Command command, double failureRate, Random random)
+    {
+        if (_applied.TryGetValue(command.Id, out var earlier))
+        {
+            return earlier with { WasRepeat = true };
+        }
+
+        CommandOutcome outcome;
+
+        if (Registration.ActuatorKind != command.Kind)
+        {
+            outcome = new CommandOutcome(false, _actuatorValue, $"This device is a {Registration.ActuatorKind}, and cannot do {command.Action}.", false);
+        }
+        else if (failureRate > 0 && random.NextDouble() < failureRate)
+        {
+            // A valve that will not turn, a relay that does not click. Reported honestly, because a device
+            // that cannot do what it was told says so.
+            outcome = new CommandOutcome(false, _actuatorValue, "The actuator did not respond.", false);
+        }
+        else
+        {
+            _actuatorValue = command.TargetValue;
+            outcome = new CommandOutcome(true, _actuatorValue, null, false);
+        }
+
+        Remember(command.Id, outcome);
+        PendingAcks[command.Id] = new CommandAckRequest(outcome.Success, outcome.ResultingValue, outcome.Reason);
+
+        return outcome;
+    }
+
+    private void Remember(Guid id, CommandOutcome outcome)
+    {
+        _applied[id] = outcome;
+        _appliedOrder.Enqueue(id);
+
+        while (_appliedOrder.Count > RememberedCommands)
+        {
+            _applied.Remove(_appliedOrder.Dequeue());
+        }
     }
 
     /// <summary>Sets the scenario locally, for the fleet's own start-up overrides.</summary>
@@ -108,15 +200,15 @@ internal sealed class SimulatedDevice(DemoDevice definition)
             return WrongType(random);
         }
 
-        if (Registration.PayloadKind == TelemetryPayloadKind.State)
+        // An actuator reports the state it is in, which only a command changes. Its next report after a
+        // command is how the gateway learns the command took effect.
+        if (Registration.Category == SensorCategory.Actuator)
         {
-            // Actuators change state now and then rather than on every report.
-            if (random.NextDouble() < 0.1)
-            {
-                _engaged = !_engaged;
-            }
-
-            return JsonSerializer.SerializeToElement(_engaged);
+            return Registration.PayloadKind == TelemetryPayloadKind.State
+                ? JsonSerializer.SerializeToElement(_actuatorValue >= 0.5)
+                : Registration.PayloadKind == TelemetryPayloadKind.Integer
+                    ? JsonSerializer.SerializeToElement((int)Math.Round(_actuatorValue))
+                    : JsonSerializer.SerializeToElement((float)_actuatorValue);
         }
 
         double position;
