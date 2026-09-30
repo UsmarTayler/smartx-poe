@@ -49,6 +49,10 @@ internal sealed class DeviceFleet(
     /// <summary>The fleet as it stands, so a test can inspect what registration produced.</summary>
     internal IReadOnlyList<SimulatedDevice> DevicesForTest => _devices;
 
+    /// <summary>One device's turn of the loop, so a test can drive it with a time of its choosing.</summary>
+    internal Task TickDeviceForTestAsync(SimulatedDevice device, DateTimeOffset now, CancellationToken cancellationToken) =>
+        TickDeviceAsync(device, now, cancellationToken);
+
     /// <summary>Registration on its own, so a test can run it without starting the reporting loop.</summary>
     internal Task<bool> RegisterFleetForTestAsync() => RegisterFleetAsync(CancellationToken.None);
 
@@ -211,7 +215,7 @@ internal sealed class DeviceFleet(
         }
     }
 
-    private async Task TickDeviceAsync(SimulatedDevice device, DateTimeOffset now, CancellationToken cancellationToken)
+    internal async Task TickDeviceAsync(SimulatedDevice device, DateTimeOffset now, CancellationToken cancellationToken)
     {
         if (device.NextShadowPoll <= now)
         {
@@ -273,11 +277,11 @@ internal sealed class DeviceFleet(
                     break;
 
                 case SendOutcome.NotRegistered:
-                    // The gateway restarted and lost its device list. Register again and send this reading
-                    // once more; if that does not work, the next tick will try the whole thing again.
-                    logger.LogWarning("The gateway does not know {Mac}. Registering it again.", device.MacAddress);
-
-                    if (!await gateway.RegisterAsync(device.Registration, cancellationToken))
+                    // A 404 for one device means the gateway restarted, and a restart forgets every device
+                    // at once. Re-registering only this one would leave the silent ones (a Disconnect device
+                    // never sends, so it never hears a 404) unregistered for good. So the first 404 the
+                    // fleet sees re-registers the whole fleet, then this reading is sent again.
+                    if (!await ReRegisterFleetAsync(device, cancellationToken))
                     {
                         return false;
                     }
@@ -290,6 +294,51 @@ internal sealed class DeviceFleet(
         }
 
         return false;
+    }
+
+    private readonly SemaphoreSlim _reRegistration = new(1, 1);
+    private DateTimeOffset _lastFleetRegistration = DateTimeOffset.MinValue;
+
+    /// <summary>Registers every device again after the gateway has forgotten them.</summary>
+    /// <remarks>
+    /// Forty devices sending in the same tick all get their 404 together, and forty full re-registrations
+    /// would be forty times the work for one event. The first caller does it, holding the semaphore; the rest
+    /// wait for it, see that a registration finished moments ago, and go straight on to resend.
+    /// </remarks>
+    private async Task<bool> ReRegisterFleetAsync(SimulatedDevice reporter, CancellationToken cancellationToken)
+    {
+        var asked = time.GetUtcNow();
+
+        await _reRegistration.WaitAsync(cancellationToken);
+
+        try
+        {
+            if (_lastFleetRegistration >= asked)
+            {
+                return true;
+            }
+
+            logger.LogWarning(
+                "The gateway does not know {Mac}, which means it restarted. Registering all {Count} devices again.",
+                reporter.MacAddress,
+                _devices.Count);
+
+            foreach (var device in _devices.ToArray())
+            {
+                if (!await gateway.RegisterAsync(device.Registration, cancellationToken))
+                {
+                    return false;
+                }
+            }
+
+            _lastFleetRegistration = time.GetUtcNow();
+
+            return true;
+        }
+        finally
+        {
+            _reRegistration.Release();
+        }
     }
 
     /// <summary>Applies whatever an operator has asked of this device since its last poll.</summary>

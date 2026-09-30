@@ -330,36 +330,92 @@ public class DeviceSimulatorTests
     }
 
     [Fact]
-    public async Task A_device_registers_itself_again_when_the_gateway_restarts_and_forgets_it()
+    public async Task A_gateway_restart_is_recovered_from_by_registering_the_whole_fleet_including_silent_devices()
     {
-        // The gateway keeps its device list in memory, so a restart wipes it while the fleet is still
-        // running. Swapping a fresh, empty API in under a running fleet is exactly that.
+        // The gateway keeps its device list in memory, so a restart wipes it while the fleet is still running.
+        // Swapping a fresh, empty API in under a running fleet is exactly that. Thirteen devices reach the
+        // Disconnect device at index 10, which never sends a reading and so can never hear a 404 itself.
         using var before = DemoApi();
         using var after = DemoApi();
         var swappable = new SwappableHandler(before.CreateClient());
         var gateway = Gateway(new HttpClient(swappable) { BaseAddress = before.CreateClient().BaseAddress });
 
-        var definition = DemoDevices.All[0];
         var fleet = new DeviceFleet(
             gateway,
-            Microsoft.Extensions.Options.Options.Create(new SimulatorOptions()),
+            Microsoft.Extensions.Options.Options.Create(new SimulatorOptions { DeviceCount = 13 }),
             TimeProvider.System,
             new NoopHostLifetime(),
             NullLogger<DeviceFleet>.Instance);
-        var device = new SimulatedDevice(definition);
-        var reading = device.NextReading(SimulationScenario.Nominal, new Random(1));
 
-        await gateway.RegisterAsync(definition.Registration, CancellationToken.None);
-        Assert.True(await fleet.SendWithBackpressureAsync(device, reading, timestamp: null, CancellationToken.None));
+        await fleet.RegisterFleetForTestAsync();
+
+        var silent = fleet.DevicesForTest.Single(device => device.Scenario == SimulationScenario.Disconnect);
+        var reporter = fleet.DevicesForTest[0];
+        var reading = reporter.NextReading(SimulationScenario.Nominal, new Random(1));
+
+        Assert.True(await fleet.SendWithBackpressureAsync(reporter, reading, timestamp: null, CancellationToken.None));
 
         // The gateway "restarts": same address, no memory of anything.
         swappable.Inner = after.CreateClient();
         Assert.Empty((await swappable.Inner.GetFromJsonAsync<List<SensorRegistration>>("/api/sensors"))!);
 
-        Assert.True(await fleet.SendWithBackpressureAsync(device, reading, timestamp: null, CancellationToken.None));
+        // One reporting device hears the 404, and that is enough to bring every device back.
+        Assert.True(await fleet.SendWithBackpressureAsync(reporter, reading, timestamp: null, CancellationToken.None));
 
-        var registered = await swappable.Inner.GetFromJsonAsync<List<SensorRegistration>>("/api/sensors");
-        Assert.Equal(definition.MacAddress, Assert.Single(registered!).MacAddress);
+        var registered = (await swappable.Inner.GetFromJsonAsync<List<SensorRegistration>>("/api/sensors"))!
+            .Select(sensor => sensor.MacAddress)
+            .ToHashSet();
+
+        Assert.Equal(13, registered.Count);
+        Assert.Contains(silent.MacAddress, registered);
+    }
+
+    [Fact]
+    public async Task Many_devices_hearing_the_same_404_cause_one_re_registration_not_one_each()
+    {
+        using var before = DemoApi();
+        using var after = DemoApi();
+        var swappable = new SwappableHandler(before.CreateClient());
+        var counter = new CountingHandler(swappable);
+        var gateway = Gateway(new HttpClient(counter) { BaseAddress = before.CreateClient().BaseAddress });
+
+        var fleet = new DeviceFleet(
+            gateway,
+            Microsoft.Extensions.Options.Options.Create(new SimulatorOptions { DeviceCount = 13 }),
+            TimeProvider.System,
+            new NoopHostLifetime(),
+            NullLogger<DeviceFleet>.Instance);
+
+        await fleet.RegisterFleetForTestAsync();
+        swappable.Inner = after.CreateClient();
+        counter.Registrations = 0;
+
+        var random = new Random(1);
+        var senders = fleet.DevicesForTest
+            .Where(device => device.Scenario != SimulationScenario.Disconnect)
+            .Select(device => fleet.SendWithBackpressureAsync(
+                device, device.NextReading(SimulationScenario.Nominal, random), timestamp: null, CancellationToken.None));
+
+        await Task.WhenAll(senders);
+
+        // Thirteen registrations in one sweep. Twelve devices each doing their own sweep would be 156.
+        Assert.Equal(13, counter.Registrations);
+    }
+
+    /// <summary>Counts registrations passing through, and forwards everything.</summary>
+    private sealed class CountingHandler(HttpMessageHandler inner) : DelegatingHandler(inner)
+    {
+        public int Registrations;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/api/sensors")
+            {
+                Interlocked.Increment(ref Registrations);
+            }
+
+            return base.SendAsync(request, cancellationToken);
+        }
     }
 
     /// <summary>Forwards to whichever client it currently holds, so a test can replace the gateway mid-run.</summary>
