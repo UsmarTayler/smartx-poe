@@ -1,3 +1,4 @@
+using SmartX.Api.Commands;
 using SmartX.Api.Storage;
 using SmartX.Api.Trust;
 using SmartX.Shared;
@@ -24,6 +25,7 @@ internal sealed class TelemetryProcessor(
     TelemetryIngestionQueue queue,
     ITelemetryStore store,
     ITrustEngine trust,
+    IActuatorStateStore actuators,
     ILogger<TelemetryProcessor> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -58,6 +60,14 @@ internal sealed class TelemetryProcessor(
         }
     }
 
+    /// <summary>An actuator's state from a packet: 1 or 0 for a state, the level for a number.</summary>
+    private static double? ObservedValue(ITelemetryPacket packet) => packet switch
+    {
+        StatePacket state => state.Value ? 1 : 0,
+        _ when packet.TryGetNumericValue(out var value) => value,
+        _ => null,
+    };
+
     /// <summary>Retains one reading and scores it. Internal so a test can drive it without a host.</summary>
     internal async Task ProcessAsync(QueuedReading reading, CancellationToken cancellationToken)
     {
@@ -66,6 +76,13 @@ internal sealed class TelemetryProcessor(
         // Stamped with the moment the reading arrived, not the moment it left the queue, so a backlog cannot
         // distort a node's trust history.
         trust.Record(reading.Packet.NodeId, TrustOutcome.Success, reading.Packet.Timestamp);
+
+        // An actuator's own telemetry is how the gateway learns what state it is in, and a command records
+        // that state as the one it replaced. Read here, in the worker, so it is the state as stored.
+        if (reading.Packet.Category == SensorCategory.Actuator && ObservedValue(reading.Packet) is { } value)
+        {
+            actuators.Observe(reading.Packet.NodeId, value, reading.Packet.Timestamp, ObservationSource.Telemetry);
+        }
 
         // Counted as processed only now, with everything done, so the stats never claim work that is still
         // in flight.

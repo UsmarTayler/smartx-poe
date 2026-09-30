@@ -229,6 +229,8 @@ internal sealed class DeviceFleet(
             await ApplyDesiredStateAsync(device, now, cancellationToken);
         }
 
+        await FlushAcknowledgementsAsync(device, cancellationToken);
+
         if (device.Scenario == SimulationScenario.Disconnect || device.NextDue > now)
         {
             return;
@@ -347,12 +349,56 @@ internal sealed class DeviceFleet(
         }
     }
 
+    /// <summary>Tells the gateway what came of the commands this device has applied.</summary>
+    /// <remarks>
+    /// An acknowledgement is kept until the gateway takes it, so a lost request or a brief outage does not
+    /// leave a command "delivered" until it times out. A silent device sends nothing at all, acknowledgements
+    /// included: it is switched off, and stays owing them until it is switched back on.
+    /// </remarks>
+    private async Task FlushAcknowledgementsAsync(SimulatedDevice device, CancellationToken cancellationToken)
+    {
+        if (device.PendingAcks.Count == 0 || device.Scenario == SimulationScenario.Disconnect)
+        {
+            return;
+        }
+
+        foreach (var (commandId, acknowledgement) in device.PendingAcks.ToArray())
+        {
+            var delivery = await gateway.AcknowledgeAsync(commandId, acknowledgement, cancellationToken);
+
+            if (delivery != AckDelivery.Retry)
+            {
+                // Taken, or refused for good. Either way there is nothing left to send for this command.
+                device.PendingAcks.Remove(commandId);
+            }
+        }
+    }
+
     /// <summary>Applies whatever an operator has asked of this device since its last poll.</summary>
     private async Task ApplyDesiredStateAsync(SimulatedDevice device, DateTimeOffset now, CancellationToken cancellationToken)
     {
-        var desired = await gateway.GetDesiredStateAsync(device.MacAddress, cancellationToken);
+        // A device the harness has switched off checks its scenario but collects nothing: it is not there to
+        // receive commands, and they must stay pending and time out like they would for hardware that is off.
+        var desired = await gateway.GetDesiredStateAsync(
+            device.MacAddress, cancellationToken, deliverCommands: device.Scenario != SimulationScenario.Disconnect);
 
-        if (desired is null || desired.Version == device.AppliedVersion)
+        if (desired is not null)
+        {
+            foreach (var command in desired.CommandList)
+            {
+                var outcome = device.ApplyCommand(command, _options.CommandFailureRate, _random);
+
+                logger.LogInformation(
+                    "{Mac} {Result} {Action}{Repeat} (command {Command}).",
+                    device.MacAddress,
+                    outcome.Success ? "applied" : "could not apply",
+                    command.Action,
+                    outcome.WasRepeat ? ", a repeat it already had" : string.Empty,
+                    command.Id);
+            }
+        }
+
+        if (desired is null || desired.Scenario is null || desired.Version == device.AppliedVersion)
         {
             return;
         }

@@ -24,6 +24,19 @@ internal enum SendOutcome
     Unreachable,
 }
 
+/// <summary>How the gateway took an acknowledgement.</summary>
+internal enum AckDelivery
+{
+    /// <summary>Taken, or already known. Nothing more to send.</summary>
+    Done,
+
+    /// <summary>The gateway will never accept it: it does not know the command, or the command has moved on.</summary>
+    Rejected,
+
+    /// <summary>The gateway could not be reached. Try again later.</summary>
+    Retry,
+}
+
 /// <summary>
 /// The only way this program talks to the gateway: over HTTP, exactly as a real device would.
 /// </summary>
@@ -109,6 +122,27 @@ internal sealed class GatewayClient(HttpClient http, ILogger<GatewayClient> logg
         }
     }
 
+    /// <summary>Tells the gateway what came of a command.</summary>
+    /// <remarks>
+    /// Safe to repeat: the gateway answers the same acknowledgement for the same command with the same result,
+    /// so a device that never saw the reply simply sends it again.
+    /// </remarks>
+    public async Task<AckDelivery> AcknowledgeAsync(Guid commandId, CommandAckRequest acknowledgement, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var response = await http.PostAsJsonAsync($"api/commands/{commandId}/ack", acknowledgement, cancellationToken);
+
+            return response.IsSuccessStatusCode ? AckDelivery.Done
+                : response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Conflict ? AckDelivery.Rejected
+                : AckDelivery.Retry;
+        }
+        catch (Exception exception) when (IsTransient(exception, cancellationToken))
+        {
+            return AckDelivery.Retry;
+        }
+    }
+
     /// <summary>Is this the network being unavailable, as opposed to the program being asked to stop?</summary>
     /// <remarks>
     /// A refused connection throws <see cref="HttpRequestException"/>. A connection that is accepted but never
@@ -166,14 +200,24 @@ internal sealed class GatewayClient(HttpClient http, ILogger<GatewayClient> logg
         }
     }
 
-    /// <summary>Asks the gateway what this device should be doing.</summary>
+    /// <summary>Checks in: asks the gateway what this device should be doing, and what commands are waiting.</summary>
+    /// <param name="macAddress">The device.</param>
+    /// <param name="deliverCommands">
+    /// True for a device that is there to receive commands. False for a device the harness has switched off,
+    /// which must not collect anything: its commands stay pending, and time out, exactly as they would for
+    /// hardware that is off. The desired scenario is still read, so it can be told to come back.
+    /// </param>
     /// <returns><see langword="null"/> when nothing has been asked of it, which means "carry on".</returns>
-    public async Task<DeviceDesiredState?> GetDesiredStateAsync(string macAddress, CancellationToken cancellationToken)
+    public async Task<DeviceDesiredState?> GetDesiredStateAsync(
+        string macAddress,
+        CancellationToken cancellationToken,
+        bool deliverCommands = true)
     {
         try
         {
             using var response = await http.GetAsync(
-                $"api/devices/{Uri.EscapeDataString(macAddress)}/desired", cancellationToken);
+                $"api/devices/{Uri.EscapeDataString(macAddress)}/desired?deliver={(deliverCommands ? "true" : "false")}",
+                cancellationToken);
 
             if (response.StatusCode == HttpStatusCode.NotFound || !response.IsSuccessStatusCode)
             {

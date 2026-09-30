@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using SmartX.Api.Attachments;
+using SmartX.Api.Commands;
 using SmartX.Api.Endpoints;
 using SmartX.Api.Ingestion;
 using SmartX.Api.Storage;
@@ -66,6 +67,24 @@ builder.Services
     .Validate(options => options.RetryAfterSeconds > 0, "Ingestion:RetryAfterSeconds must be positive.")
     .ValidateOnStart();
 
+// Commands. A command is an instruction to a device that may not receive it, so it has a lifecycle, a timeout
+// and an undo stack. See CommandService. The log sits behind an interface because it is about to move into a
+// sorted history store.
+builder.Services
+    .AddOptions<CommandOptions>()
+    .Bind(builder.Configuration.GetSection(CommandOptions.SectionName))
+    .Validate(options => options.PendingTimeout > TimeSpan.Zero, "Commands:PendingTimeout must be positive.")
+    .Validate(options => options.DeliveredTimeout > TimeSpan.Zero, "Commands:DeliveredTimeout must be positive.")
+    .Validate(options => options.SweepInterval > TimeSpan.Zero, "Commands:SweepInterval must be positive.")
+    .Validate(options => options.MaxUndoDepth >= 1, "Commands:MaxUndoDepth must be at least 1.")
+    .ValidateOnStart();
+
+builder.Services.AddSingleton<ICommandStore, InMemoryCommandStore>();
+builder.Services.AddSingleton<ICommandLog, InMemoryCommandLog>();
+builder.Services.AddSingleton<IActuatorStateStore, InMemoryActuatorStateStore>();
+builder.Services.AddSingleton<CommandService>();
+builder.Services.AddHostedService<CommandTimeoutMonitor>();
+
 builder.Services.AddSingleton<TelemetryIngestionQueue>();
 builder.Services.AddSingleton<CriticalClassifier>();
 builder.Services.AddHostedService<TelemetryProcessor>();
@@ -114,6 +133,7 @@ api.MapTrustEndpoints();
 api.MapAttachmentEndpoints();
 api.MapSimulationEndpoints();
 api.MapPipelineEndpoints();
+api.MapCommandEndpoints();
 
 app.Run();
 
