@@ -15,7 +15,8 @@ The brief has three pillars. Parts 1 and 2 deliver the first and lay the ground 
 
 1. **Sensor Data Ingestion and Telemetry**: built.
 2. **Real-Time Command Stream and History**: in progress. Part 2 adds a separate device simulator that
-   reports over HTTP, and two ingestion queues, a FIFO lane and a priority lane for critical alerts.
+   reports over HTTP, two ingestion queues (a FIFO lane and a priority lane for critical alerts), and commands
+   to actuators with an undo stack.
 3. **Network Topology and Mesh Routing**: later part.
 
 ## Contents
@@ -26,6 +27,7 @@ The brief has three pillars. Parts 1 and 2 deliver the first and lay the ground 
 - [Running with Docker](#running-with-docker)
 - [The device simulator](#the-device-simulator)
 - [Ingestion queues](#ingestion-queues)
+- [Commands and undo](#commands-and-undo)
 - [Feature walkthrough](#feature-walkthrough)
 - [Where the assessed concepts live](#where-the-assessed-concepts-live)
 - [Configuration reference](#configuration-reference)
@@ -137,7 +139,7 @@ curl http://localhost:5266/api/health
 That should return `{"status":"ok"}`.
 
 The API starts empty, with the brief's four-zone hierarchy. To fill it with the larger demo deployment
-and 40 simulated devices, start it with the demo zones, then run the [device simulator](#the-device-simulator)
+and 48 simulated devices, start it with the demo zones, then run the [device simulator](#the-device-simulator)
 in a third terminal (step 6):
 
 ```bash
@@ -160,7 +162,7 @@ The API must be running with `--Zones:Hierarchy=Demo`, as in step 4.
 dotnet run --project src/SmartX.DeviceSimulator
 ```
 
-It registers 40 devices, posts about ten minutes of history so the dashboard is not empty, and keeps them
+It registers 48 devices, posts about ten minutes of history so the dashboard is not empty, and keeps them
 reporting. Start it before the API if you like: it waits and retries until the API answers.
 
 ### Ports
@@ -267,14 +269,14 @@ has to hit the API like a device would.
    normally until its scenario began a few minutes ago and follows the scenario after that, which is what
    gives each sparkline a bend.
 4. **Reports** at each device's registered interval, a little inside it (at 80%) so a late tick can't be
-   what makes a healthy device miss its heartbeat, and with jitter so forty devices don't all report in the
+   what makes a healthy device miss its heartbeat, and with jitter so forty-eight devices don't all report in the
    same millisecond.
 5. **Polls for its desired state** every five seconds, and applies any change.
 6. **Re-registers if the API forgets it.** The API keeps its device list in memory, so restarting it while the
    simulator runs empties the list. A device that gets a `404` on a report registers itself again and resends,
    so the fleet recovers within a few seconds without being restarted.
 
-The 40 devices and their zones live in the demo deployment: two facilities, 16 zones, three levels deep
+The 48 devices and their zones live in the demo deployment: two facilities, 16 zones, three levels deep
 (Facility → Zone → Sub-Zone), with constraints at every level. The zones stay in the API, selected with
 `Zones:Hierarchy=Demo`, because a deployment hierarchy is gateway configuration and not something a device
 carries. The devices come only from the simulator.
@@ -283,15 +285,19 @@ carries. The devices come only from the simulator.
 
 | Scenario | Behaviour | What it exercises | Demo fleet |
 | --- | --- | --- | --- |
-| `Nominal` | In-range readings at the registered interval | Successes | 22 devices |
+| `Nominal` | In-range readings at the registered interval | Successes | 30 devices |
 | `Drift` | Readings walk toward the top of the range, then hover across it | Range violations, gradually | 4 |
 | `Spike` | Mostly normal, with occasional values well outside the range | Range violations, intermittently | 4 |
 | `TypeViolation` | Mostly normal, with occasional wrong-typed payloads (`"ERR"`, `21.5` to an integer meter, `1` instead of `true`) | Schema failures | 4 |
 | `Critical` | Occasional extreme but valid readings: a power spike or a moisture crash | The priority queue | 2 |
 | `Disconnect` | Stops reporting entirely | Missed heartbeats | 4 |
 
-`Drift`, `Spike` and `Critical` need a numeric range, so a `State` device (a switch or a door contact) can
-only run `Nominal`, `TypeViolation` or `Disconnect`.
+`Drift`, `Spike` and `Critical` are about a measurement leaving its range. An actuator measures nothing (its
+state is whatever it was last commanded to), so an actuator can only run `Nominal`, `TypeViolation` or
+`Disconnect`.
+
+Eighteen of the 48 devices are actuators (four pumps, five relays, five valves and four dimmers), spread across the
+zones so a zone-wide command has something to reach. See [Commands and undo](#commands-and-undo).
 
 `Critical` differs from the others in one respect worth noticing. The device does not label its reading as an
 alert. It sends a real value near the edge of its range, which passes validation, and the API decides from
@@ -444,6 +450,163 @@ maximum wait per lane, and how many readings were refused with `503`. Critical i
 curl http://localhost:5266/api/pipeline/stats
 ```
 
+## Commands and undo
+
+An IoT command is not a value flipped in the API's memory. It is an instruction sent to a device that may or may
+not receive it, may or may not apply it, and may or may not say so. So a command has a life.
+
+### Actuators
+
+Only actuators take commands, and registration records what kind each one is, so a valve command can't be sent
+to a relay.
+
+| Kind | State | Commands |
+| --- | --- | --- |
+| `Pump` | on / off | `PumpOn`, `PumpOff` |
+| `Relay` | on / off | `RelayOn`, `RelayOff` |
+| `Valve` | open / closed | `ValveOpen`, `ValveClose` |
+| `Dimmer` | a level, 0 to 100 | `SetLevel` with a `level` |
+
+`actuatorKind` is an optional field on `POST /api/sensors`, and ignored unless the category is `Actuator`.
+Part 1 requests never carried it and still work: an actuator registered without one reports telemetry as
+before, but a command aimed at it is refused with that reason. The registration form asks for a kind only when
+Actuator is chosen. A mismatched action (`PumpOn` to a valve) is a `400` that says why.
+
+### The lifecycle
+
+```text
+Pending ──▶ Delivered ──▶ Acknowledged
+   │            │
+   │            └──▶ Failed
+   ├──▶ Cancelled
+   └──▶ TimedOut            (a Delivered command can time out too)
+```
+
+| State | Meaning |
+| --- | --- |
+| `Pending` | Issued, and not yet collected by the device. |
+| `Delivered` | The device has fetched it. The API never sends it again. |
+| `Acknowledged` | The device confirmed it applied the command. |
+| `Failed` | The device reported that it couldn't apply it. |
+| `TimedOut` | Nobody collected or confirmed it within the window. |
+| `Cancelled` | Withdrawn before delivery. |
+
+**Issuing** answers `202 Accepted`: the API has taken responsibility, and nothing has happened to the device yet.
+
+**Delivery uses the shadow channel.** Devices already poll `GET /api/devices/{mac}/desired`, and its response now
+carries pending commands next to the desired scenario. A real ESP32 makes one check-in call, not two. Fetching a
+command moves it to `Delivered`. The device applies it, then `POST /api/commands/{id}/ack` with success or
+failure and the resulting state. Its next telemetry reports the new state, and the API keeps the latest observed
+state of every actuator, because a command records the state it is about to replace.
+
+**Timeouts.** A background service moves stale `Pending` and `Delivered` commands to `TimedOut`, after
+`Commands:PendingTimeout` and `Commands:DeliveredTimeout` (30 seconds each). That gives a demo moment: send a
+command to a `Disconnect` device and watch it time out, because nothing is there to collect it.
+
+### Delivery can repeat, and that is handled twice
+
+A device can poll twice before its acknowledgement lands, and networks repeat messages. This is *at-least-once
+delivery made safe by idempotency*, the standard IoT name for the problem:
+
+- **The API never re-sends a delivered command.** Collecting moves it out of the pending set under a lock, so
+  two check-ins arriving together can't both be given it.
+- **The device remembers the command ids it has applied.** A repeat is not applied again; the device returns
+  what it said the first time. This matters most for an out-of-order repeat: close, then open, then a duplicate
+  of the close must not shut the valve again.
+- **Acknowledgements are safe to repeat too.** The API answers the same acknowledgement with the same result, and
+  the device keeps an acknowledgement until the API has taken it.
+
+A command that was delivered but whose response was lost is never re-sent, so it ends as `TimedOut` instead of
+staying "delivered" for ever. That is a deliberate trade-off, and why the delivered timeout exists.
+
+### Undo restores the previous state. It does not do the opposite.
+
+The obvious design gives every command an opposite: `ValveOpen` is undone by `ValveClose`. That is wrong. If a
+valve is already open and someone sends `ValveOpen`, the "opposite" would *close* it, a state it was never in.
+
+So every command records **the state it replaced**, taken from the actuator's latest observed state when the
+command is issued, and undo returns to that recorded state. Open an already-open valve, undo, and it stays
+open. For a dimmer the recorded state is the previous level. If a command is issued while another is still in
+flight, it records that command's target as its previous state, so two quick commands undo in the right order.
+If the previous state was never observed, the command says so, and undoing it is refused rather than guessed.
+
+Undo pops the top of a `Stack<T>` and acts according to how far that command got:
+
+| State of the popped command | Undo does |
+| --- | --- |
+| `Pending` | Cancels it. Nothing reached the device. |
+| `Delivered` | Issues a restore command queued behind it. It can't be recalled. |
+| `Acknowledged` | Issues a restore command to the recorded previous state. |
+| `TimedOut` / `Failed` | **Refuses.** The device's real state is unknown, and "restoring" an unknown state could do harm. |
+
+Cases beyond the table: a `Delivered` or `Acknowledged` command whose previous state was never observed is
+refused too; a command already `Cancelled` reports "nothing to undo"; and a `Pending` command that a device
+collects between being read and being cancelled is handled as `Delivered`, because the cancel is a
+compare-and-swap that fails if the state has moved.
+
+A **restore command** is an ordinary command with a `revertsCommandId` link. It is *not* pushed onto the undo
+stack, so undo can't undo itself and bounce an actuator back and forth for ever. A refused entry is still
+removed from the stack, because offering it again would only repeat the refusal and block the actions beneath it.
+
+**Depth.** The stack is bounded at `Commands:MaxUndoDepth` (20). Undo means "return to the state recorded when
+the command was issued", and that record gets staler every minute: after an hour the device may have been
+commanded, failed over or replaced, and restoring an hour-old state can do harm. Undo is for "I just did the
+wrong thing". Beyond the last few actions, issue an explicit command after looking at the device.
+`Stack<T>` can only drop its newest entry, so dropping the oldest means taking everything off and putting all
+but one back. That is O(n), which at twenty is nothing; a deque would be the right structure for a much larger
+bound. The stack is guarded by a lock rather than being a `ConcurrentStack<T>`, because the operations are
+compound (pop, then act; push, then trim) and a lock makes each one atomic in a single place.
+
+### Zone-wide commands: "shut down all valves"
+
+`POST /api/commands/zone` takes a zone and an action, and fans out to every matching actuator in that zone and
+everywhere beneath it. It finds them with the **same recursive downward walk** Part 1 uses to collect every
+node under a zone, so the recursion is doing a second job: "every valve under Zone 3" has to reach the Chiller
+and Freezer bays two levels down, and the walk already knows how to descend without looping on a malformed
+tree.
+
+The whole fan-out is **one undo entry**. Undo reverts every child to its *own* recorded previous state, so if
+two valves were open and two were already closed, they go back exactly like that.
+
+Partial success is normal in IoT. If three of four valves acknowledge and one times out, the composite is
+`PartiallyApplied`. Undo reverts the three that applied, refuses the one it can't, and the response names it:
+
+```text
+Partly undid: ValveClose on 4 Valve devices under Zone 3 – Cold Store. 3 being restored to their previous state;
+1 refused (B8:27:EB:10:00:2C).
+```
+
+### The command log
+
+Every command is recorded as it happens (issued, delivered, acknowledged, failed, timed out, cancelled,
+reverted) with a timestamp and the **target's trust band at that moment**, not now. Whether a device was
+already faulty when it was commanded is exactly what an operator asks afterwards. The log sits behind an
+interface, because it moves into the sorted history store next, and the pattern analysis after that reads it.
+
+### Trying it
+
+With the API and simulator running (`--Zones:Hierarchy=Demo`), close one valve, then undo it:
+
+```bash
+curl -X POST http://localhost:5266/api/commands -H "Content-Type: application/json" -d "{\"macAddress\":\"B8:27:EB:10:00:2B\",\"action\":\"ValveClose\"}"
+```
+
+```bash
+curl -X POST http://localhost:5266/api/commands/undo
+```
+
+Shut every valve under Zone 3:
+
+```bash
+curl -X POST http://localhost:5266/api/commands/zone -H "Content-Type: application/json" -d "{\"zoneId\":\"zone-3\",\"action\":\"ValveClose\"}"
+```
+
+The **timeout demo**: `B8:27:EB:10:00:20` is a relay that starts silent (`Disconnect`). Send it `RelayOn` and
+read `GET /api/commands` half a minute later: it is `TimedOut`, because nothing was there to collect it. Then
+switch it to `Nominal` with `POST /api/simulation/B8:27:EB:10:00:20/scenario` and send `RelayOn` again: this time
+it is acknowledged. A silent device can always be brought back, because the simulator's *control plane* (polling
+its shadow) is kept separate from what the simulated device is *sending* (telemetry) and keeps running.
+
 ## Feature walkthrough
 
 These steps assume the API and the device simulator are both running, so there is a fleet to look at. Each one also works on an empty API once
@@ -457,7 +620,9 @@ you have registered a sensor or two.
    maximum.
 3. Enter a valid sensor and choose **Register sensor**. It appears in **Registered sensors** straight
    away, and on the trust panel as `Unproven`.
-4. Register the same MAC again. The API returns `409`, and the form says the MAC is already registered.
+4. Choose **Actuator** as the category. An **Actuator kind** field appears, asking for Pump, Relay, Valve or
+   Dimmer, and a mismatch with the payload (a Dimmer with State, say) is flagged as you type.
+5. Register the same MAC again. The API returns `409`, and the form says the MAC is already registered.
 
 ### Zone violations from the recursive validator
 
@@ -518,6 +683,10 @@ Restart the API, or the Docker stack, and the attachments are still there.
 | Jagged arrays | [`TelemetryStagingBuffer.cs`](src/SmartX.Shared/Collections/TelemetryStagingBuffer.cs) | the `T[][] _windows` field, `Stage` and `Drain`; the class comment covers jagged versus rectangular |
 | Custom collection | [`TelemetryRingBuffer.cs`](src/SmartX.Shared/Collections/TelemetryRingBuffer.cs) | `TelemetryRingBuffer<T>`: O(1) `Add` that overwrites the oldest, an indexer, and a struct `Enumerator` so `foreach` allocates nothing |
 | Lists | [`TelemetryStagingBuffer.cs`](src/SmartX.Shared/Collections/TelemetryStagingBuffer.cs), [`TelemetryRingBuffer.cs`](src/SmartX.Shared/Collections/TelemetryRingBuffer.cs) | `Drain` returns a pre-sized `List<T>`, and `ToList` copies a node's history out as a pre-sized list |
+| Stack for undo | [`CommandService.cs`](src/SmartX.Api/Commands/CommandService.cs) | `Stack<UndoEntry> _undo` behind a lock: `Push` (with the bounded-depth trim), `Undo`, and the class comment on why undo restores the previous state instead of doing the opposite |
+| Command lifecycle | [`CommandService.cs`](src/SmartX.Api/Commands/CommandService.cs), [`CommandStore.cs`](src/SmartX.Api/Commands/CommandStore.cs) | states and transitions; `Collect` hands each command over once; `TryTransition` is the compare-and-swap |
+| Recursion, reused | [`CommandService.cs`](src/SmartX.Api/Commands/CommandService.cs) | `IssueForZone` calls the same `NodesBeneath` walk as Part 1 to find every actuator under a zone |
+| Idempotent delivery | [`SimulatedDevice.cs`](src/SmartX.DeviceSimulator/SimulatedDevice.cs) | `ApplyCommand` remembers applied command ids |
 | FIFO queue | [`TelemetryIngestionQueue.cs`](src/SmartX.Api/Ingestion/TelemetryIngestionQueue.cs) | `Queue<QueuedReading> _standard`, with the lock, the `SemaphoreSlim` signal and the bound; the class comment explains the trade-off against `Channel<T>` |
 | Priority queue | [`TelemetryIngestionQueue.cs`](src/SmartX.Api/Ingestion/TelemetryIngestionQueue.cs) | `PriorityQueue<QueuedReading, (int Severity, long Sequence)>`: the composite priority that makes it stable, and `DequeueAsync`'s starvation valve |
 | Classifying at the edge | [`CriticalClassifier.cs`](src/SmartX.Api/Ingestion/CriticalClassifier.cs), [`TelemetryEndpoints.cs`](src/SmartX.Api/Endpoints/TelemetryEndpoints.cs) | `IsCritical` against configured rules; `Enqueue` and `QueueFull` (503 with `Retry-After`) |
@@ -555,6 +724,15 @@ setting.
 | --- | --- | --- |
 | `Zones:Hierarchy` | `Brief` | Which deployment hierarchy the API manages. `Brief` is the four zones from the brief, and what the tests expect. `Demo` is the 16-zone, two-facility hierarchy the simulated fleet is deployed into. |
 
+### API: `Commands`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Commands:PendingTimeout` | `00:00:30` | How long a command may wait for its device to collect it before it becomes `TimedOut`. |
+| `Commands:DeliveredTimeout` | `00:00:30` | How long a delivered command may wait for the device's acknowledgement. |
+| `Commands:SweepInterval` | `00:00:01` | How often the timeout service looks for stale commands. |
+| `Commands:MaxUndoDepth` | `20` | How many operator actions the undo stack remembers. Older ones fall off the bottom. |
+
 ### API: `Ingestion`
 
 | Setting | Default | What it does |
@@ -573,7 +751,7 @@ Bound by `SmartX.DeviceSimulator`, from `src/SmartX.DeviceSimulator/appsettings.
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `Simulator:ApiBaseUrl` | `http://localhost:5266` (`http://api:8080` in Docker) | Where the API is. |
-| `Simulator:DeviceCount` | `40` | How many of the demo devices to run, from the top of the list. |
+| `Simulator:DeviceCount` | `48` | How many of the demo devices to run, from the top of the list. |
 | `Simulator:Mix` | `Demo` | `Demo` gives each device its own scenario, for a spread of bands. `Nominal` starts every device healthy. |
 | `Simulator:Scenarios:<mac>` | none | Starts one device in a named scenario, on top of the mix. A MAC contains colons, which can't be in an environment variable name, so write it with underscores: `Simulator__Scenarios__B8_27_EB_10_00_01=Critical`. |
 | `Simulator:BackfillDuration` | `00:10:00` | How much history is posted on first start. `00:00:00` turns backfill off. |
@@ -581,6 +759,7 @@ Bound by `SmartX.DeviceSimulator`, from `src/SmartX.DeviceSimulator/appsettings.
 | `Simulator:ShadowPollInterval` | `00:00:05` | How often each device asks the API what it should be doing. Also how long a scenario change takes to appear. |
 | `Simulator:TickInterval` | `00:00:00.5` | How often the fleet checks which devices are due to report. Must be well under a fifth of the shortest heartbeat, which is five seconds in the demo fleet. |
 | `Simulator:RandomSeed` | `1729` | Seeds the generated values, so two runs produce the same readings. |
+| `Simulator:CommandFailureRate` | `0` | The chance, from 0 to 1, that an actuator fails to apply a command. Zero by default so demos are predictable; raise it to see `Failed` commands. |
 | `Simulator:StartupTimeout` | `00:05:00` | How long to keep retrying while the API isn't answering before giving up. |
 
 ### API: `Telemetry`
@@ -633,7 +812,7 @@ These go in `.env`:
 | `SMARTX_ATTACHMENT_KEY` | the development key | Becomes `Attachments__EncryptionKey` for the API. Compose refuses to start without it. |
 | `SMARTX_ZONE_HIERARCHY` | `Demo` | Becomes `Zones__Hierarchy` for the API. |
 | `SMARTX_QUEUE_DEPTH` | `10000` | Becomes `Ingestion__MaxQueueDepth`. |
-| `SMARTX_DEVICE_COUNT` | `40` | Becomes `Simulator__DeviceCount`. |
+| `SMARTX_DEVICE_COUNT` | `48` | Becomes `Simulator__DeviceCount`. |
 | `SMARTX_SCENARIO_MIX` | `Demo` | Becomes `Simulator__Mix`: `Demo` or `Nominal`. |
 | `SMARTX_BACKFILL` | `00:10:00` | Becomes `Simulator__BackfillDuration`. |
 | `SMARTX_CLIENT_PORT` | `8080` | Host port for the client. Open this one in the browser. |
@@ -723,9 +902,18 @@ This demonstrates the *encryption mechanism*, not production key management.
 | `GET` | `/api/attachments/{id}` | Download, decrypted on the way out |
 | `GET` | `/api/attachments/{id}/thumbnail` | An image attachment for inline display |
 | `DELETE` | `/api/attachments/{id}` | `204`, or `404` |
+| `POST` | `/api/commands` | `{ "macAddress", "action", "level"? }` issues a command to one actuator: `202`, `400` (action doesn't match the device), `404` |
+| `POST` | `/api/commands/zone` | `{ "zoneId", "action", "level"? }` fans out to every matching actuator beneath a zone as one undoable step: `202`, `400`, `404` |
+| `GET` | `/api/commands` | Commands, newest first. Filter with `?mac=`, `?state=` and `?limit=` |
+| `GET` | `/api/commands/{id}` | One command with its history, or `404` |
+| `POST` | `/api/commands/{id}/ack` | The device's acknowledgement: `200` (also for an exact repeat), `409` (not delivered, or already in another final state), `404` |
+| `GET` | `/api/commands/undo-stack` | The undo stack, most recent first |
+| `POST` | `/api/commands/undo` | Pops and undoes the most recent action. `200` (reverted or partly reverted), `409` (refused, with the reason), `404` (nothing to undo). The body always says exactly what happened |
+| `GET` | `/api/commands/composite/{id}` | A zone-wide action's commands and its status: `InProgress`, `Applied`, `PartiallyApplied` or `NotApplied` |
+| `GET` | `/api/commands/log` | The command log, newest first, with the trust band at each event. Filter with `?mac=` and `?commandId=` |
 | `GET` | `/api/simulation` | The desired state recorded for each device |
 | `POST` | `/api/simulation/{mac}/scenario` | `{ "scenario": "Drift" }` records the desired state: `202`, `400` (not a scenario), `404` |
-| `GET` | `/api/devices/{mac}/desired` | A device's own desired state, polled by the device: `200`, or `404` when nothing has been asked of it |
+| `GET` | `/api/devices/{mac}/desired` | A device's check-in: its desired state **and any commands waiting for it**, each handed over once. `404` when there is nothing. `?deliver=false` reads the scenario without collecting commands, for the simulator's control channel to a silent device |
 
 Sensors, readings and trust are held in memory. Restarting the API clears them, apart from what the
 simulator registers again when it starts. Attachments are the exception, and persist on disk.
@@ -851,6 +1039,26 @@ The API holds its device list in memory, so a restart empties it. Devices that a
 themselves again and are back within seconds. Devices running the `Disconnect` scenario send nothing, so
 nothing tells them the API forgot them, and they stay unregistered until they reconnect. Restarting the
 simulator (`docker compose restart simulator`) re-registers the whole fleet at once.
+
+### A command ended as TimedOut
+
+Nothing collected it. Either the device is silent (the `Disconnect` scenario, or real hardware that is off or out
+of range), or it collected the command and never confirmed it. `GET /api/commands/{id}` shows which: a command
+that was never collected has no `deliveredAt`. A timed-out command can't be undone, because its effect on the
+device is unknown. Bring the device back, look at its state, and issue a new command.
+
+### Undo was refused
+
+The response is a `409` and its `items` say why for each command. A command that timed out or failed can't be
+undone, since the device's real state is unknown and restoring an unknown state could do harm. A command whose
+previous state was never observed can't be undone either, because there is nothing recorded to return to; the
+actuator has to report in once before a command can record what it replaced. A refused entry is removed from the
+stack, so the next undo reaches the action beneath it.
+
+### A command is refused with "registered without an actuator kind"
+
+The device is an actuator that was registered before actuator kinds existed, or without one. Register it with
+`actuatorKind` set (or through the form, which asks for it) so the API knows which commands it understands.
 
 ### Telemetry returns 503
 

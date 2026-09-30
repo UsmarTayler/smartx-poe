@@ -19,6 +19,8 @@ reconstructed afterwards.
 | [U5](#u5-n1-requests-on-the-trust-panel) | 2026-09-13 | Trust, client | Carry recent history in the trust list | `72596d6` |
 | [U6](#u6-attachments-lost-on-restart) | 2026-09-14 | Attachments | Persist the attachment index and use a fixed development key | `432643a`, `7d08321` |
 | [U7](#u7-simulated-data-did-not-arrive-like-a-devices) | 2026-09-29 | Simulation, ingestion | Move the simulator out of the API so it reports over HTTP, and queue accepted readings | `7216026`, `e6f8f0b` |
+| [U8](#u8-silent-devices-stayed-unregistered-after-an-api-restart) | 2026-09-30 | Simulator | Re-register the whole fleet on the first 404 | `f528e93` |
+| [U9](#u9-a-silent-devices-control-channel-was-implicit-and-untested) | 2026-09-30 | Simulator | State and test that a silent device keeps polling its shadow | `06e1195` |
 
 ---
 
@@ -253,10 +255,60 @@ retained. No other Part 1 test needed changing.
 
 ---
 
+## U8. Silent devices stayed unregistered after an API restart
+
+**Source:** Part 2 review of the simulator, raised in Prompt 10
+
+**What was wrong.** When the API restarted it forgot every registered device, because it holds them in memory.
+The simulator recovered by re-registering a device the first time that device got a `404` for a report. A device
+running the `Disconnect` scenario sends nothing, so it never got a `404` and never re-registered.
+
+**Why it mattered.** After an API restart, the four deliberately silent devices stayed missing for good, and
+because they were missing the operator could not send them a scenario change either (`404`, no such sensor).
+Recovery was partial in exactly the cases where an operator most wants a device back.
+
+**What changed.** A restart forgets *every* device at once, so the simulator now treats it that way: the first
+`404` any device sees re-registers the whole fleet. Concurrent `404`s are collapsed into one sweep with a
+semaphore and a "registered since I asked" check, so forty devices hearing the same restart cause one round of
+registration and not forty. Tests restart the API under a running fleet and check that all thirteen devices in
+the test fleet come back, including the silent one, and that thirteen concurrent `404`s make thirteen
+registrations and not a hundred and fifty-six.
+
+- `src/SmartX.DeviceSimulator/DeviceFleet.cs`
+- `tests/SmartX.Tests/DeviceSimulatorTests.cs`
+
+**Commit:** `f528e93` fix(simulator): re-register the whole fleet on the first 404
+
+---
+
+## U9. A silent device's control channel was implicit and untested
+
+**Source:** Part 2 review of the simulator, raised in Prompt 10
+
+**What was wrong.** The simulator kept polling a `Disconnect` device's shadow, which is what lets an operator
+bring it back, but only because of the order of two `if` statements. Nothing said that was intended, and
+nothing tested it. A tidy-up that moved the silence check earlier would have made a silent device impossible to
+switch back to `Nominal`, with no failing test.
+
+**Why it mattered.** The requirement is that an operator can bring a silent device back. That behaviour has to
+be a stated design decision with a test, not a side effect.
+
+**What changed.** A comment on the tick loop states the split: telemetry is the data plane, which is what the
+simulated device is sending and which `Disconnect` switches off; polling the shadow is the harness's control
+plane, which is not something the simulated device is doing and so keeps running. A test switches a silent
+device to `Nominal` and checks that it starts reporting.
+
+- `src/SmartX.DeviceSimulator/DeviceFleet.cs`
+- `tests/SmartX.Tests/DeviceSimulatorTests.cs`
+
+**Commit:** `06e1195` fix(simulator): keep polling the shadow while a device is silent
+
+---
+
 ## Entry template
 
 ```markdown
-## U8. Short title of the problem
+## U10. Short title of the problem
 
 **Source:** where the feedback came from (lecturer feedback on Part 1, code review, testing)
 
