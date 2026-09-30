@@ -9,7 +9,7 @@ public sealed record DemoDevice(SensorRegistrationRequest Registration, Simulati
 }
 
 /// <summary>
-/// The fleet the device simulator runs: forty devices across the demo deployment.
+/// The fleet the device simulator runs: forty-eight devices across the demo deployment.
 /// </summary>
 /// <remarks>
 /// Lives in SmartX.Shared because the simulator is a separate program that may not reference the API, and
@@ -38,12 +38,12 @@ public static class DemoDevices
         Device(0x03, "Rack Row 3", "sub-zone-b", "GW-A1", SensorCategory.Environmental, Celsius, 18, 32, TelemetryPayloadKind.Real, 5, SimulationScenario.Nominal),
         Device(0x04, "Rack Row 1", "sub-zone-b", "GW-A1", SensorCategory.Environmental, Humidity, 30, 70, TelemetryPayloadKind.Real, 5, SimulationScenario.Critical),
         Device(0x05, "Rack Row 2", "sub-zone-b", "GW-A1", SensorCategory.Environmental, Humidity, 30, 70, TelemetryPayloadKind.Real, 5, SimulationScenario.Spike),
-        Device(0x06, "CRAC Unit", "sub-zone-b", "GW-A1", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal),
+        Device(0x06, "CRAC Water Pump", "sub-zone-b", "GW-A1", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal, ActuatorKind.Pump),
         Device(0x07, "Rack Row 3", "sub-zone-b", "GW-A1", SensorCategory.Environmental, Humidity, 30, 70, TelemetryPayloadKind.Real, 5, SimulationScenario.TypeViolation),
         Device(0x08, "Line 1 Drive", "sub-zone-c", "GW-A2", SensorCategory.PowerConsumption, Watts, 0, 5500, TelemetryPayloadKind.Integer, 10, SimulationScenario.Nominal),
         Device(0x09, "Line 2 Drive", "sub-zone-c", "GW-A2", SensorCategory.PowerConsumption, Watts, 0, 5500, TelemetryPayloadKind.Integer, 10, SimulationScenario.Spike),
-        Device(0x0A, "Line 1 Conveyor", "sub-zone-c", "GW-A2", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal),
-        Device(0x0B, "Line 2 Conveyor", "sub-zone-c", "GW-A2", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Disconnect),
+        Device(0x0A, "Line 1 Conveyor", "sub-zone-c", "GW-A2", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal, ActuatorKind.Relay),
+        Device(0x0B, "Line 2 Conveyor", "sub-zone-c", "GW-A2", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Disconnect, ActuatorKind.Relay),
         Device(0x0C, "Compressor", "sub-zone-c", "GW-A2", SensorCategory.PowerConsumption, Watts, 0, 7500, TelemetryPayloadKind.Integer, 10, SimulationScenario.Critical),
         Device(0x0D, "Production Floor", "zone-1", "GW-A1", SensorCategory.Environmental, Celsius, 5, 45, TelemetryPayloadKind.Real, 5, SimulationScenario.Nominal),
         Device(0x0E, "Mezzanine", "zone-1", "GW-A1", SensorCategory.Environmental, Celsius, 5, 45, TelemetryPayloadKind.Real, 5, SimulationScenario.TypeViolation),
@@ -57,22 +57,33 @@ public static class DemoDevices
         Device(0x16, "String 3", "sub-zone-e", "GW-A4", SensorCategory.PowerConsumption, Kilowatts, 0, 100, TelemetryPayloadKind.Real, 10, SimulationScenario.Spike),
         Device(0x17, "Freezer 1", "sub-zone-f", "GW-A5", SensorCategory.Environmental, Celsius, -28, -12, TelemetryPayloadKind.Real, 5, SimulationScenario.Nominal),
         Device(0x18, "Freezer 2", "sub-zone-f", "GW-A5", SensorCategory.Environmental, Celsius, -28, -12, TelemetryPayloadKind.Real, 5, SimulationScenario.Drift),
-        Device(0x19, "Freezer Door", "sub-zone-f", "GW-A5", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal),
+        Device(0x19, "Freezer Glycol Valve", "sub-zone-f", "GW-A5", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal, ActuatorKind.Valve),
         Device(0x1A, "Chiller 1", "sub-zone-g", "GW-A5", SensorCategory.Environmental, Celsius, 0, 8, TelemetryPayloadKind.Real, 5, SimulationScenario.Nominal),
         Device(0x1B, "Chiller 2", "sub-zone-g", "GW-A5", SensorCategory.Environmental, Celsius, 0, 8, TelemetryPayloadKind.Real, 5, SimulationScenario.TypeViolation),
-        Device(0x1C, "Chiller Valve", "sub-zone-g", "GW-A5", SensorCategory.Actuator, Percent, 0, 100, TelemetryPayloadKind.Integer, 5, SimulationScenario.Nominal),
+        Device(0x1C, "Chiller Fan Speed", "sub-zone-g", "GW-A5", SensorCategory.Actuator, Percent, 0, 100, TelemetryPayloadKind.Integer, 5, SimulationScenario.Nominal, ActuatorKind.Dimmer),
         Device(0x1D, "Dock Apron", "zone-4", "GW-B1", SensorCategory.Environmental, Celsius, -15, 50, TelemetryPayloadKind.Real, 5, SimulationScenario.Nominal),
-        Device(0x1E, "Door 1", "sub-zone-h", "GW-B1", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal),
-        Device(0x1F, "Door 2", "sub-zone-h", "GW-B1", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.TypeViolation),
-        Device(0x20, "Door 3", "sub-zone-h", "GW-B1", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Disconnect),
-        Device(0x21, "Door 4", "sub-zone-h", "GW-B1", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal),
-        Device(0x22, "Open Office", "zone-5", "GW-B2", SensorCategory.Environmental, Celsius, 15, 30, TelemetryPayloadKind.Real, 5, SimulationScenario.Nominal),
+        Device(0x1E, "Dock Leveller Pump", "sub-zone-h", "GW-B1", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal, ActuatorKind.Pump),
+        Device(0x1F, "Dock Door 2 Strike", "sub-zone-h", "GW-B1", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.TypeViolation, ActuatorKind.Relay),
+        Device(0x20, "Dock Door 3 Strike", "sub-zone-h", "GW-B1", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Disconnect, ActuatorKind.Relay),
+        Device(0x21, "Dock Drain Valve", "sub-zone-h", "GW-B1", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal, ActuatorKind.Valve),
+        Device(0x22, "Open Office", "zone-5", "GW-B2", SensorCategory.Environmental, Celsius, 15, 30, TelemetryPayloadKind.Real, 5, SimulationScenario.Drift),
         Device(0x23, "Open Office", "zone-5", "GW-B2", SensorCategory.Environmental, Co2, 400, 2500, TelemetryPayloadKind.Integer, 5, SimulationScenario.Nominal),
         Device(0x24, "Room J1", "sub-zone-j", "GW-B2", SensorCategory.Environmental, Co2, 400, 2000, TelemetryPayloadKind.Integer, 5, SimulationScenario.Nominal),
         Device(0x25, "Room J2", "sub-zone-j", "GW-B2", SensorCategory.Environmental, Co2, 400, 2000, TelemetryPayloadKind.Integer, 5, SimulationScenario.Spike),
         Device(0x26, "Room J2", "sub-zone-j", "GW-B2", SensorCategory.Environmental, Humidity, 30, 70, TelemetryPayloadKind.Real, 5, SimulationScenario.Disconnect),
-        Device(0x27, "Office Lights", "sub-zone-k", "GW-B3", SensorCategory.Actuator, Percent, 0, 100, TelemetryPayloadKind.Integer, 5, SimulationScenario.Drift),
+        Device(0x27, "Office Lights", "sub-zone-k", "GW-B3", SensorCategory.Actuator, Percent, 0, 100, TelemetryPayloadKind.Integer, 5, SimulationScenario.Nominal, ActuatorKind.Dimmer),
         Device(0x28, "Lighting Circuit", "sub-zone-k", "GW-B3", SensorCategory.PowerConsumption, Watts, 0, 3000, TelemetryPayloadKind.Integer, 10, SimulationScenario.Nominal),
+
+        // Added in Part 2: more actuators, spread across the zone trees so a zone-wide command (close every
+        // valve under Zone 3, say) has several devices to reach.
+        Device(0x29, "Coolant Pump", "sub-zone-g", "GW-A5", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal, ActuatorKind.Pump),
+        Device(0x2A, "Defrost Pump", "sub-zone-f", "GW-A5", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal, ActuatorKind.Pump),
+        Device(0x2B, "Chiller Valve A", "sub-zone-g", "GW-A5", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal, ActuatorKind.Valve),
+        Device(0x2C, "Chiller Valve B", "sub-zone-g", "GW-A5", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal, ActuatorKind.Valve),
+        Device(0x2D, "Freezer Valve", "sub-zone-f", "GW-A5", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal, ActuatorKind.Valve),
+        Device(0x2E, "Meeting Room Lights", "sub-zone-j", "GW-B2", SensorCategory.Actuator, Percent, 0, 100, TelemetryPayloadKind.Integer, 5, SimulationScenario.Nominal, ActuatorKind.Dimmer),
+        Device(0x2F, "Warehouse Lights", "zone-4", "GW-B1", SensorCategory.Actuator, Percent, 0, 100, TelemetryPayloadKind.Integer, 5, SimulationScenario.Nominal, ActuatorKind.Dimmer),
+        Device(0x30, "Dock Fan Relay", "zone-4", "GW-B1", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal, ActuatorKind.Relay),
     ];
 
     /// <summary>Builds one device's registration request.</summary>
@@ -87,7 +98,8 @@ public static class DemoDevices
         double maximum,
         TelemetryPayloadKind payloadKind,
         int heartbeatSeconds,
-        SimulationScenario scenario) =>
+        SimulationScenario scenario,
+        ActuatorKind? actuatorKind = null) =>
         new(new SensorRegistrationRequest(
                 $"B8:27:EB:10:00:{suffix:X2}",
                 room,
@@ -98,6 +110,7 @@ public static class DemoDevices
                 minimum,
                 maximum,
                 payloadKind,
-                heartbeatSeconds),
+                heartbeatSeconds,
+                actuatorKind),
             scenario);
 }

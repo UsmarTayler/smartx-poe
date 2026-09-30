@@ -42,7 +42,7 @@ public class DeviceSimulatorTests
 
         var sensors = await api.CreateClient().GetFromJsonAsync<List<SensorRegistration>>("/api/sensors");
 
-        Assert.Equal(40, sensors?.Count);
+        Assert.Equal(DemoDevices.All.Count, sensors?.Count);
         Assert.Equal(Enum.GetValues<SensorCategory>(), sensors!.Select(sensor => sensor.Category).Distinct().Order());
         Assert.Equal(Enum.GetValues<TelemetryPayloadKind>(), sensors!.Select(sensor => sensor.PayloadKind).Distinct().Order());
     }
@@ -95,7 +95,7 @@ public class DeviceSimulatorTests
             Assert.True(outcome == SendOutcome.Accepted, $"{device.MacAddress} ({definition.Registration.PayloadKind}) was {outcome}.");
         }
 
-        await DrainAsync(http, expectedProcessed: 40);
+        await DrainAsync(http, expectedProcessed: DemoDevices.All.Count);
     }
 
     [Fact]

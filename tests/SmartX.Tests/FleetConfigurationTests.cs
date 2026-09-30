@@ -27,7 +27,7 @@ public class FleetConfigurationTests
     {
         var options = Bind();
 
-        Assert.Equal(40, options.DeviceCount);
+        Assert.Equal(48, options.DeviceCount);
         Assert.Equal(FleetMix.Demo, options.Mix);
         Assert.Equal(TimeSpan.FromSeconds(5), options.ShadowPollInterval);
     }
