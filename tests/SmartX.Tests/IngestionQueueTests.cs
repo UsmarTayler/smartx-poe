@@ -21,7 +21,7 @@ public class IngestionQueueTests
         var options = new IngestionOptions();
         configure?.Invoke(options);
 
-        return new TelemetryIngestionQueue(Options.Create(options), TimeProvider.System);
+        return new TelemetryIngestionQueue(Options.Create(options), TimeProvider.System, new SmartX.Api.History.ArrivalSequence());
     }
 
     private static NumericPacket<int> Packet(int value) =>

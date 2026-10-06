@@ -37,7 +37,7 @@ public class CriticalBypassMeasurementTests(ITestOutputHelper output)
     public async Task A_critical_reading_waits_a_fraction_of_the_time_a_normal_one_does_behind_a_backlog()
     {
         var store = new SlowStore(PerPacketCost);
-        var queue = new TelemetryIngestionQueue(Options.Create(new IngestionOptions { MaxQueueDepth = 20_000 }), TimeProvider.System);
+        var queue = new TelemetryIngestionQueue(Options.Create(new IngestionOptions { MaxQueueDepth = 20_000 }), TimeProvider.System, new SmartX.Api.History.ArrivalSequence());
         var trust = new TrustEngine(Options.Create(new TrustOptions()), TimeProvider.System, NullLogger<TrustEngine>.Instance);
         var worker = new TelemetryProcessor(queue, store, trust, new SmartX.Api.Commands.InMemoryActuatorStateStore(), NullLogger<TelemetryProcessor>.Instance);
 
@@ -97,7 +97,7 @@ public class CriticalBypassMeasurementTests(ITestOutputHelper output)
         // MaxConsecutiveCritical alerts, so the standard lane always moves.
         var store = new SlowStore(TimeSpan.FromMicroseconds(200));
         var queue = new TelemetryIngestionQueue(
-            Options.Create(new IngestionOptions { MaxConsecutiveCritical = 10, MaxCriticalQueueDepth = 5_000 }), TimeProvider.System);
+            Options.Create(new IngestionOptions { MaxConsecutiveCritical = 10, MaxCriticalQueueDepth = 5_000 }), TimeProvider.System, new SmartX.Api.History.ArrivalSequence());
         var trust = new TrustEngine(Options.Create(new TrustOptions()), TimeProvider.System, NullLogger<TrustEngine>.Instance);
         var worker = new TelemetryProcessor(queue, store, trust, new SmartX.Api.Commands.InMemoryActuatorStateStore(), NullLogger<TelemetryProcessor>.Instance);
 
