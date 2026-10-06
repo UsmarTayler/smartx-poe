@@ -1,3 +1,5 @@
+using SmartX.Api.Alerts;
+using SmartX.Api.History;
 using SmartX.Shared;
 
 namespace SmartX.Api.Commands;
@@ -6,50 +8,79 @@ namespace SmartX.Api.Commands;
 /// The record of everything that has happened to every command.
 /// </summary>
 /// <remarks>
-/// Behind an interface because it is about to move. The in-memory list below is the simplest thing that
-/// accumulates the record from now; the next stage stores it in a sorted history store, and the pattern
-/// analysis after that reads from it. Neither should need the code that writes to the log to change.
+/// Behind an interface so the code that writes to the log did not have to change when the log moved. It began as
+/// a list that only ever grew; it is now a view over the history store, so command events share the
+/// retention window with everything else and the log can no longer grow without bound.
 /// </remarks>
 internal interface ICommandLog
 {
     /// <summary>Appends an event. Entries are only ever added, never changed or removed.</summary>
-    void Append(Guid commandId, string macAddress, CommandEvent commandEvent, DateTimeOffset timestamp, TrustBand? trustBand, string? detail);
+    /// <param name="description">What the command is, such as "ValveClose on AA:BB:...", for a readable summary.</param>
+    void Append(Guid commandId, string macAddress, CommandEvent commandEvent, DateTimeOffset timestamp, TrustBand? trustBand, string? detail, string? description = null);
 
     /// <summary>Entries, newest first, optionally narrowed.</summary>
     IReadOnlyList<CommandLogEntry> Query(string? macAddress, Guid? commandId, int limit);
 }
 
-internal sealed class InMemoryCommandLog : ICommandLog
+/// <summary>
+/// Stores command events in the history store, each with the alerts that were active when it happened.
+/// </summary>
+/// <remarks>
+/// <b>The alert snapshot.</b> Whether an operator acted while something was already wrong is context that
+/// cannot be reconstructed afterwards, because alerts come and go. So the set of active alert keys is copied
+/// onto the entry at the moment it is written. The pattern analysis later reads these to learn what operators
+/// do in what situations.
+/// <para>
+/// Reading goes through the mesh-wide event stream rather than a node's own history, because that stream holds
+/// only events. A node's own history is dominated by its readings, and finding a command in it would mean
+/// walking all of them.
+/// </para>
+/// </remarks>
+internal sealed class HistoryCommandLog(IHistoryStore history, ArrivalSequence arrival, AlertTracker alerts) : ICommandLog
 {
-    private readonly Lock _gate = new();
-    private readonly List<CommandLogEntry> _entries = [];
-
-    public void Append(Guid commandId, string macAddress, CommandEvent commandEvent, DateTimeOffset timestamp, TrustBand? trustBand, string? detail)
-    {
-        lock (_gate)
-        {
-            _entries.Add(new CommandLogEntry(_entries.Count + 1, commandId, macAddress, commandEvent, timestamp, trustBand, detail));
-        }
-    }
+    public void Append(Guid commandId, string macAddress, CommandEvent commandEvent, DateTimeOffset timestamp, TrustBand? trustBand, string? detail, string? description = null) =>
+        history.Append(HistoryEntry.FromEvent(
+            arrival.Next(),
+            timestamp,
+            macAddress,
+            HistoryKind.Command,
+            new HistoryEventDetails(
+                description is null ? $"Command {commandEvent}" : $"{commandEvent}: {description}",
+                detail,
+                CommandId: commandId,
+                CommandEvent: commandEvent,
+                Band: trustBand,
+                ActiveAlerts: alerts.ActiveKeys())));
 
     public IReadOnlyList<CommandLogEntry> Query(string? macAddress, Guid? commandId, int limit)
     {
-        lock (_gate)
+        var events = history.GetEvents(DateTimeOffset.MinValue, DateTimeOffset.MaxValue);
+        List<CommandLogEntry> found = [];
+
+        // The stream is oldest first and the log answers newest first, so it is read from the back.
+        for (var i = events.Count - 1; i >= 0 && found.Count < limit; i--)
         {
-            List<CommandLogEntry> found = [];
+            var entry = events[i];
 
-            for (var i = _entries.Count - 1; i >= 0 && found.Count < limit; i--)
+            if (entry.Kind != HistoryKind.Command
+                || entry.Event is not { CommandId: { } id, CommandEvent: { } commandEvent } details
+                || (macAddress is not null && !string.Equals(entry.MacAddress, macAddress, StringComparison.Ordinal))
+                || (commandId is not null && id != commandId))
             {
-                var entry = _entries[i];
-
-                if ((macAddress is null || string.Equals(entry.MacAddress, macAddress, StringComparison.Ordinal))
-                    && (commandId is null || entry.CommandId == commandId))
-                {
-                    found.Add(entry);
-                }
+                continue;
             }
 
-            return found;
+            found.Add(new CommandLogEntry(
+                entry.Sequence,
+                id,
+                entry.MacAddress,
+                commandEvent,
+                entry.Timestamp,
+                details.Band,
+                details.Detail,
+                details.ActiveAlerts));
         }
+
+        return found;
     }
 }

@@ -1,3 +1,4 @@
+using SmartX.Api.Search;
 using SmartX.Api.Storage;
 using SmartX.Api.Trust;
 using SmartX.Shared;
@@ -65,6 +66,7 @@ internal static class SensorEndpoints
         ISensorRegistry registry,
         IZoneStore zones,
         ITrustEngine trust,
+        DeviceIndex index,
         CancellationToken cancellationToken)
     {
         if (!request.TryCreateRegistration(out var registration, out var errors))
@@ -101,6 +103,10 @@ internal static class SensorEndpoints
         // is registered and then never sends anything is the silent disconnect in its purest form,
         // and it can only be caught if its heartbeat clock started when it was registered.
         trust.Track(registration.MacAddress);
+
+        // Indexed for search from the same moment. A newly tracked node is unproven, but the band is read back
+        // from the engine rather than assumed, in case its first reading was processed already.
+        index.Register(registration, trust.TryGet(registration.MacAddress, out var snapshot) ? snapshot.Band : TrustBand.Unproven);
 
         return Results.Created($"/api/sensors/{registration.MacAddress}", registration);
     }

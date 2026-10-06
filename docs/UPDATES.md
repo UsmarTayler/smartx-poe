@@ -305,10 +305,36 @@ device to `Nominal` and checks that it starts reporting.
 
 ---
 
+## U10. The command log grew without bound
+
+**Source:** design review of the command log, raised in Prompt 11
+
+**What was wrong.** `InMemoryCommandLog` appended every command event to a list and never removed one. A gateway
+that ran for a month with a busy operator would hold every event it had ever logged, in a structure that could
+also only be searched by scanning from the newest entry.
+
+**Why it mattered.** Memory use that grows with uptime is a fault that appears days after it was introduced, which
+makes it a bad one to find in production. The log is also the record the pattern analysis reads, so it needed to
+sit alongside the readings and alerts it will be read with, in time order.
+
+**What changed.** The log now lives in the history store behind the same `ICommandLog` interface, so the code that
+writes to it did not change. Its entries share the retention window with every other kind of history, and each
+carries the alerts that were active across the mesh when it was written. Reading goes through the mesh-wide event
+stream, which holds only events, so finding a command does not walk a node's readings. A test appends a command,
+advances the clock past the window, runs retention, and checks it is gone while a recent one is kept.
+
+- `src/SmartX.Api/Commands/CommandLog.cs`
+- `src/SmartX.Api/Commands/CommandService.cs`
+- `tests/SmartX.Tests/CommandHistoryTests.cs`
+
+**Commit:** `d2039dc` feat(api): add alert set and device index, feed history from the pipeline
+
+---
+
 ## Entry template
 
 ```markdown
-## U10. Short title of the problem
+## U11. Short title of the problem
 
 **Source:** where the feedback came from (lecturer feedback on Part 1, code review, testing)
 

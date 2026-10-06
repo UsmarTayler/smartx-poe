@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using SmartX.Api.Alerts;
 using SmartX.Api.Storage;
 
 namespace SmartX.Api.Trust;
@@ -26,10 +27,13 @@ internal sealed class HeartbeatMonitor(
     ISensorRegistry registry,
     ITrustEngine trust,
     IOptions<TrustOptions> options,
+    AlertTracker alerts,
+    IOptions<AlertOptions> alertOptions,
     TimeProvider time,
     ILogger<HeartbeatMonitor> logger) : BackgroundService
 {
     private readonly TrustOptions _options = options.Value;
+    private readonly AlertOptions _alertOptions = alertOptions.Value;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -62,6 +66,38 @@ internal sealed class HeartbeatMonitor(
         }
     }
 
+    /// <summary>
+    /// Keeps the disconnected set in step with who has gone quiet, so that silence becomes an alert.
+    /// </summary>
+    /// <remarks>
+    /// Called on every sweep for every sensor, and that is deliberate: a node that stays silent is found silent
+    /// again on each sweep, which the alert set counts as a suppressed repeat. That count is how an operator
+    /// sees that a disconnect is ongoing rather than a one-off.
+    /// <para>
+    /// "Silent" is measured against the node's own interval, so a slow reporter is not condemned for behaving
+    /// normally. A reading arriving clears the alert at once through the ingestion path; this also clears it,
+    /// so a node heard through any route is not left marked disconnected.
+    /// </para>
+    /// </remarks>
+    private void UpdateConnectivity(string macAddress, TimeSpan interval, DateTimeOffset now)
+    {
+        if (!trust.TryGet(macAddress, out var snapshot))
+        {
+            return;
+        }
+
+        var silence = now - (snapshot.LastSeen ?? snapshot.TrackedSince);
+
+        if (silence >= interval * _alertOptions.DisconnectedAfterIntervals)
+        {
+            alerts.NodeSilent(macAddress, $"No readings for {TrustReasons.FormatDuration(silence)}.");
+        }
+        else
+        {
+            alerts.NodeHeard(macAddress);
+        }
+    }
+
     /// <summary>Runs one sweep over every registered sensor.</summary>
     /// <returns>How many missed-heartbeat penalties were applied.</returns>
     /// <remarks>
@@ -72,11 +108,13 @@ internal sealed class HeartbeatMonitor(
     {
         var sensors = await registry.ListAsync(cancellationToken);
         var applied = 0;
+        var now = time.GetUtcNow();
 
         foreach (var sensor in sensors)
         {
             var interval = sensor.HeartbeatInterval ?? _options.DefaultHeartbeatInterval;
             applied += trust.CheckHeartbeat(sensor.MacAddress, interval);
+            UpdateConnectivity(sensor.MacAddress, interval, now);
         }
 
         trust.Reevaluate();

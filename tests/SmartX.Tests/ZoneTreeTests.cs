@@ -115,4 +115,61 @@ public class ZoneTreeTests
         Assert.Throws<ArgumentException>(() =>
             new ZoneCatalogue([Zone("same", null, 0), Zone("same", null, 0)]));
     }
+
+    [Fact]
+    public void Zone_ids_beneath_start_with_the_zone_and_include_every_level_under_it()
+    {
+        var ids = ThreeLevel().ZoneIdsBeneath(Facility);
+
+        Assert.Equal([Facility, Zone1, SubZoneB], ids);
+    }
+
+    [Fact]
+    public void Zone_ids_beneath_a_leaf_are_just_the_leaf()
+    {
+        Assert.Equal([SubZoneB], ThreeLevel().ZoneIdsBeneath(SubZoneB));
+    }
+
+    [Fact]
+    public void Zone_ids_beneath_exclude_anything_above()
+    {
+        Assert.Equal([Zone1, SubZoneB], ThreeLevel().ZoneIdsBeneath(Zone1));
+    }
+
+    [Fact]
+    public void Zone_ids_beneath_a_cycle_terminate_without_repeating_a_zone()
+    {
+        var ids = Cyclic().ZoneIdsBeneath("ring-a");
+
+        Assert.Equal(ids.Distinct(StringComparer.OrdinalIgnoreCase), ids);
+        Assert.Contains("ring-a", ids);
+    }
+
+    [Fact]
+    public void Zone_ids_beneath_stop_at_the_depth_ceiling()
+    {
+        var ids = Chain(10).ZoneIdsBeneath(Chain(10).Roots[0].Id, maximumDepth: 3);
+
+        Assert.Equal(3, ids.Count);
+    }
+
+    [Fact]
+    public void Zone_ids_and_nodes_beneath_agree_on_which_zones_are_reached()
+    {
+        // One definition of "beneath": the sensors found by NodesBeneath are exactly those deployed in the
+        // zones ZoneIdsBeneath names.
+        var catalogue = ThreeLevel();
+        var sensors = new[]
+        {
+            Sensor("AA:BB:CC:DD:EE:01", zoneId: Facility),
+            Sensor("AA:BB:CC:DD:EE:02", zoneId: Zone1),
+            Sensor("AA:BB:CC:DD:EE:03", zoneId: SubZoneB),
+        };
+
+        var ids = catalogue.ZoneIdsBeneath(Zone1).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        Assert.Equal(
+            sensors.Where(sensor => ids.Contains(sensor.Location.ZoneId)).Select(sensor => sensor.MacAddress).Order(),
+            catalogue.NodesBeneath(Zone1, sensors).Select(sensor => sensor.MacAddress).Order());
+    }
 }

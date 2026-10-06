@@ -36,7 +36,8 @@ public class HeartbeatMonitorTests
         var clock = new ManualTimeProvider(Start);
         var engine = new TrustEngine(options, clock, NullLogger<TrustEngine>.Instance);
         var registry = new InMemorySensorRegistry();
-        var monitor = new HeartbeatMonitor(registry, engine, options, clock, NullLogger<HeartbeatMonitor>.Instance);
+        var monitor = new HeartbeatMonitor(
+            registry, engine, options, MeshTestHost.Create(clock).Alerts, Options.Create(new SmartX.Api.Alerts.AlertOptions()), clock, NullLogger<HeartbeatMonitor>.Instance);
 
         return (engine, monitor, registry, clock);
     }
@@ -110,7 +111,7 @@ public class HeartbeatMonitorTests
         engine.Track(NodeA);
 
         using var monitor = new HeartbeatMonitor(
-            registry, engine, options, TimeProvider.System, NullLogger<HeartbeatMonitor>.Instance);
+            registry, engine, options, MeshTestHost.Create(TimeProvider.System).Alerts, Options.Create(new SmartX.Api.Alerts.AlertOptions()), TimeProvider.System, NullLogger<HeartbeatMonitor>.Instance);
 
         await monitor.StartAsync(CancellationToken.None);
 

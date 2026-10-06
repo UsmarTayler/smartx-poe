@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
+using SmartX.Api.Alerts;
 using SmartX.Api.Ingestion;
 using SmartX.Api.Storage;
 using SmartX.Api.Trust;
@@ -76,6 +77,7 @@ internal static class TelemetryEndpoints
         TelemetryIngestionRequest request,
         ISensorRegistry registry,
         ITrustEngine trust,
+        AlertTracker alerts,
         TelemetryIngestionQueue queue,
         CriticalClassifier classifier,
         IOptions<IngestionOptions> options,
@@ -99,6 +101,7 @@ internal static class TelemetryEndpoints
             // Scored on the request thread, not in the worker: a rejected reading never enters a queue, and
             // the node has still told us something about itself.
             trust.Record(sensor.MacAddress, rejection.Outcome);
+            alerts.ReadingRejected(sensor.MacAddress, rejection.Outcome, rejection.Reason);
 
             return Rejected(rejection.Reason);
         }
@@ -178,6 +181,7 @@ internal static class TelemetryEndpoints
         TelemetryBatchRequest request,
         ISensorRegistry registry,
         ITrustEngine trust,
+        AlertTracker alerts,
         TelemetryIngestionQueue queue,
         CriticalClassifier classifier,
         IOptions<IngestionOptions> options,
@@ -236,6 +240,7 @@ internal static class TelemetryEndpoints
                 // A rejected reading is never queued, but it is still scored. One bad sample does not
                 // discard the batch, and its position is reported so the caller can find it.
                 trust.Record(sensor.MacAddress, rejection.Outcome);
+                alerts.ReadingRejected(sensor.MacAddress, rejection.Outcome, rejection.Reason);
                 errors.Add($"Reading {index}: {rejection.Reason}");
             }
         }

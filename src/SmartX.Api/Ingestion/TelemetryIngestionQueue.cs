@@ -1,15 +1,21 @@
 using Microsoft.Extensions.Options;
+using SmartX.Api.History;
 using SmartX.Shared;
 
 namespace SmartX.Api.Ingestion;
 
 /// <summary>A reading waiting to be processed, with what the queue needs to know about it.</summary>
 /// <param name="ReceiptId">The id handed back to the caller when the reading was accepted.</param>
+/// <param name="Sequence">
+/// Its arrival number, taken from the one counter every history entry shares. It orders readings that carry the
+/// same timestamp, and it is the second half of the key the reading is stored under in history.
+/// </param>
 /// <param name="Packet">The validated packet.</param>
 /// <param name="EnqueuedAt">When it was accepted, so its wait can be measured on the way out.</param>
 /// <param name="Alert">Set when the reading crossed a critical threshold.</param>
 internal sealed record QueuedReading(
     Guid ReceiptId,
+    long Sequence,
     ITelemetryPacket Packet,
     DateTimeOffset EnqueuedAt,
     CriticalAlert? Alert)
@@ -42,7 +48,7 @@ internal sealed record QueuedReading(
 /// to run out of memory, and it hides the overload until the process dies.
 /// </para>
 /// </remarks>
-internal sealed class TelemetryIngestionQueue(IOptions<IngestionOptions> options, TimeProvider time)
+internal sealed class TelemetryIngestionQueue(IOptions<IngestionOptions> options, TimeProvider time, ArrivalSequence arrival)
 {
     internal const string StandardLane = "standard";
     internal const string CriticalLane = "critical";
@@ -53,9 +59,9 @@ internal sealed class TelemetryIngestionQueue(IOptions<IngestionOptions> options
     private readonly Queue<QueuedReading> _standard = new();
 
     // Ordered by (severity, arrival). PriorityQueue is a binary heap, and heaps are not stable: two entries
-    // of equal priority can come out in either order. Pairing the severity with a monotonic sequence number
+    // of equal priority can come out in either order. Pairing the severity with the arrival sequence number
     // makes every priority unique, which restores arrival order among equally severe alerts — the property
-    // an operator assumes when two pumps fail seconds apart.
+    // an operator assumes when two pumps fail seconds apart. The same number later becomes the history key.
     private readonly PriorityQueue<QueuedReading, (int Severity, long Sequence)> _critical = new();
 
     private readonly SemaphoreSlim _signal = new(0);
@@ -63,7 +69,6 @@ internal sealed class TelemetryIngestionQueue(IOptions<IngestionOptions> options
     private readonly LaneCounters _standardCounters = new();
     private readonly LaneCounters _criticalCounters = new();
 
-    private long _sequence;
     private int _consecutiveCritical;
     private long _rejectedWhenFull;
 
@@ -75,7 +80,7 @@ internal sealed class TelemetryIngestionQueue(IOptions<IngestionOptions> options
     public bool TryEnqueue(ITelemetryPacket packet, CriticalAlert? alert, out TelemetryReceipt? receipt)
     {
         var now = time.GetUtcNow();
-        var reading = new QueuedReading(Guid.NewGuid(), packet, now, alert);
+        var reading = new QueuedReading(Guid.NewGuid(), arrival.Next(), packet, now, alert);
         int position;
 
         lock (_gate)
@@ -90,7 +95,7 @@ internal sealed class TelemetryIngestionQueue(IOptions<IngestionOptions> options
                     return false;
                 }
 
-                _critical.Enqueue(reading, (alert!.Value.Severity, _sequence++));
+                _critical.Enqueue(reading, (alert!.Value.Severity, reading.Sequence));
                 position = _critical.Count;
             }
             else

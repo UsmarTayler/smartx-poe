@@ -28,7 +28,9 @@ public class CommandServiceTests
 
         public required InMemoryCommandStore Store { get; init; }
 
-        public required InMemoryCommandLog Log { get; init; }
+        public required ICommandLog Log { get; init; }
+
+        public required MeshTestHost Mesh { get; init; }
 
         public required InMemoryActuatorStateStore States { get; init; }
 
@@ -45,7 +47,8 @@ public class CommandServiceTests
 
             var (trust, clock) = TrustTestHost.Create();
             var store = new InMemoryCommandStore();
-            var log = new InMemoryCommandLog();
+            var mesh = MeshTestHost.Create(clock);
+            var log = mesh.CommandLog;
             var states = new InMemoryActuatorStateStore();
 
             var harness = new Harness
@@ -53,9 +56,10 @@ public class CommandServiceTests
                 Clock = clock,
                 Store = store,
                 Log = log,
+                Mesh = mesh,
                 States = states,
                 Trust = trust,
-                Service = new CommandService(store, log, states, trust, Options.Create(options), clock),
+                Service = new CommandService(store, log, states, trust, mesh.Alerts, Options.Create(options), clock),
             };
 
             harness.Add(ValveA, ActuatorKind.Valve, TelemetryPayloadKind.State, 0, 1);

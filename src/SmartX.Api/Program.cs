@@ -1,8 +1,11 @@
 using Microsoft.Extensions.Options;
+using SmartX.Api.Alerts;
 using SmartX.Api.Attachments;
 using SmartX.Api.Commands;
 using SmartX.Api.Endpoints;
+using SmartX.Api.History;
 using SmartX.Api.Ingestion;
+using SmartX.Api.Search;
 using SmartX.Api.Storage;
 using SmartX.Api.Trust;
 
@@ -80,10 +83,43 @@ builder.Services
     .ValidateOnStart();
 
 builder.Services.AddSingleton<ICommandStore, InMemoryCommandStore>();
-builder.Services.AddSingleton<ICommandLog, InMemoryCommandLog>();
+builder.Services.AddSingleton<ICommandLog, HistoryCommandLog>();
 builder.Services.AddSingleton<IActuatorStateStore, InMemoryActuatorStateStore>();
 builder.Services.AddSingleton<CommandService>();
 builder.Services.AddHostedService<CommandTimeoutMonitor>();
+
+// History. One time-ordered record of readings, commands, alerts, trust transitions and searches, behind an
+// interface because the sorted-dictionary store is the implementation for now and a balanced tree replaces it
+// later. ArrivalSequence is the one counter every entry takes its number from.
+builder.Services
+    .AddOptions<HistoryOptions>()
+    .Bind(builder.Configuration.GetSection(HistoryOptions.SectionName))
+    .Validate(options => options.RetentionWindow > TimeSpan.Zero, "History:RetentionWindow must be positive.")
+    .Validate(options => options.EvictionInterval > TimeSpan.Zero, "History:EvictionInterval must be positive.")
+    .Validate(options => options.DefaultTimelineWindow > TimeSpan.Zero, "History:DefaultTimelineWindow must be positive.")
+    .Validate(options => options.DefaultMaxPoints >= 1, "History:DefaultMaxPoints must be at least 1.")
+    .Validate(options => options.MaxPointsLimit >= options.DefaultMaxPoints, "History:MaxPointsLimit must be at least DefaultMaxPoints.")
+    .Validate(options => options.DefaultEventLimit >= 1, "History:DefaultEventLimit must be at least 1.")
+    .Validate(options => options.MaxEventLimit >= options.DefaultEventLimit, "History:MaxEventLimit must be at least DefaultEventLimit.")
+    .ValidateOnStart();
+
+builder.Services.AddSingleton<ArrivalSequence>();
+builder.Services.AddSingleton<IHistoryStore, SortedDictionaryHistoryStore>();
+builder.Services.AddHostedService<HistoryEvictionService>();
+
+// Alerts and search. One lock covers the active alert set and the device indexes, so an alert appearing and the
+// device becoming findable by it are a single step. The bridge feeds both from the trust engine's own events.
+builder.Services
+    .AddOptions<AlertOptions>()
+    .Bind(builder.Configuration.GetSection(AlertOptions.SectionName))
+    .Validate(options => options.DisconnectedAfterIntervals >= 1, "Alerts:DisconnectedAfterIntervals must be at least 1.")
+    .Validate(options => options.ClearAfterValidReadings >= 1, "Alerts:ClearAfterValidReadings must be at least 1.")
+    .ValidateOnStart();
+
+builder.Services.AddSingleton<DeviceIndex>();
+builder.Services.AddSingleton<AlertTracker>();
+builder.Services.AddSingleton<ActivityRecorder>();
+builder.Services.AddHostedService<TrustEventBridge>();
 
 builder.Services.AddSingleton<TelemetryIngestionQueue>();
 builder.Services.AddSingleton<CriticalClassifier>();
@@ -134,6 +170,9 @@ api.MapAttachmentEndpoints();
 api.MapSimulationEndpoints();
 api.MapPipelineEndpoints();
 api.MapCommandEndpoints();
+api.MapHistoryEndpoints();
+api.MapAlertEndpoints();
+api.MapSearchEndpoints();
 
 app.Run();
 
