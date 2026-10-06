@@ -39,7 +39,8 @@ public class CriticalBypassMeasurementTests(ITestOutputHelper output)
         var store = new SlowStore(PerPacketCost);
         var queue = new TelemetryIngestionQueue(Options.Create(new IngestionOptions { MaxQueueDepth = 20_000 }), TimeProvider.System, new SmartX.Api.History.ArrivalSequence());
         var trust = new TrustEngine(Options.Create(new TrustOptions()), TimeProvider.System, NullLogger<TrustEngine>.Instance);
-        var worker = new TelemetryProcessor(queue, store, trust, new SmartX.Api.Commands.InMemoryActuatorStateStore(), NullLogger<TelemetryProcessor>.Instance);
+        var mesh = MeshTestHost.Create(TimeProvider.System);
+        var worker = new TelemetryProcessor(queue, store, trust, new SmartX.Api.Commands.InMemoryActuatorStateStore(), mesh.History, mesh.Alerts, NullLogger<TelemetryProcessor>.Instance);
 
         // Fill the standard lane before the worker starts, so it opens on a genuine backlog instead of racing
         // to keep up with one.
@@ -99,7 +100,8 @@ public class CriticalBypassMeasurementTests(ITestOutputHelper output)
         var queue = new TelemetryIngestionQueue(
             Options.Create(new IngestionOptions { MaxConsecutiveCritical = 10, MaxCriticalQueueDepth = 5_000 }), TimeProvider.System, new SmartX.Api.History.ArrivalSequence());
         var trust = new TrustEngine(Options.Create(new TrustOptions()), TimeProvider.System, NullLogger<TrustEngine>.Instance);
-        var worker = new TelemetryProcessor(queue, store, trust, new SmartX.Api.Commands.InMemoryActuatorStateStore(), NullLogger<TelemetryProcessor>.Instance);
+        var mesh = MeshTestHost.Create(TimeProvider.System);
+        var worker = new TelemetryProcessor(queue, store, trust, new SmartX.Api.Commands.InMemoryActuatorStateStore(), mesh.History, mesh.Alerts, NullLogger<TelemetryProcessor>.Instance);
 
         for (var value = 0; value < 200; value++)
         {

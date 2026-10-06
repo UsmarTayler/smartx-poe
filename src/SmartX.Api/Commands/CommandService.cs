@@ -1,5 +1,6 @@
 using System.Globalization;
 using Microsoft.Extensions.Options;
+using SmartX.Api.Alerts;
 using SmartX.Api.Trust;
 using SmartX.Shared;
 
@@ -82,6 +83,7 @@ internal sealed class CommandService(
     ICommandLog log,
     IActuatorStateStore states,
     ITrustEngine trust,
+    AlertTracker alerts,
     IOptions<CommandOptions> options,
     TimeProvider time)
 {
@@ -292,6 +294,10 @@ internal sealed class CommandService(
                 {
                     // The device confirmed the state it is in, which is an observation like any other.
                     states.Observe(updated!.MacAddress, resulting!.Value, now, ObservationSource.Acknowledgement);
+
+                    // The device answered, so an earlier command to it that went unanswered no longer says
+                    // anything about whether it is reachable now.
+                    alerts.Clear(new AlertKey(updated.MacAddress, AlertKind.CommandTimedOut));
                 }
 
                 Log(updated!, request.Success ? CommandEvent.Acknowledged : CommandEvent.Failed, updated!.FailureReason);
@@ -336,6 +342,10 @@ internal sealed class CommandService(
             }, out var updated))
             {
                 Log(updated!, CommandEvent.TimedOut, reason);
+
+                // A command nobody collected or confirmed is a node problem, not only a command problem. A
+                // second timeout to the same device while the alert is active is counted, not re-raised.
+                alerts.Raise(new AlertKey(updated!.MacAddress, AlertKind.CommandTimedOut), reason);
                 timedOut++;
             }
         }

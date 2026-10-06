@@ -1,9 +1,11 @@
 using Microsoft.Extensions.Options;
+using SmartX.Api.Alerts;
 using SmartX.Api.Attachments;
 using SmartX.Api.Commands;
 using SmartX.Api.Endpoints;
 using SmartX.Api.History;
 using SmartX.Api.Ingestion;
+using SmartX.Api.Search;
 using SmartX.Api.Storage;
 using SmartX.Api.Trust;
 
@@ -81,7 +83,7 @@ builder.Services
     .ValidateOnStart();
 
 builder.Services.AddSingleton<ICommandStore, InMemoryCommandStore>();
-builder.Services.AddSingleton<ICommandLog, InMemoryCommandLog>();
+builder.Services.AddSingleton<ICommandLog, HistoryCommandLog>();
 builder.Services.AddSingleton<IActuatorStateStore, InMemoryActuatorStateStore>();
 builder.Services.AddSingleton<CommandService>();
 builder.Services.AddHostedService<CommandTimeoutMonitor>();
@@ -104,6 +106,19 @@ builder.Services
 builder.Services.AddSingleton<ArrivalSequence>();
 builder.Services.AddSingleton<IHistoryStore, SortedDictionaryHistoryStore>();
 builder.Services.AddHostedService<HistoryEvictionService>();
+
+// Alerts and search. One lock covers the active alert set and the device indexes, so an alert appearing and the
+// device becoming findable by it are a single step. The bridge feeds both from the trust engine's own events.
+builder.Services
+    .AddOptions<AlertOptions>()
+    .Bind(builder.Configuration.GetSection(AlertOptions.SectionName))
+    .Validate(options => options.DisconnectedAfterIntervals >= 1, "Alerts:DisconnectedAfterIntervals must be at least 1.")
+    .Validate(options => options.ClearAfterValidReadings >= 1, "Alerts:ClearAfterValidReadings must be at least 1.")
+    .ValidateOnStart();
+
+builder.Services.AddSingleton<DeviceIndex>();
+builder.Services.AddSingleton<AlertTracker>();
+builder.Services.AddHostedService<TrustEventBridge>();
 
 builder.Services.AddSingleton<TelemetryIngestionQueue>();
 builder.Services.AddSingleton<CriticalClassifier>();

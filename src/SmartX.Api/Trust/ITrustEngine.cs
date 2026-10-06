@@ -38,6 +38,15 @@ public interface ITrustEngine
     /// </remarks>
     event Action<TrustTransition>? FaultCleared;
 
+    /// <summary>Raised whenever a node moves from one trust band to another, whichever bands they are.</summary>
+    /// <remarks>
+    /// Broader than <see cref="FaultEntered"/> and <see cref="FaultCleared"/>, which announce only the fault
+    /// boundary and are unchanged. This one is for consumers that follow every band: the history of transitions
+    /// and the device search index. Raised once per change, after the engine's lock is released, and not raised
+    /// when a node is first tracked, because that is a start and not a change.
+    /// </remarks>
+    event Action<TrustTransition>? BandChanged;
+
     /// <summary>The nodes currently degrading or faulted.</summary>
     IReadOnlyCollection<string> DegradedNodes { get; }
 

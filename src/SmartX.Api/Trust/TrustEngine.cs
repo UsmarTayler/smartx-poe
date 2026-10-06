@@ -65,6 +65,9 @@ internal sealed class TrustEngine : ITrustEngine
     public event Action<TrustTransition>? FaultCleared;
 
     /// <inheritdoc />
+    public event Action<TrustTransition>? BandChanged;
+
+    /// <inheritdoc />
     public IReadOnlyCollection<string> DegradedNodes
     {
         get
@@ -103,7 +106,7 @@ internal sealed class TrustEngine : ITrustEngine
             return;
         }
 
-        TrustTransition? transition;
+        Crossings crossings;
 
         lock (_gate)
         {
@@ -124,10 +127,10 @@ internal sealed class TrustEngine : ITrustEngine
 
             // Never evaluated at a moment before its previous evaluation, so the sparkline's points stay
             // in time order even if a replayed outcome arrives late.
-            transition = Evaluate(node, at > node.EvaluatedAt ? at : node.EvaluatedAt);
+            crossings = Evaluate(node, at > node.EvaluatedAt ? at : node.EvaluatedAt);
         }
 
-        Raise(transition);
+        Raise(crossings);
     }
 
     /// <inheritdoc />
@@ -147,7 +150,7 @@ internal sealed class TrustEngine : ITrustEngine
         }
 
         int applied;
-        TrustTransition? transition;
+        Crossings crossings;
 
         lock (_gate)
         {
@@ -179,10 +182,10 @@ internal sealed class TrustEngine : ITrustEngine
             }
 
             node.PenalisedIntervals = missed;
-            transition = Evaluate(node, now);
+            crossings = Evaluate(node, now);
         }
 
-        Raise(transition);
+        Raise(crossings);
 
         return applied;
     }
@@ -190,7 +193,7 @@ internal sealed class TrustEngine : ITrustEngine
     /// <inheritdoc />
     public void Reevaluate()
     {
-        List<TrustTransition>? transitions = null;
+        List<Crossings>? transitions = null;
 
         lock (_gate)
         {
@@ -198,9 +201,9 @@ internal sealed class TrustEngine : ITrustEngine
 
             foreach (var node in _nodes.Values)
             {
-                if (Evaluate(node, now) is { } transition)
+                if (Evaluate(node, now) is { IsEmpty: false } crossings)
                 {
-                    (transitions ??= []).Add(transition);
+                    (transitions ??= []).Add(crossings);
                 }
             }
         }
@@ -407,7 +410,10 @@ internal sealed class TrustEngine : ITrustEngine
     /// <summary>
     /// Recomputes one node's score, band and reason, and reports whether it crossed the fault boundary.
     /// </summary>
-    /// <returns>The transition, if the node entered or left the fault band; otherwise null.</returns>
+    /// <returns>
+    /// The crossings: a fault transition if the node entered or left the fault band, and a band change if it
+    /// moved between any two bands. Either, both or neither may be set.
+    /// </returns>
     /// <remarks>
     /// <b>Why this fires on a transition and never per packet.</b> The band the node held before
     /// this evaluation is read from the node, the new band is computed, and the node is overwritten —
@@ -425,8 +431,9 @@ internal sealed class TrustEngine : ITrustEngine
     /// unproven — which is not a recovery, and is never announced as one.
     /// </para>
     /// </remarks>
-    private TrustTransition? Evaluate(NodeTrust node, DateTimeOffset now)
+    private Crossings Evaluate(NodeTrust node, DateTimeOffset now)
     {
+        var previousEvaluatedAt = node.EvaluatedAt;
         Span<int> counts = stackalloc int[OutcomeKinds];
         Span<double> failureWeights = stackalloc double[OutcomeKinds];
 
@@ -518,7 +525,21 @@ internal sealed class TrustEngine : ITrustEngine
             node.LastNominalAt = now;
         }
 
-        return transition;
+        // Any change of band, not only the fault boundary. The fault events above are the escalation seam and
+        // stay exactly as they were; this one is for everything that wants to follow bands — the history of
+        // transitions and the search index. Its window opens at the previous evaluation, because that is the
+        // last moment the node was known to be in the band it left.
+        TrustTransition? bandChange = band != previousBand
+            ? new TrustTransition(node.MacAddress, score, previousBand, band, node.Reason, previousEvaluatedAt, now)
+            : null;
+
+        return new Crossings(transition, bandChange);
+    }
+
+    /// <summary>What one evaluation produced, to be announced once the lock is released.</summary>
+    private readonly record struct Crossings(TrustTransition? Fault, TrustTransition? Band)
+    {
+        public bool IsEmpty => Fault is null && Band is null;
     }
 
     /// <summary>Adds a sparkline point if one is due, or if the band just changed.</summary>
@@ -538,21 +559,27 @@ internal sealed class TrustEngine : ITrustEngine
         }
     }
 
-    /// <summary>Delivers a transition to its subscribers, isolating each from the others.</summary>
+    /// <summary>Delivers what an evaluation produced to its subscribers, isolating each from the others.</summary>
     /// <remarks>
     /// Always called with the lock released. Each subscriber is invoked separately and a failure in
     /// one is logged rather than propagated: whatever subscribes later is not allowed to break
     /// ingestion, and one broken subscriber must not stop the rest hearing about the transition.
     /// </remarks>
-    private void Raise(TrustTransition? transition)
+    private void Raise(Crossings crossings)
     {
-        if (transition is null)
+        if (crossings.Band is { } bandChange)
         {
-            return;
+            Deliver(BandChanged, bandChange);
         }
 
-        var handlers = transition.Band == TrustBand.Fault ? FaultEntered : FaultCleared;
+        if (crossings.Fault is { } transition)
+        {
+            Deliver(transition.Band == TrustBand.Fault ? FaultEntered : FaultCleared, transition);
+        }
+    }
 
+    private void Deliver(Action<TrustTransition>? handlers, TrustTransition transition)
+    {
         if (handlers is null)
         {
             return;

@@ -1,4 +1,6 @@
+using SmartX.Api.Alerts;
 using SmartX.Api.Commands;
+using SmartX.Api.History;
 using SmartX.Api.Storage;
 using SmartX.Api.Trust;
 using SmartX.Shared;
@@ -26,6 +28,8 @@ internal sealed class TelemetryProcessor(
     ITelemetryStore store,
     ITrustEngine trust,
     IActuatorStateStore actuators,
+    IHistoryStore history,
+    AlertTracker alerts,
     ILogger<TelemetryProcessor> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -72,6 +76,14 @@ internal sealed class TelemetryProcessor(
     internal async Task ProcessAsync(QueuedReading reading, CancellationToken cancellationToken)
     {
         await store.AddAsync(reading.Packet, cancellationToken);
+
+        // History keeps every accepted reading in time order, keyed by when it was taken and the arrival number
+        // the queue gave it, so two readings stamped the same instant are both kept in the order they arrived.
+        // The store above is the ring of recent readings for the sensor page; this is the record timelines read.
+        history.Append(HistoryEntry.FromReading(reading.Sequence, reading.Packet));
+
+        // A reading proves the node is connected, and counts towards ending an out-of-range alert.
+        alerts.ReadingAccepted(reading.Packet.NodeId);
 
         // Stamped with the moment the reading arrived, not the moment it left the queue, so a backlog cannot
         // distort a node's trust history.

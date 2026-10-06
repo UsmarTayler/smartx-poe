@@ -34,6 +34,7 @@ public class CompositeCommandTests
             var (trust, clock) = TrustTestHost.Create();
             var store = new InMemoryCommandStore();
             var states = new InMemoryActuatorStateStore();
+            var mesh = MeshTestHost.Create(clock);
 
             var sensors = DemoDevices.All
                 .Select(device =>
@@ -49,7 +50,7 @@ public class CompositeCommandTests
                 Clock = clock,
                 Store = store,
                 States = states,
-                Service = new CommandService(store, new InMemoryCommandLog(), states, trust, Options.Create(new CommandOptions()), clock),
+                Service = new CommandService(store, mesh.CommandLog, states, trust, mesh.Alerts, Options.Create(new CommandOptions()), clock),
                 Catalogue = new ZoneCatalogue(DemoZoneHierarchy.Zones),
                 Sensors = sensors,
             };
