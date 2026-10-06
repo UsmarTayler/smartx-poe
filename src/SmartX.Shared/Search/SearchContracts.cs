@@ -5,7 +5,7 @@ namespace SmartX.Shared;
 /// <summary>
 /// What a device search asked for. Every member is optional and they combine with AND.
 /// </summary>
-/// <param name="Q">Text to find in the MAC address, the node name or the room.</param>
+/// <param name="Q">Text to find in the MAC address, the room or the node id.</param>
 /// <param name="Category">Environmental, power or actuator.</param>
 /// <param name="ActuatorKind">Pump, relay, valve or dimmer.</param>
 /// <param name="Zone">A zone id. Matches devices in that zone and every zone beneath it.</param>
@@ -30,8 +30,8 @@ public sealed record DeviceSearchFilters(
 
 /// <summary>One device in a search result.</summary>
 /// <param name="MacAddress">The device.</param>
-/// <param name="Name">Its node name.</param>
-/// <param name="Room">The room it is in.</param>
+/// <param name="Room">The room it was registered in. In the demo fleet that is the device's own label.</param>
+/// <param name="NodeId">The node, or gateway, it reports through.</param>
 /// <param name="ZoneId">The zone it is deployed in.</param>
 /// <param name="Category">What sort of device it is.</param>
 /// <param name="ActuatorKind">Which sort of actuator, for an actuator.</param>
@@ -39,8 +39,8 @@ public sealed record DeviceSearchFilters(
 /// <param name="ActiveAlerts">The kinds of alert it has active now.</param>
 public sealed record DeviceSearchHit(
     string MacAddress,
-    string Name,
     string Room,
+    string NodeId,
     string ZoneId,
     SensorCategory Category,
     ActuatorKind? ActuatorKind,

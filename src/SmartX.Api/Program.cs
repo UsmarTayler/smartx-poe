@@ -118,6 +118,7 @@ builder.Services
 
 builder.Services.AddSingleton<DeviceIndex>();
 builder.Services.AddSingleton<AlertTracker>();
+builder.Services.AddSingleton<ActivityRecorder>();
 builder.Services.AddHostedService<TrustEventBridge>();
 
 builder.Services.AddSingleton<TelemetryIngestionQueue>();
@@ -169,6 +170,9 @@ api.MapAttachmentEndpoints();
 api.MapSimulationEndpoints();
 api.MapPipelineEndpoints();
 api.MapCommandEndpoints();
+api.MapHistoryEndpoints();
+api.MapAlertEndpoints();
+api.MapSearchEndpoints();
 
 app.Run();
 

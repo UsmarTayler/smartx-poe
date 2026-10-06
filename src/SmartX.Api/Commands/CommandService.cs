@@ -579,5 +579,6 @@ internal sealed class CommandService(
             commandEvent,
             time.GetUtcNow(),
             trust.TryGet(command.MacAddress, out var snapshot) ? snapshot.Band : null,
-            detail);
+            detail,
+            Describe(command));
 }

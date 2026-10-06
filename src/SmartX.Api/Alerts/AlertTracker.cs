@@ -302,7 +302,7 @@ internal sealed class AlertTracker(
 
                         return new ActiveAlert(
                             key,
-                            index.NameOfLocked(key.Mac),
+                            index.RoomOfLocked(key.Mac),
                             detail.RaisedAt,
                             detail.Suppressed,
                             _acknowledged.Contains(key),

@@ -15,7 +15,8 @@ namespace SmartX.Api.Commands;
 internal interface ICommandLog
 {
     /// <summary>Appends an event. Entries are only ever added, never changed or removed.</summary>
-    void Append(Guid commandId, string macAddress, CommandEvent commandEvent, DateTimeOffset timestamp, TrustBand? trustBand, string? detail);
+    /// <param name="description">What the command is, such as "ValveClose on AA:BB:...", for a readable summary.</param>
+    void Append(Guid commandId, string macAddress, CommandEvent commandEvent, DateTimeOffset timestamp, TrustBand? trustBand, string? detail, string? description = null);
 
     /// <summary>Entries, newest first, optionally narrowed.</summary>
     IReadOnlyList<CommandLogEntry> Query(string? macAddress, Guid? commandId, int limit);
@@ -37,14 +38,14 @@ internal interface ICommandLog
 /// </remarks>
 internal sealed class HistoryCommandLog(IHistoryStore history, ArrivalSequence arrival, AlertTracker alerts) : ICommandLog
 {
-    public void Append(Guid commandId, string macAddress, CommandEvent commandEvent, DateTimeOffset timestamp, TrustBand? trustBand, string? detail) =>
+    public void Append(Guid commandId, string macAddress, CommandEvent commandEvent, DateTimeOffset timestamp, TrustBand? trustBand, string? detail, string? description = null) =>
         history.Append(HistoryEntry.FromEvent(
             arrival.Next(),
             timestamp,
             macAddress,
             HistoryKind.Command,
             new HistoryEventDetails(
-                $"Command {commandEvent}",
+                description is null ? $"Command {commandEvent}" : $"{commandEvent}: {description}",
                 detail,
                 CommandId: commandId,
                 CommandEvent: commandEvent,

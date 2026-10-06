@@ -166,9 +166,9 @@ internal sealed class DeviceIndex
         }
     }
 
-    /// <summary>The node name of a device, when it is indexed. Caller must hold <see cref="Gate"/>.</summary>
-    internal string? NameOfLocked(string macAddress) =>
-        _devices.TryGetValue(macAddress, out var entry) ? entry.Registration.Location.NodeId : null;
+    /// <summary>The room a device was registered in, when it is indexed. Caller must hold <see cref="Gate"/>.</summary>
+    internal string? RoomOfLocked(string macAddress) =>
+        _devices.TryGetValue(macAddress, out var entry) ? entry.Registration.Location.Room : null;
 
     /// <summary>The trust band an indexed device is in now.</summary>
     public TrustBand? BandOf(string macAddress)
@@ -364,8 +364,8 @@ internal sealed class DeviceIndex
 
     private static DeviceSearchHit ToHit(DeviceEntry entry) => new(
         entry.Registration.MacAddress,
-        entry.Registration.Location.NodeId,
         entry.Registration.Location.Room,
+        entry.Registration.Location.NodeId,
         entry.Registration.Location.ZoneId,
         entry.Registration.Category,
         entry.Registration.ActuatorKind,

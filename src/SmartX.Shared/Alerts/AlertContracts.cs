@@ -2,7 +2,10 @@ namespace SmartX.Shared;
 
 /// <summary>An alert that is on right now.</summary>
 /// <param name="Key">Which node, and what kind of trouble.</param>
-/// <param name="DeviceName">The node's name in its deployment, when it is registered.</param>
+/// <param name="Room">
+/// The room the device was registered in, which in the demo fleet is the device's own label ("Line 2
+/// Conveyor"). Null when the device is not registered.
+/// </param>
 /// <param name="RaisedAt">When the condition first fired.</param>
 /// <param name="SuppressedCount">
 /// How many times the condition fired again while the alert was already active. This is the duplicate
@@ -13,7 +16,7 @@ namespace SmartX.Shared;
 /// <param name="Detail">What the most recent occurrence said, such as the reading that was out of range.</param>
 public sealed record ActiveAlert(
     AlertKey Key,
-    string? DeviceName,
+    string? Room,
     DateTimeOffset RaisedAt,
     long SuppressedCount,
     bool Acknowledged,
