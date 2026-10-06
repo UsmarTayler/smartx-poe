@@ -646,6 +646,11 @@ for the k entries returned. It is not the O(log n + k) a balanced tree gives. St
 old window is cheap and a query for the newest window walks everything. `GetLatest` has the same limit. This is the
 stated reason the next part of the project builds its own balanced tree.
 
+It is measured, not just argued: `HistoryRangeCostMeasurementTests` holds 200,000 entries for one node and asks for
+the same 100 entries twice. On the development machine the oldest 100 took about 18 microseconds and the newest
+100 about 10.8 milliseconds, roughly 600 times as much for an identical answer. The numbers move with the
+machine, the shape does not.
+
 **The interface is the contract.** `IHistoryStore` (append, `GetRange`, `GetLatest`, `GetEvents`,
 `EvictOlderThan`) is what everything depends on. Ranges are half-open, `[from, to)`: `from` is included and `to`
 is excluded, so adjacent ranges tile without overlap. The tests are an abstract class,

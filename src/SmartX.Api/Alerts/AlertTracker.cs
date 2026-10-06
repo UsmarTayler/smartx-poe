@@ -97,6 +97,11 @@ internal sealed class AlertTracker(
     // ---- the condition says it is firing ---------------------------------------------------------------
 
     /// <summary>A condition has fired. Raises the alert if it is new, and counts it if it is a repeat.</summary>
+    /// <remarks>
+    /// For every kind except <see cref="AlertKind.Disconnected"/>, which has its own entry points
+    /// (<see cref="NodeSilent"/> and <see cref="NodeHeard"/>) so that the disconnected set and the alert cannot
+    /// be changed separately.
+    /// </remarks>
     public RaiseOutcome Raise(AlertKey key, string? detail = null)
     {
         lock (Gate)
