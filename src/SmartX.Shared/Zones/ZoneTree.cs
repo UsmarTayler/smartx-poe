@@ -61,9 +61,50 @@ public static class ZoneTree
         var collected = new List<SensorRegistration>();
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        Descend(catalogue, zoneId, byZone, collected, visited, depth: 0, maximumDepth);
+        Descend(
+            catalogue,
+            zoneId,
+            visit: id =>
+            {
+                if (byZone.TryGetValue(id, out var here))
+                {
+                    collected.AddRange(here);
+                }
+            },
+            visited,
+            depth: 0,
+            maximumDepth);
 
         return collected;
+    }
+
+    /// <summary>
+    /// Lists a zone and every zone beneath it, by id.
+    /// </summary>
+    /// <param name="catalogue">The hierarchy to walk.</param>
+    /// <param name="zoneId">The zone to start from.</param>
+    /// <param name="maximumDepth">How many levels to descend before stopping.</param>
+    /// <returns>The named zone first, then its descendants in depth-first order.</returns>
+    /// <remarks>
+    /// The same walk <see cref="NodesBeneath"/> uses, exposed without the sensors. A caller that keeps its own
+    /// index of devices by zone — the device search does — needs the zones beneath a zone, not a scan over every
+    /// sensor to find the ones that happen to be in them. Both go through one private descent, so there is
+    /// still one definition of "beneath" and one place its cycle and depth guards live.
+    /// </remarks>
+    public static IReadOnlyList<string> ZoneIdsBeneath(
+        this IZoneCatalogue catalogue,
+        string zoneId,
+        int maximumDepth = ZoneValidator.DefaultMaximumDepth)
+    {
+        ArgumentNullException.ThrowIfNull(catalogue);
+        ArgumentException.ThrowIfNullOrWhiteSpace(zoneId);
+
+        var found = new List<string>();
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        Descend(catalogue, zoneId, found.Add, visited, depth: 0, maximumDepth);
+
+        return found;
     }
 
     /// <summary>
@@ -92,8 +133,7 @@ public static class ZoneTree
     private static void Descend(
         IZoneCatalogue catalogue,
         string zoneId,
-        Dictionary<string, List<SensorRegistration>> byZone,
-        List<SensorRegistration> collected,
+        Action<string> visit,
         HashSet<string> visited,
         int depth,
         int maximumDepth)
@@ -106,17 +146,14 @@ public static class ZoneTree
             return;
         }
 
-        if (byZone.TryGetValue(zoneId, out var here))
-        {
-            collected.AddRange(here);
-        }
+        visit(zoneId);
 
         // BASE CASE: a leaf zone has no children, so the loop body never runs and this frame
         // returns. The recursion needs no explicit leaf test — the absence of children is the
         // absence of further calls.
         foreach (var child in catalogue.ChildrenOf(zoneId))
         {
-            Descend(catalogue, child.Id, byZone, collected, visited, depth + 1, maximumDepth);
+            Descend(catalogue, child.Id, visit, visited, depth + 1, maximumDepth);
         }
     }
 

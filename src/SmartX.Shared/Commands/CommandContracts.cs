@@ -162,6 +162,10 @@ public enum CommandEvent
 /// <param name="Timestamp">When.</param>
 /// <param name="TrustBand">The target's trust band at that moment, or null if it was not tracked.</param>
 /// <param name="Detail">Anything worth recording, such as a failure reason.</param>
+/// <param name="ActiveAlerts">
+/// Which alerts were active across the mesh at that moment. Whether an operator acted while something was
+/// already wrong is context the pattern analysis needs, and it cannot be reconstructed afterwards.
+/// </param>
 public sealed record CommandLogEntry(
     long Sequence,
     Guid CommandId,
@@ -169,7 +173,8 @@ public sealed record CommandLogEntry(
     CommandEvent Event,
     DateTimeOffset Timestamp,
     TrustBand? TrustBand,
-    string? Detail);
+    string? Detail,
+    IReadOnlyList<AlertKey>? ActiveAlerts = null);
 
 /// <summary>A command with its history.</summary>
 /// <param name="Command">The command as it stands.</param>
