@@ -28,6 +28,7 @@ The brief has three pillars. Parts 1 and 2 deliver the first and lay the ground 
 - [The device simulator](#the-device-simulator)
 - [Ingestion queues](#ingestion-queues)
 - [Commands and undo](#commands-and-undo)
+- [History, timelines, alerts and search](#history-timelines-alerts-and-search)
 - [Feature walkthrough](#feature-walkthrough)
 - [Where the assessed concepts live](#where-the-assessed-concepts-live)
 - [Configuration reference](#configuration-reference)
@@ -580,8 +581,10 @@ Partly undid: ValveClose on 4 Valve devices under Zone 3 – Cold Store. 3 being
 
 Every command is recorded as it happens (issued, delivered, acknowledged, failed, timed out, cancelled,
 reverted) with a timestamp and the **target's trust band at that moment**, not now. Whether a device was
-already faulty when it was commanded is exactly what an operator asks afterwards. The log sits behind an
-interface, because it moves into the sorted history store next, and the pattern analysis after that reads it.
+already faulty when it was commanded is exactly what an operator asks afterwards. The log lives in the
+[history store](#history-timelines-alerts-and-search), so it shares the retention window with everything else
+and no longer grows without bound. Each entry also carries the alerts that were active across the mesh at that
+moment, which cannot be reconstructed afterwards.
 
 ### Trying it
 
@@ -606,6 +609,167 @@ read `GET /api/commands` half a minute later: it is `TimedOut`, because nothing 
 switch it to `Nominal` with `POST /api/simulation/B8:27:EB:10:00:20/scenario` and send `RelayOn` again: this time
 it is acknowledged. A silent device can always be brought back, because the simulator's *control plane* (polling
 its shadow) is kept separate from what the simulated device is *sending* (telemetry) and keeps running.
+
+## History, timelines, alerts and search
+
+Everything the gateway sees is also written to a time-ordered **history**: every accepted reading, every command
+event, every alert raised or cleared, every change of trust band, and every search an operator runs. Timelines,
+the alert set and device search are built on it.
+
+### The history store
+
+```text
+Dictionary<string, SortedDictionary<HistoryKey, HistoryEntry>>      one tree per node, found by MAC
+SortedDictionary<HistoryKey, HistoryEntry>                          the mesh-wide event stream
+```
+
+- The **outer dictionary** finds a node's history in O(1) by MAC. Every append and every query starts from "this
+  node", and a hash lookup costs the same for ten nodes or ten thousand.
+- The **inner sorted dictionary** keeps that node's entries in time order as they are written, so a timeline is a
+  walk and never a sort, and the oldest entries (the ones retention removes) are at the front.
+- The **event stream** is a second sorted dictionary holding only the non-reading entries (commands, alerts, trust
+  transitions, searches), by reference. "What happened across the mesh in the last hour" reads that small
+  structure instead of walking every node's readings to find the few events among them.
+
+**Why the key is a pair.** A `SortedDictionary<DateTimeOffset, …>` is wrong the first time two readings share a
+timestamp: `Add` throws, and the indexer silently overwrites the first reading. The key is a
+`readonly record struct HistoryKey(Timestamp, Sequence)` that implements `IComparable<HistoryKey>`, ordered by
+timestamp and then by the arrival sequence number the ingestion queue assigns to every reading. The sequence is
+never reused, so no two entries share a key, and two readings with the same timestamp come back in the order they
+arrived. `Append` uses `TryAdd`, so even a repeated sequence number refuses rather than overwrites. A test stores
+three readings at one instant and reads all three back in order, and another shows the naive key losing one.
+
+**What a range query costs, honestly.** `SortedDictionary` has no range-seek: there is no way to ask the tree for
+"the first entry at or after 14:00". `GetRange(mac, from, to)` walks from the oldest entry, skips everything
+before `from`, collects until it passes `to`, and stops. That is **O(n) to reach the start of the range**, plus O(k)
+for the k entries returned. It is not the O(log n + k) a balanced tree gives. Stopping early means a query for an
+old window is cheap and a query for the newest window walks everything. `GetLatest` has the same limit. This is the
+stated reason the next part of the project builds its own balanced tree.
+
+**The interface is the contract.** `IHistoryStore` (append, `GetRange`, `GetLatest`, `GetEvents`,
+`EvictOlderThan`) is what everything depends on. Ranges are half-open, `[from, to)`: `from` is included and `to`
+is excluded, so adjacent ranges tile without overlap. The tests are an abstract class,
+`HistoryStoreContract`, run against the sorted-dictionary store by a one-line subclass. The balanced tree is
+proven a safe replacement by adding one more subclass to the same suite.
+
+**Retention** is time-based (`History:RetentionWindow`, default 24 hours) and runs on a timer, not on every
+append. Eviction removes from the front of each node's tree, which is where the oldest entries are, so its cost is
+the number removed and not the number kept. The command log now lives in this store, so it shares the retention
+window and can no longer grow without bound.
+
+**Not the Part 1 ring buffer.** The ring buffer behind trust scoring keeps a fixed *count* of the most recent
+outcomes and forgets the rest, because trust only needs recent behaviour. History keeps everything inside a *time
+window*, in order, because timelines and analysis need to ask what happened between two moments.
+
+### Timelines
+
+`GET /api/sensors/{mac}/timeline?from=&to=&maxPoints=` walks the range once and buckets it into at most
+`maxPoints` buckets (default 200). A day of readings is tens of thousands of points and a chart is a few hundred
+pixels wide, so sending every point makes the response large and the chart slow to draw detail no screen can show.
+
+Each bucket carries **min, max, average and count**, not just the average. One reading of 900 among fifty-nine of
+20 averages to about 34, which looks like a warm afternoon; the bucket's max says 900. A test downsamples an hour
+of readings to sixty buckets and checks the spike survives in `max`. The bucket width is the range divided by
+`maxPoints`, rounded up, so the number of buckets can never exceed the limit, and a gap in the data is a gap in
+the list and not a run of zeros.
+
+A **state sensor** (a valve, a relay) returns its transitions instead: the state at the first reading and each
+change after it, so a valve that has been shut for an hour is one step and not three thousand points.
+
+`from` is inclusive, `to` is exclusive, and omitting them gives the last hour. Command, alert and trust-transition
+events in the range come back alongside as `markers` for the chart to draw. `GET /api/timeline/events?from=&to=&limit=`
+is the mesh-wide stream of the same events in time order, returning the most recent ones and `truncated: true`
+when the range holds more than `limit`.
+
+### Alerts
+
+An alert is identified by an `AlertKey`, a `readonly record struct (Mac, Kind)`, and the kinds are `Disconnected`,
+`OutOfRange`, `TypeViolation`, `Fault` and `CommandTimedOut`. A record struct has value equality and a matching
+hash code, which is what a `HashSet` needs. A plain class compares by reference, so every `new AlertKey(...)`
+would look unique and nothing would ever be suppressed.
+
+**Duplicate prevention is the set.** A condition that fires asks `HashSet<AlertKey>.Add` to add its key, and the
+answer is the whole decision: `true` means a new alert, `false` means a repeat, which is counted and nothing else.
+The counter is what makes the set visible: `GET /api/alerts` shows "Disconnected on B8:27:EB:10:00:0B,
+suppressed ×14" and not fourteen alerts.
+
+| Condition | Raised by | Cleared when |
+| --- | --- | --- |
+| `Disconnected` | the heartbeat monitor, once a node has been silent for `Alerts:DisconnectedAfterIntervals` of its own heartbeat intervals. It runs on every sweep, so each sweep that finds it still silent counts as a repeat | the node sends a reading (straight away, from the ingestion path), or the next sweep finds it fresh |
+| `OutOfRange` | a reading rejected for being outside the registered range | `Alerts:ClearAfterValidReadings` valid readings in a row. Another bad reading restarts the count, so a flapping node is one alert and not a hundred |
+| `TypeViolation` | a reading rejected for the wrong type | the same streak |
+| `Fault` | the trust engine's existing `FaultEntered` event | the existing `FaultCleared` event. A fault whose evidence merely decays to nothing is not a recovery, so its alert stays until something real clears it |
+| `CommandTimedOut` | a command nobody collected or confirmed in time | the device acknowledges a later command |
+
+Three more sets sit beside the active set. `HashSet<string>` of **disconnected MACs** is maintained by the
+heartbeat monitor and kept in step with the active `Disconnected` alerts. `HashSet<AlertKey>` of **acknowledged**
+alerts is what an operator has seen: `POST /api/alerts/acknowledge` with the alert key marks it, and does *not*
+clear the condition, because the node is still disconnected whether or not anyone has noticed. An acknowledgement
+belongs to one occurrence, so the next time the alert is raised it is unacknowledged again.
+`GET /api/alerts/stats` gives raised, suppressed and cleared totals.
+
+There is **no second mechanism**. Fault alerts come from the trust engine's own fault events, and the device index
+and the history of trust transitions come from a new `BandChanged` event on the same engine, so nothing recomputes
+what "faulted" means. A test checks that the index's idea of degrading and faulted nodes equals the engine's
+`DegradedNodes` set after every step of a random run.
+
+### Device search
+
+`GET /api/devices/search` takes any combination of `q` (text over MAC, room and node id), `category`,
+`actuatorKind`, `zone`, `band` and `alert`. The enum filters are case-insensitive, an unknown value is a `400`
+that lists the choices, and an unknown zone is a `404`.
+
+A search is a **set intersection**, not a loop over every device. The index holds a set of device MACs for each
+category, each actuator kind, each trust band, each kind of alert and each zone. A query picks the sets its
+filters name and intersects them starting from the smallest, because `HashSet.IntersectWith` costs about the
+size of the set being whittled down. Only the text filter scans, and only over what survived the other filters.
+The `zone` filter finds devices in every sub-zone beneath it: it asks the Part 1 recursive walk
+(`ZoneTree.ZoneIdsBeneath`) which zones are beneath, over a handful of zones and not over devices, and unions
+their sets.
+
+**Keeping the indexes honest.** An index that disagrees with reality is worse than none, because it returns
+confident wrong answers. The primary facts about each device (its band and its active alerts) live in one place,
+every index is derived from them, and every change updates the fact and the index sets together under one lock.
+The alert set shares that lock, so an alert appearing and the device becoming findable by it are a single step. A
+test makes thousands of random band and alert changes, and after every hundred checks every index against one
+rebuilt from scratch and a handful of random searches against a brute-force scan of every device.
+
+### What the operator did
+
+Every search is recorded as a history event: the filters, the result count and the **alerts active at that
+moment**. Command entries carry the same snapshot. The pattern analysis later in the project learns from what
+operators do in what situations, and neither the search nor the alerts that were active can be reconstructed
+afterwards, so recording starts now. `GET /api/activity?from=&to=` returns searches and the commands an operator
+caused (issued, cancelled, undone) in time order. The server records the searches it receives, and assumes the
+client waits for a pause in typing before asking, so that "pump" is one search and not four.
+
+### Trying it
+
+With the API and simulator running on the demo hierarchy, the alerts are real: a few devices start silent and a
+few send bad readings.
+
+```bash
+curl http://localhost:5266/api/alerts
+```
+
+Run it twice a few seconds apart and watch `suppressedCount` climb on the disconnected devices while the number of
+alerts stays the same. The totals:
+
+```bash
+curl http://localhost:5266/api/alerts/stats
+```
+
+The valves in Zone 3 that are in the fault band, combining a category, a band and a zone:
+
+```bash
+curl "http://localhost:5266/api/devices/search?category=Actuator&actuatorKind=Valve&zone=zone-3"
+```
+
+A downsampled timeline for the compressor, with its spike still visible as a maximum:
+
+```bash
+curl "http://localhost:5266/api/sensors/B8:27:EB:10:00:0C/timeline?maxPoints=20"
+```
 
 ## Feature walkthrough
 
@@ -685,7 +849,12 @@ Restart the API, or the Docker stack, and the attachments are still there.
 | Lists | [`TelemetryStagingBuffer.cs`](src/SmartX.Shared/Collections/TelemetryStagingBuffer.cs), [`TelemetryRingBuffer.cs`](src/SmartX.Shared/Collections/TelemetryRingBuffer.cs) | `Drain` returns a pre-sized `List<T>`, and `ToList` copies a node's history out as a pre-sized list |
 | Stack for undo | [`CommandService.cs`](src/SmartX.Api/Commands/CommandService.cs) | `Stack<UndoEntry> _undo` behind a lock: `Push` (with the bounded-depth trim), `Undo`, and the class comment on why undo restores the previous state instead of doing the opposite |
 | Command lifecycle | [`CommandService.cs`](src/SmartX.Api/Commands/CommandService.cs), [`CommandStore.cs`](src/SmartX.Api/Commands/CommandStore.cs) | states and transitions; `Collect` hands each command over once; `TryTransition` is the compare-and-swap |
-| Recursion, reused | [`CommandService.cs`](src/SmartX.Api/Commands/CommandService.cs) | `IssueForZone` calls the same `NodesBeneath` walk as Part 1 to find every actuator under a zone |
+| Recursion, reused | [`CommandService.cs`](src/SmartX.Api/Commands/CommandService.cs), [`ZoneTree.cs`](src/SmartX.Shared/Zones/ZoneTree.cs) | `IssueForZone` calls the same `NodesBeneath` walk as Part 1 to find every actuator under a zone, and the device search asks `ZoneIdsBeneath`, which shares the same private `Descend` |
+| Sorted dictionary | [`SortedDictionaryHistoryStore.cs`](src/SmartX.Api/History/SortedDictionaryHistoryStore.cs), [`HistoryKey.cs`](src/SmartX.Api/History/HistoryKey.cs) | a dictionary of nodes, each owning a `SortedDictionary<HistoryKey, HistoryEntry>`; the key is `(Timestamp, Sequence)` so equal timestamps cannot collide, and the class comment states the cost of a range query honestly |
+| Contract tests | [`HistoryStoreContract.cs`](tests/SmartX.Tests/HistoryStoreContract.cs) | an abstract suite over `IHistoryStore`, run by a subclass, so a replacement store is proven by adding one more subclass |
+| Downsampling | [`TimelineBuilder.cs`](src/SmartX.Api/History/TimelineBuilder.cs) | one pass into at most `maxPoints` buckets with min, max, average and count, so a spike survives |
+| HashSet for duplicate prevention | [`AlertTracker.cs`](src/SmartX.Api/Alerts/AlertTracker.cs), [`AlertKey.cs`](src/SmartX.Shared/Alerts/AlertKey.cs) | `HashSet<AlertKey>` where `Add` returning `false` is the suppress decision; the key is a `readonly record struct` so value equality works |
+| Secondary indexes and set intersection | [`DeviceIndex.cs`](src/SmartX.Api/Search/DeviceIndex.cs) | `Dictionary<TKey, HashSet<string>>` per category, kind, band, alert and zone; `Search` intersects the smallest set first, and `FindInconsistencies` is what the consistency test runs |
 | Idempotent delivery | [`SimulatedDevice.cs`](src/SmartX.DeviceSimulator/SimulatedDevice.cs) | `ApplyCommand` remembers applied command ids |
 | FIFO queue | [`TelemetryIngestionQueue.cs`](src/SmartX.Api/Ingestion/TelemetryIngestionQueue.cs) | `Queue<QueuedReading> _standard`, with the lock, the `SemaphoreSlim` signal and the bound; the class comment explains the trade-off against `Channel<T>` |
 | Priority queue | [`TelemetryIngestionQueue.cs`](src/SmartX.Api/Ingestion/TelemetryIngestionQueue.cs) | `PriorityQueue<QueuedReading, (int Severity, long Sequence)>`: the composite priority that makes it stable, and `DequeueAsync`'s starvation valve |
@@ -706,7 +875,7 @@ Restart the API, or the Docker stack, and the attachments are still there.
 The API reads configuration in the standard ASP.NET Core order: `appsettings.json`, then
 `appsettings.{Environment}.json`, then user secrets (Development only), then environment variables, then
 command-line arguments. Later sources win. An environment variable uses `__` for each `:` in a setting
-name, so `Trust:HalfLife` becomes `Trust__HalfLife`. The `Attachments`, `Zones`, `Ingestion`, `Telemetry` and
+name, so `Trust:HalfLife` becomes `Trust__HalfLife`. The `Attachments`, `Zones`, `Commands`, `History`, `Alerts`, `Ingestion`, `Telemetry` and
 `Trust` sections are validated at startup, and a bad value stops the API with a message naming the
 setting.
 
@@ -732,6 +901,25 @@ setting.
 | `Commands:DeliveredTimeout` | `00:00:30` | How long a delivered command may wait for the device's acknowledgement. |
 | `Commands:SweepInterval` | `00:00:01` | How often the timeout service looks for stale commands. |
 | `Commands:MaxUndoDepth` | `20` | How many operator actions the undo stack remembers. Older ones fall off the bottom. |
+
+### API: `History`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `History:RetentionWindow` | `24:00:00` | How long any history entry is kept: readings, commands, alerts, trust transitions and searches. |
+| `History:EvictionInterval` | `00:01:00` | How often retention runs. It runs on a timer and not on every append. |
+| `History:DefaultTimelineWindow` | `01:00:00` | How far back a timeline, the event stream or the activity record looks when `from` is omitted. |
+| `History:DefaultMaxPoints` | `200` | Buckets in a timeline when `maxPoints` is omitted. |
+| `History:MaxPointsLimit` | `2000` | The most buckets a caller may ask for. More is a `400`. |
+| `History:DefaultEventLimit` | `500` | Events in the stream when `limit` is omitted. |
+| `History:MaxEventLimit` | `5000` | The most events a caller may ask for. |
+
+### API: `Alerts`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Alerts:DisconnectedAfterIntervals` | `3` | How many of a node's own heartbeat intervals it may stay silent before it is called disconnected. |
+| `Alerts:ClearAfterValidReadings` | `3` | How many valid readings in a row end an out-of-range or wrong-type alert. |
 
 ### API: `Ingestion`
 
@@ -911,6 +1099,13 @@ This demonstrates the *encryption mechanism*, not production key management.
 | `POST` | `/api/commands/undo` | Pops and undoes the most recent action. `200` (reverted or partly reverted), `409` (refused, with the reason), `404` (nothing to undo). The body always says exactly what happened |
 | `GET` | `/api/commands/composite/{id}` | A zone-wide action's commands and its status: `InProgress`, `Applied`, `PartiallyApplied` or `NotApplied` |
 | `GET` | `/api/commands/log` | The command log, newest first, with the trust band at each event. Filter with `?mac=` and `?commandId=` |
+| `GET` | `/api/sensors/{mac}/timeline` | A sensor's readings downsampled: `?from=` (inclusive), `?to=` (exclusive), `?maxPoints=`. Buckets with min, max, average and count for a numeric sensor, transitions for a state sensor, and command, alert and trust markers. `404`, `400` |
+| `GET` | `/api/timeline/events` | The mesh-wide stream of commands, alerts and trust transitions in time order. `?from=`, `?to=`, `?limit=`. `truncated` is true when the most recent `limit` were returned |
+| `GET` | `/api/alerts` | Active alerts, oldest first, each with its raised-at time, suppressed count and acknowledged flag |
+| `POST` | `/api/alerts/acknowledge` | `{ "mac", "kind" }` marks an alert as seen without clearing it: `200` (also if already acknowledged), `404` (not active), `400` |
+| `GET` | `/api/alerts/stats` | Raised, suppressed and cleared totals, and how many are active and acknowledged |
+| `GET` | `/api/devices/search` | Devices matching every filter given: `?q=`, `?category=`, `?actuatorKind=`, `?zone=` (includes every sub-zone), `?band=`, `?alert=`. `404` for an unknown zone, `400` for an unknown value |
+| `GET` | `/api/activity` | What operators did, searches and commands, with the alerts active at the time. `?from=`, `?to=` |
 | `GET` | `/api/simulation` | The desired state recorded for each device |
 | `POST` | `/api/simulation/{mac}/scenario` | `{ "scenario": "Drift" }` records the desired state: `202`, `400` (not a scenario), `404` |
 | `GET` | `/api/devices/{mac}/desired` | A device's check-in: its desired state **and any commands waiting for it**, each handed over once. `404` when there is nothing. `?deliver=false` reads the scenario without collecting commands, for the simulator's control channel to a silent device |
