@@ -28,6 +28,63 @@ public sealed class TelemetryService(SmartXApiClient api, ApiConnection connecti
         return state;
     }
 
+    /// <summary>
+    /// Adds readings the server pushed to the sensors' recent histories, so a card updates as readings arrive.
+    /// </summary>
+    /// <param name="readings">The pushed readings, oldest first.</param>
+    /// <param name="sensors">The registered sensors by MAC, which say what kind of packet each reading is.</param>
+    /// <remarks>
+    /// A reading no newer than the sensor's latest is ignored. A page loads a sensor's history over HTTP and
+    /// is also pushed readings, so the same reading can arrive by both routes, and the timestamp is what tells a
+    /// repeat from a new one. A sensor the page does not know is ignored.
+    /// </remarks>
+    public void ApplyPushed(IReadOnlyList<ReadingPush> readings, IReadOnlyDictionary<string, SensorRegistration> sensors)
+    {
+        var changed = false;
+
+        foreach (var reading in readings)
+        {
+            if (!sensors.TryGetValue(reading.MacAddress, out var sensor))
+            {
+                continue;
+            }
+
+            var state = For(reading.MacAddress);
+
+            if (state.Latest is { } latest && latest.Timestamp >= reading.Timestamp)
+            {
+                continue;
+            }
+
+            var packet = ToPacket(sensor, reading);
+
+            // Copy-on-write, and bounded like the ring buffer on the server, so a card holds the same recent
+            // window and never grows for as long as the tab stays open.
+            var recent = new List<ITelemetryPacket>(Math.Min(state.Recent.Count + 1, RecentLimit));
+            recent.AddRange(state.Recent.Count >= RecentLimit ? state.Recent.Skip(state.Recent.Count - RecentLimit + 1) : state.Recent);
+            recent.Add(packet);
+
+            state.Recent = recent;
+            state.IsLoaded = true;
+            changed = true;
+        }
+
+        if (changed)
+        {
+            Changed?.Invoke();
+        }
+    }
+
+    private const int RecentLimit = 256;
+
+    /// <summary>Turns a pushed reading into the packet type the sensor's registration calls for.</summary>
+    private static ITelemetryPacket ToPacket(SensorRegistration sensor, ReadingPush reading) => sensor.PayloadKind switch
+    {
+        TelemetryPayloadKind.State => new StatePacket(sensor.MacAddress, reading.Value != 0, reading.Timestamp, sensor.Unit),
+        TelemetryPayloadKind.Integer => new NumericPacket<int>(sensor.MacAddress, (int)reading.Value, reading.Timestamp, sensor.Category, sensor.Unit),
+        _ => new NumericPacket<float>(sensor.MacAddress, (float)reading.Value, reading.Timestamp, sensor.Category, sensor.Unit),
+    };
+
     /// <summary>Loads every sensor's recent readings concurrently.</summary>
     /// <remarks>
     /// All requests start before any is awaited. Loading them one after another would make the page's

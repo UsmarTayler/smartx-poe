@@ -89,6 +89,17 @@ internal sealed class CommandService(
 {
     private readonly CommandOptions _options = options.Value;
 
+    /// <summary>
+    /// Raised whenever something happens to a command: issued, delivered, acknowledged, failed, timed out,
+    /// cancelled or reverted.
+    /// </summary>
+    /// <remarks>
+    /// A domain event, so whatever shows commands live can follow them without this class knowing it exists.
+    /// Raised from the same place as the log entry, so the two never disagree about what happened. A handler
+    /// that throws is ignored: a faulty subscriber must not be able to fail a command.
+    /// </remarks>
+    public event Action<Command, CommandEvent>? Changed;
+
     // A plain Stack<T> behind a lock, not ConcurrentStack<T>. Each ConcurrentStack call is safe on its own,
     // but the operations here are compound: undo pops an entry and must not race a push, and a push that would
     // exceed the depth limit has to drop the oldest entry, which is several steps on any stack. A lock makes
@@ -572,7 +583,31 @@ internal sealed class CommandService(
     private static string LevelText(double? level) =>
         level is { } value ? $" to {value.ToString("0.##", CultureInfo.InvariantCulture)}" : string.Empty;
 
-    private void Log(Command command, CommandEvent commandEvent, string? detail) =>
+    private void Log(Command command, CommandEvent commandEvent, string? detail)
+    {
+        AppendToLog(command, commandEvent, detail);
+
+        var handlers = Changed;
+
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (Action<Command, CommandEvent> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(command, commandEvent);
+            }
+            catch
+            {
+                // Deliberately swallowed. See the remarks on Changed.
+            }
+        }
+    }
+
+    private void AppendToLog(Command command, CommandEvent commandEvent, string? detail) =>
         log.Append(
             command.Id,
             command.MacAddress,

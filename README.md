@@ -29,6 +29,7 @@ The brief has three pillars. Parts 1 and 2 deliver the first and lay the ground 
 - [Ingestion queues](#ingestion-queues)
 - [Commands and undo](#commands-and-undo)
 - [History, timelines, alerts and search](#history-timelines-alerts-and-search)
+- [Real-time push](#real-time-push)
 - [Feature walkthrough](#feature-walkthrough)
 - [Where the assessed concepts live](#where-the-assessed-concepts-live)
 - [Configuration reference](#configuration-reference)
@@ -790,6 +791,167 @@ A downsampled timeline for the compressor, with its spike still visible as a max
 curl "http://localhost:5266/api/sensors/B8:27:EB:10:00:0C/timeline?maxPoints=20"
 ```
 
+## Real-time push
+
+The dashboard is pushed to rather than polling. The client keeps **one** SignalR connection for its whole life, every
+page subscribes to the feeds it needs, and navigating between pages never drops the connection or loses state.
+
+```text
+domain events              broadcaster                 hub groups              client feeds
+TrustEngine.NodeEvaluated ─┐
+AlertTracker.Changed ──────┤                           trust    ───────────►  SignalRTrustFeed
+CommandService.Changed ────┼─► RealtimeBroadcaster ──► alerts   ───────────►  AlertFeed
+ProcessedReadings.Processed┤   (one loop, one lock,    commands ───────────►  CommandFeed
+IngestionQueue.Stats() ────┘    numbered messages)     stream   ───────────►  TelemetryStream
+                                                       pipeline ───────────►  PipelineFeed
+                                                       device:{mac}
+```
+
+### SignalR stays out of the domain
+
+The trust engine, the alert set, the command service, the ingestion worker, the history and the search index do not
+reference SignalR. They raise ordinary events (`BandChanged`, `NodeEvaluated`, `Changed`, `Processed`, and the
+existing `FaultEntered` and `FaultCleared`), as they would if nobody were listening. One class,
+[`RealtimeBroadcaster`](src/SmartX.Api/Realtime/RealtimeBroadcaster.cs), subscribes to them and forwards through
+`IHubContext`. The domain stays testable without a hub, and the transport can change again (it already has, from
+polling to push) without touching the code that decides when a node is faulty or an alert is raised. Tests enforce it
+three ways: what the assemblies reference, what the domain types expose in their signatures, and what the source
+files import.
+
+### Topics
+
+A client joins a topic by name with `Subscribe(topic)` and leaves with `Unsubscribe(topic)`. Topics are SignalR
+groups, so a client receives only what it joined; nothing is filtered on the client.
+
+| Topic | Carries | Sent |
+| --- | --- | --- |
+| `trust` | the nodes whose trust changed, each at its latest state, and the mesh summary | **coalesced**, every flush window |
+| `alerts` | alerts raised, acknowledged and cleared; critical readings | **immediately** |
+| `commands` | command state changes | **immediately** |
+| `stream` | every accepted reading | **batched**, every flush window |
+| `pipeline` | ingestion queue statistics | periodic, once a second |
+| `device:{mac}` | one device's readings, for a timeline view | **batched** |
+
+### What is batched, coalesced and immediate
+
+The design is meant to hold at 4,800 devices, not only at 48.
+
+- **Readings are batched.** They are the highest-volume thing in the system. One message per reading would be over a
+  thousand sends and a thousand client re-renders a second at that scale. They are collected and sent as one message
+  every `Realtime:FlushInterval` (250 ms). The buffer is bounded (`MaxBufferedReadings`); anything beyond it is dropped
+  and the count travels in the batch, so a stream that is thinning says so.
+- **Trust is coalesced.** A node's score moves on every packet. Ten changes to one node inside a window are not ten
+  facts but one: where it is now. The broadcaster keeps a set of nodes that changed, and at each flush sends each once, at
+  its latest state, and only if its band, reason or counts changed or its score moved by more than
+  `TrustScoreEpsilon`. (The heartbeat monitor re-evaluates every node every few seconds, and decay nudges every score;
+  without a threshold that is every node, every sweep.) Sending the latest state and not the changes is also what
+  makes a lost or reordered message harmless.
+- **Alerts, command changes and critical readings are immediate.** They are rare, and they are the point of the
+  system. Delaying a critical reading by up to a flush window so it could ride in a batch would undo the priority
+  lane the ingestion queue exists to provide: the queue lets an alert overtake a backlog of ordinary readings, and a batch
+  timer would make it wait anyway. They go to the front of the line and are sent as soon as the previous send finishes.
+  One exception: when an already-active alert's repeat count ticks up, that is a counter and not news, so it is
+  coalesced like trust.
+- **Nothing is done for a topic nobody has joined.** Events for it are ignored on entry, so an idle gateway pays a
+  dictionary lookup per event and the buffers cannot grow.
+
+### Snapshot plus stream: how ordering is enforced
+
+Anything pushed while the connection is down is lost, and reconnecting does not bring it back. So on every connect and
+every reconnect a feed does three things in this order:
+
+1. **Subscribes** to the topic, so pushes start arriving.
+2. **Fetches a snapshot** over HTTP (`/api/realtime/{topic}`), which says what sequence number it is as of.
+3. **Applies pushed messages only if their sequence number is newer** than what it holds.
+
+Every message carries a per-topic sequence number, assigned by the one loop that sends. Without step 3, a message sent
+just before the snapshot was taken can reach the client just after the snapshot does, and overwrite newer state with
+older. So pushes that arrive *while the snapshot is in flight* are held, not applied; when it lands, those at or below
+its sequence are discarded as already included, the rest are applied in sequence order; from then on a push is applied
+only if it is above the last one applied. A test forces exactly that interleaving by holding the snapshot response back
+while pushes are delivered.
+
+Two details make the rule sound. The server reads a message's *content* before it takes its sequence number, and a
+snapshot endpoint reads the *sequence number* before it reads its data; together that means a snapshot as of sequence N
+contains everything in messages up to N. And the baseline is always the latest snapshot's sequence, never a running
+maximum across snapshots, so a server that restarts and begins numbering from 1 again is handled: the next snapshot
+resets the baseline.
+
+### The client connection
+
+[`RealtimeConnection`](src/SmartX.Client/Realtime/RealtimeConnection.cs) owns the one `HubConnection` and is started by
+the app layout, not by any page. One connection, not one per feed or per page: a browser allows only a handful of
+connections to one host, each connection negotiates and is kept alive separately, and several connections would make
+connection state several facts, so the app bar could say "live" while the alerts feed was reconnecting. It is registered
+scoped, which in Blazor WebAssembly is one per browser tab for the tab's whole life. Pages never see it; they start and
+stop feeds, which are built on it.
+
+The reconnect schedule never ends (0, 1, 2, 5, 10, then every 15 seconds, for ever), where SignalR's default gives up
+after four attempts and strands a laptop that slept for an hour.
+
+| State | Meaning | Shown as |
+| --- | --- | --- |
+| Live | connected, the server pushes | bolt icon, "Live", green |
+| Reconnecting | the connection dropped and is coming back; the last known state stays on screen | sync-problem icon, "Reconnecting…", amber |
+| Polling | push cannot be had; the feeds poll and the connection keeps trying | update icon, "Polling", blue |
+| Unreachable | the API itself is not answering | cloud-off icon, "API unreachable · Retry" |
+
+The tooltip says which transport was negotiated ("over WebSockets"), read from the server's own record of the
+connection.
+
+### Fallback when WebSockets are blocked
+
+If the first connection attempt fails (a proxy that blocks WebSockets, an API not yet up), the state is **Polling**: the
+trust feed hands over to the original `PollingTrustFeed`, which is kept for this purpose, and every other feed polls its
+own snapshot endpoint. The connection retries every `UpgradeRetryInterval` (15 s). The moment it succeeds, polling stops,
+each feed rejoins and takes a snapshot, and the dashboard is live again with no reload. If an established connection drops
+and stays down for longer than `ReconnectingFallbackAfter` (15 s) the feeds poll for the rest of the outage while the
+reconnection carries on. A poll that fails keeps the last known data on screen with a "showing trust as of…" banner and
+does not blank it.
+
+### Pages and state
+
+A page subscribes when it opens and unsubscribes when it is disposed, and never opens or closes the connection. Feeds
+are reference counted and serialised: two pages can want one feed at once, and a page disposed *after* the next one has
+opened (rapid navigation does that) must not take the feed from it. The hub handlers are registered when the first
+page starts and removed when the last stops, so there is exactly one handler per message type however a user clicks
+around. Stopping a feed stops the traffic, not the cache: coming back to a page renders the feed's last state at once
+and the snapshot refreshes it behind the scenes, with no blank frame.
+
+### WebSockets through nginx
+
+[`nginx/default.conf`](src/SmartX.Client/nginx/default.conf) has a `/hubs/` location with three settings, each
+needed: `proxy_http_version 1.1` (the upgrade handshake does not exist in HTTP/1.0, nginx's default upstream version),
+the `Upgrade` and `Connection` headers passed through (nginx strips both by default because they are hop-by-hop headers,
+which is exactly what the upgrade must survive), and a long `proxy_read_timeout` (nginx closes a proxied connection that
+carries no data for 60 seconds, and an idle WebSocket is silent between keep-alive pings). Without them SignalR does not
+fail: it quietly falls back to long polling, and nobody notices that "push" has become a request held open and repeated.
+That is why the hub has a `GetTransport` method.
+
+To check the transport yourself, hover the "Live" chip in the app bar (it says "over WebSockets"), or ask the server
+through the proxy with any SignalR client; the response to `GetTransport` is `WebSockets`.
+
+CORS: in development the client is on another origin from the API, and a browser sends SignalR's negotiate request
+with credentials. The policy therefore calls `AllowCredentials()`, which is only legal because the allowed origins are
+listed by name. A test sends the preflight and the negotiate request from the development origin and checks the headers.
+
+### Measured, in the Docker stack
+
+Measured through nginx over WebSockets with an external client, at 48 simulated devices. The reading latency is the time
+from the API accepting a reading to the client receiving the message; the clocks were compared first (the API container
+and the host agreed to within 1 ms).
+
+| What | Result |
+| --- | --- |
+| Reading, accepted to client (600 readings posted at random moments) | p50 **134 ms**, p95 **243 ms**, max 267 ms. This includes the batch window, which adds 0 to 250 ms. |
+| Critical reading, accepted to client (60 readings) | p50 **3 ms**, p95 **7 ms**, max 12 ms |
+| HTTP requests from an idle trust panel, polling (before) | about **37 per minute** (38 in 62 s) |
+| HTTP requests from an idle trust panel, push (after) | **0 per minute** (none in 53 s, after the four at start-up) |
+
+The critical alert is announced about forty times faster than an ordinary reading, which is the priority lane carrying
+through to the client. The latency of an ordinary reading is mostly the 250 ms flush window by design; shorten
+`Realtime:FlushInterval` to trade messages for latency.
+
 ## Feature walkthrough
 
 These steps assume the API and the device simulator are both running, so there is a fleet to look at. Each one also works on an empty API once
@@ -881,6 +1043,10 @@ Restart the API, or the Docker stack, and the attachments are still there.
 | Asynchronous processing | [`TelemetryProcessor.cs`](src/SmartX.Api/Ingestion/TelemetryProcessor.cs) | the `BackgroundService` that drains the queues, and why there is one worker |
 | Device shadow | [`SimulationEndpoints.cs`](src/SmartX.Api/Endpoints/SimulationEndpoints.cs), [`DeviceShadowStore.cs`](src/SmartX.Api/Storage/DeviceShadowStore.cs) | desired state with a version; `GET /api/devices/{mac}/desired` |
 | Device simulator | [`DeviceFleet.cs`](src/SmartX.DeviceSimulator/DeviceFleet.cs), [`GatewayClient.cs`](src/SmartX.DeviceSimulator/GatewayClient.cs) | registration, backfill, backoff, and applying desired state, all over HTTP |
+| SignalR hub and groups | [`TelemetryHub.cs`](src/SmartX.Api/Realtime/TelemetryHub.cs), [`ITelemetryClient.cs`](src/SmartX.Api/Realtime/ITelemetryClient.cs) | topics as groups, a typed client interface, and the transport readable through `GetTransport` |
+| Batching, coalescing and immediate sends | [`RealtimeBroadcaster.cs`](src/SmartX.Api/Realtime/RealtimeBroadcaster.cs) | the class comment explains which messages are which and why; one loop sends, so messages leave in numbered order |
+| Snapshot plus stream | [`RealtimeFeed.cs`](src/SmartX.Client/Realtime/RealtimeFeed.cs) | join, snapshot, then apply only pushes newer than the snapshot; reference-counted start and stop |
+| One connection, reconnect and fallback | [`RealtimeConnection.cs`](src/SmartX.Client/Realtime/RealtimeConnection.cs) | the state machine: Live, Reconnecting, Polling, and the upgrade back |
 | Dictionary and HashSet | [`TrustEngine.cs`](src/SmartX.Api/Trust/TrustEngine.cs) | `_nodes`, keyed by MAC for O(1) lookup per packet, and `_degraded`, where each failing node appears once |
 | The ingestion pipeline, stage by stage | [`TelemetryEndpoints.cs`](src/SmartX.Api/Endpoints/TelemetryEndpoints.cs) | `IngestBatchAsync`, with each stage numbered in comments, and `TryCreatePacket` |
 | Polymorphic JSON | [`ITelemetryPacket.cs`](src/SmartX.Shared/Packets/ITelemetryPacket.cs) | `[JsonDerivedType]` over the packet types |
@@ -939,6 +1105,29 @@ setting.
 | --- | --- | --- |
 | `Alerts:DisconnectedAfterIntervals` | `3` | How many of a node's own heartbeat intervals it may stay silent before it is called disconnected. |
 | `Alerts:ClearAfterValidReadings` | `3` | How many valid readings in a row end an out-of-range or wrong-type alert. |
+
+### API: `Realtime`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Realtime:FlushInterval` | `00:00:00.250` | How often batched and coalesced topics (readings, trust, alert repeat counts) are flushed. |
+| `Realtime:PipelineInterval` | `00:00:01` | How often pipeline statistics are pushed to clients that asked. |
+| `Realtime:MaxBufferedReadings` | `10000` | The most readings held for the next flush. More are dropped, and the batch reports how many. |
+| `Realtime:TrustScoreEpsilon` | `0.005` | How far a score must move to be worth a message, when nothing else about the node changed. |
+| `Realtime:RecentPriorityAlerts` | `20` | Critical readings carried by an alerts snapshot. |
+| `Realtime:SnapshotCommands` | `100` | Commands carried by a commands snapshot. |
+| `Realtime:MaxQueuedMessages` | `20000` | Immediate messages queued at once. Beyond it the newest are dropped and logged. |
+
+### Client: `Realtime`
+
+In `src/SmartX.Client/wwwroot/appsettings.json`. Every value is optional.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Realtime:ReconnectingFallbackAfter` | `00:00:15` | How long a dropped connection may stay reconnecting before the feeds poll. |
+| `Realtime:UpgradeRetryInterval` | `00:00:15` | How often a connection that could not be made tries again, while polling. |
+| `Realtime:PollInterval` | `00:00:03` | How often a polling feed (other than trust) asks for a snapshot. |
+| `Realtime:SnapshotRetryInterval` | `00:00:03` | How long a feed waits before retrying a snapshot that failed. |
 
 ### API: `Ingestion`
 
@@ -1125,6 +1314,12 @@ This demonstrates the *encryption mechanism*, not production key management.
 | `GET` | `/api/alerts/stats` | Raised, suppressed and cleared totals, and how many are active and acknowledged |
 | `GET` | `/api/devices/search` | Devices matching every filter given: `?q=`, `?category=`, `?actuatorKind=`, `?zone=` (includes every sub-zone), `?band=`, `?alert=`. `404` for an unknown zone, `400` for an unknown value |
 | `GET` | `/api/activity` | What operators did, searches and commands, with the alerts active at the time. `?from=`, `?to=` |
+| `GET` | `/api/realtime/trust` | Every node's trust and the mesh summary, with the sequence number they are as of: the snapshot a trust feed starts from |
+| `GET` | `/api/realtime/alerts` | Active alerts, totals and recent critical readings, as of a sequence number |
+| `GET` | `/api/realtime/commands` | Recent commands, as of a sequence number |
+| `GET` | `/api/realtime/pipeline` | Pipeline statistics, as of a sequence number |
+| `GET` | `/api/realtime/stream` | The latest reading from each node, as of a sequence number |
+| `WS` | `/hubs/telemetry` | The SignalR hub. `Subscribe(topic)`, `Unsubscribe(topic)` and `GetTransport()`; topics are `trust`, `alerts`, `commands`, `pipeline`, `stream` and `device:{mac}` |
 | `GET` | `/api/simulation` | The desired state recorded for each device |
 | `POST` | `/api/simulation/{mac}/scenario` | `{ "scenario": "Drift" }` records the desired state: `202`, `400` (not a scenario), `404` |
 | `GET` | `/api/devices/{mac}/desired` | A device's check-in: its desired state **and any commands waiting for it**, each handed over once. `404` when there is nothing. `?deliver=false` reads the scenario without collecting commands, for the simulator's control channel to a silent device |
@@ -1154,6 +1349,14 @@ simulator registers again when it starts. Attachments are the exception, and per
   is gitignored. In Docker it is the `smartx_attachments` volume.
 
 ## Troubleshooting
+
+### The indicator says "Polling" and never goes Live
+
+The browser could not open the push connection, so the app is polling and retrying every 15 seconds. Hover the chip, or
+open the browser's network tab and look for `/hubs/telemetry`. The usual cause is a proxy between the browser and the API
+that does not pass WebSocket upgrades; SignalR then falls back to long polling and the indicator may say "Live" while the
+tooltip says "over LongPolling". In the Docker stack the `/hubs/` location in `src/SmartX.Client/nginx/default.conf`
+needs `proxy_http_version 1.1` and the `Upgrade` and `Connection` headers. Another proxy in front needs the same.
 
 ### The address is already in use
 

@@ -97,6 +97,38 @@ public static class TrustFormula
         _ => throw new ArgumentOutOfRangeException(nameof(band), band, "Unknown trust band.")
     };
 
+    /// <summary>Orders by urgency of band, then by score ascending, then by MAC.</summary>
+    /// <remarks>
+    /// Band comes first because score alone gets unproven nodes wrong: an unproven 0.5 is numerically below a
+    /// degrading 0.6, so a plain score sort would rank a node nobody has heard from above one that is actually
+    /// slipping. The MAC tie-break makes the order total, so two nodes on the same score cannot swap places
+    /// between refreshes and visibly shuffle the rows.
+    /// <para>
+    /// Here, in the shared project, because two sides need the same answer. The API sorts a full snapshot with
+    /// it, and a client that receives only the nodes that changed has to put them back in order. Two copies of an
+    /// ordering is how a list shuffles every time a push arrives.
+    /// </para>
+    /// </remarks>
+    public static int CompareWorstFirst(
+        TrustBand leftBand, double leftScore, string leftMac,
+        TrustBand rightBand, double rightScore, string rightMac)
+    {
+        var bySeverity = Severity(leftBand).CompareTo(Severity(rightBand));
+
+        if (bySeverity != 0)
+        {
+            return bySeverity;
+        }
+
+        var byScore = leftScore.CompareTo(rightScore);
+
+        return byScore != 0 ? byScore : string.CompareOrdinal(leftMac, rightMac);
+    }
+
+    /// <summary>Orders two snapshots worst first. See <see cref="CompareWorstFirst(TrustBand, double, string, TrustBand, double, string)"/>.</summary>
+    public static int CompareWorstFirst(NodeTrustSnapshot left, NodeTrustSnapshot right) =>
+        CompareWorstFirst(left.Band, left.Score, left.MacAddress, right.Band, right.Score, right.MacAddress);
+
     /// <summary>How much an observation of a given age still counts, between 0 and 1.</summary>
     /// <param name="age">How long ago the observation was made.</param>
     /// <param name="halfLife">The age at which an observation counts half as much as a fresh one.</param>
