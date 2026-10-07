@@ -1,7 +1,8 @@
 @page "/telemetry"
-@implements IDisposable
+@implements IAsyncDisposable
 @inject SensorService SensorCatalog
 @inject TelemetryService TelemetryData
+@inject ITelemetryStream Stream
 
 <PageTitle>Telemetry · Smart-X</PageTitle>
 
@@ -72,6 +73,11 @@ else
     {
         SensorCatalog.Changed += OnChanged;
         TelemetryData.Changed += OnChanged;
+        Stream.BatchReceived += OnBatch;
+
+        // Subscribed on open and released on dispose. The page never touches the connection: the stream is a feed
+        // built on the app's one connection, and the cards update as readings are pushed.
+        await Stream.StartAsync();
 
         await LoadAsync();
     }
@@ -95,11 +101,34 @@ else
         _refreshing = false;
     }
 
+    private IReadOnlyDictionary<string, SensorRegistration> _byMac = new Dictionary<string, SensorRegistration>();
+    private IReadOnlyList<SensorRegistration>? _indexed;
+
+    private void OnBatch(ReadingsBatch batch)
+    {
+        if (!SensorCatalog.IsLoaded)
+        {
+            return;
+        }
+
+        // Indexed once per change to the sensor list, not once per batch.
+        if (!ReferenceEquals(_indexed, SensorCatalog.Sensors))
+        {
+            _byMac = SensorCatalog.Sensors.ToDictionary(sensor => sensor.MacAddress, StringComparer.OrdinalIgnoreCase);
+            _indexed = SensorCatalog.Sensors;
+        }
+
+        TelemetryData.ApplyPushed(batch.Readings, _byMac);
+    }
+
     private void OnChanged() => _ = InvokeAsync(StateHasChanged);
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         SensorCatalog.Changed -= OnChanged;
         TelemetryData.Changed -= OnChanged;
+        Stream.BatchReceived -= OnBatch;
+
+        await Stream.StopAsync();
     }
 }

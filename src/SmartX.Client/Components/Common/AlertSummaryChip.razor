@@ -1,0 +1,44 @@
+@implements IAsyncDisposable
+@inject IAlertFeed Alerts
+
+@* How many alerts are on right now, and how many repeats the alert set has absorbed. It subscribes when it appears and
+   unsubscribes when it is disposed; it never touches the connection. Icon, text and colour travel together. *@
+@if (State.IsLoaded)
+{
+    var active = State.Stats.Active;
+
+    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+             Color="@(active == 0 ? Color.Success : Color.Warning)"
+             Icon="@(active == 0 ? Icons.Material.Filled.NotificationsNone : Icons.Material.Filled.NotificationsActive)"
+             aria-label="@Label" title="@Label">
+        @(active == 1 ? "1 active alert" : $"{active} active alerts")
+        @if (State.Stats.Suppressed > 0)
+        {
+            <span class="mud-text-secondary ml-1">· @State.Stats.Suppressed.ToString("N0") repeats suppressed</span>
+        }
+    </MudChip>
+}
+
+@code {
+    private AlertFeedState State => Alerts.Current;
+
+    private string Label =>
+        $"{State.Stats.Active} active alerts. {State.Stats.Suppressed:N0} repeats of those were counted and not raised again.";
+
+    protected override async Task OnInitializedAsync()
+    {
+        Alerts.Updated += OnChanged;
+
+        // The last known state is already on screen. Starting the feed refreshes it and keeps it live.
+        await Alerts.StartAsync();
+    }
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public async ValueTask DisposeAsync()
+    {
+        Alerts.Updated -= OnChanged;
+
+        await Alerts.StopAsync();
+    }
+}

@@ -2,6 +2,7 @@
 @implements IDisposable
 @inject AppState State
 @inject ApiConnection Connection
+@inject RealtimeConnection Realtime
 
 @* MudBlazor's providers must appear exactly once, above the layout. Dialogs, popovers and
    snackbars are rendered into these hosts rather than where they are invoked, so leaving one
@@ -25,7 +26,7 @@
 
         <MudSpacer />
 
-        <ConnectionIndicator Status="Connection.Status" OnRetry="RetryConnectionAsync" />
+        <ConnectionIndicator Display="ConnectionDisplays.From(Connection.Status, Realtime.State)" Transport="Realtime.Transport" OnRetry="RetryConnectionAsync" />
 
         <MudTooltip Text="@ThemeToggleLabel">
             <MudIconButton Icon="@(IsDark ? Icons.Material.Filled.LightMode : Icons.Material.Filled.DarkMode)"
@@ -68,6 +69,11 @@
     {
         State.Changed += OnStateChanged;
         Connection.Changed += OnStateChanged;
+        Realtime.StateChanged += OnStateChanged;
+
+        // The one real-time connection starts with the app and not with any page, so the indicator is right on
+        // every page, and a page opening or closing can never be what opens or closes the connection.
+        Realtime.EnsureStarted();
     }
 
     protected override Task OnInitializedAsync() => Connection.CheckAsync();
@@ -96,5 +102,6 @@
     {
         State.Changed -= OnStateChanged;
         Connection.Changed -= OnStateChanged;
+        Realtime.StateChanged -= OnStateChanged;
     }
 }

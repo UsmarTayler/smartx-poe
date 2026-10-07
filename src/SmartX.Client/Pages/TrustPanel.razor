@@ -2,11 +2,13 @@
 @implements IAsyncDisposable
 @inject ITrustFeed Feed
 @inject AppState State
+@inject RealtimeConnection Realtime
 
 <PageTitle>Trust panel · Smart-X</PageTitle>
 
 <PageHeader Title="Trust panel" Subtitle="Every node, worst first. The node most likely to be at fault is always the top row.">
     <Actions>
+        <AlertSummaryChip />
         <MudText Typo="Typo.caption" Class="mud-text-secondary">@RefreshLabel</MudText>
         <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Refresh" OnClick="RefreshAsync">
             Refresh now
@@ -88,7 +90,9 @@ else
         State.LastRefresh is { } at
             ? Feed.RefreshInterval is { } interval
                 ? $"Updated {ReadingFormatter.Time(at)} · every {interval.TotalSeconds:0}s"
-                : $"Updated {ReadingFormatter.Time(at)} · live"
+                : Realtime.State == RealtimeState.Live
+                    ? $"Updated {ReadingFormatter.Time(at)} · live"
+                    : $"Updated {ReadingFormatter.Time(at)} · reconnecting"
             // Before the first successful refresh, say whether an attempt has already failed rather than
             // claiming to still be connecting while the API is known to be down.
             : Snapshot.Problem is not null ? "Not connected" : "Connecting…";
@@ -97,6 +101,7 @@ else
     {
         Feed.Updated += OnChanged;
         State.Changed += OnChanged;
+        Realtime.StateChanged += OnChanged;
 
         // Whatever the feed already holds renders first; starting it fetches fresh data and then keeps
         // it coming for as long as this page is open.
@@ -114,8 +119,9 @@ else
     {
         Feed.Updated -= OnChanged;
         State.Changed -= OnChanged;
+        Realtime.StateChanged -= OnChanged;
 
-        // Stop polling when the panel closes; the last snapshot stays in the feed for the next visit.
+        // Stop receiving when the panel closes; the last snapshot stays in the feed for the next visit.
         await Feed.StopAsync();
     }
 }

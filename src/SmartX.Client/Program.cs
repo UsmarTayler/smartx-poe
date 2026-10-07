@@ -2,8 +2,10 @@ using Microsoft.AspNetCore.Components.Web;
 using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
 using MudBlazor.Services;
 using SmartX.Client;
+using SmartX.Client.Realtime;
 using SmartX.Client.Services;
 using SmartX.Client.State;
+using SmartX.Shared;
 
 var builder = WebAssemblyHostBuilder.CreateDefault(args);
 builder.RootComponents.Add<App>("#app");
@@ -41,7 +43,27 @@ builder.Services.AddScoped<ApiConnection>();
 builder.Services.AddScoped<SensorService>();
 builder.Services.AddScoped<TelemetryService>();
 builder.Services.AddScoped<AttachmentService>();
-builder.Services.AddScoped<ITrustFeed, PollingTrustFeed>();
+// Real-time. One connection to the hub for the whole tab, built once here and owned by RealtimeConnection; every
+// feed is built on it, and pages only ever start and stop feeds. Scoped, like everything that must outlive a page
+// and exist once per tab. The hub lives on the API's origin, found the same way the REST API is, so in Docker it is
+// reached through the same web server and in development it is cross-origin.
+var realtimeOptions = builder.Configuration.GetSection(RealtimeClientOptions.SectionName).Get<RealtimeClientOptions>()
+    ?? new RealtimeClientOptions();
+var hubUri = new Uri(apiBaseUri, RealtimeTopics.HubPath.TrimStart('/'));
+
+builder.Services.AddSingleton(realtimeOptions);
+builder.Services.AddScoped<IRealtimeHub>(_ => new SignalRHub(hubUri, realtimeOptions));
+builder.Services.AddScoped<RealtimeConnection>();
+builder.Services.AddScoped<IRealtimeSnapshots, ApiRealtimeSnapshots>();
+
+// The trust feed that was the whole of Part 1 is now the fallback, and the one the panel gets is the push feed. It
+// is built on the polling feed so it can hand over to it when the hub cannot be reached.
+builder.Services.AddScoped<PollingTrustFeed>();
+builder.Services.AddScoped<ITrustFeed, SignalRTrustFeed>();
+builder.Services.AddScoped<IAlertFeed, AlertFeed>();
+builder.Services.AddScoped<ICommandFeed, CommandFeed>();
+builder.Services.AddScoped<ITelemetryStream, TelemetryStream>();
+builder.Services.AddScoped<IPipelineFeed, PipelineFeed>();
 
 // Injected rather than read from DateTimeOffset.UtcNow, matching the API, so anything that stamps
 // or ages client-side state can be driven by a controlled clock in a test.

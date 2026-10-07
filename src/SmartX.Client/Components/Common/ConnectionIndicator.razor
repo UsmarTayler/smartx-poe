@@ -1,17 +1,39 @@
-@* Shows API reachability in the app bar. Takes the status in and raises a retry out; it never
-   checks the connection itself. Icon and text always travel together, because the state should
-   not depend on telling green from red. On narrow screens the text collapses and the accessible
-   name carries it instead. *@
-@switch (Status)
+@* Shows how the app is getting its data, in the app bar. Takes the state in and raises a retry out; it never
+   checks the connection itself. Icon and text always travel together, and colour is a third cue and never the
+   only one, because the state should not depend on telling green from amber. On narrow screens the text collapses
+   and the accessible name carries it instead.
+
+   Live is push. Reconnecting is a push connection that dropped and is coming back, with the last known state still
+   on screen. Polling is the fallback: the push connection cannot be made, so the app asks for its data on a timer
+   and keeps trying to upgrade. Unreachable is the API itself not answering. *@
+@switch (Display)
 {
-    case ConnectionStatus.Connected:
-        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Inherit"
-                 Icon="@Icons.Material.Filled.CloudDone" Class="mr-1 smartx-appbar-chip" aria-label="API connected">
-            <span class="d-none d-sm-inline">API connected</span>
+    case ConnectionDisplay.Live:
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success"
+                 Icon="@Icons.Material.Filled.Bolt" Class="mr-1 smartx-appbar-chip"
+                 aria-label="@LiveLabel" title="@LiveLabel">
+            <span class="d-none d-sm-inline">Live</span>
         </MudChip>
         break;
 
-    case ConnectionStatus.Checking:
+    case ConnectionDisplay.Reconnecting:
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning"
+                 Icon="@Icons.Material.Filled.SyncProblem" Class="mr-1 smartx-appbar-chip"
+                 aria-label="Reconnecting. Showing the last known state." title="Reconnecting. Showing the last known state.">
+            <span class="d-none d-sm-inline">Reconnecting&hellip;</span>
+        </MudChip>
+        break;
+
+    case ConnectionDisplay.Polling:
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info"
+                 Icon="@Icons.Material.Filled.Update" Class="mr-1 smartx-appbar-chip"
+                 aria-label="Polling. Live updates are unavailable, so the app refreshes every few seconds."
+                 title="Polling. Live updates are unavailable, so the app refreshes every few seconds and keeps trying to go live.">
+            <span class="d-none d-sm-inline">Polling</span>
+        </MudChip>
+        break;
+
+    case ConnectionDisplay.Checking:
         <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Inherit"
                  Icon="@Icons.Material.Filled.Sync" Class="mr-1 smartx-appbar-chip" aria-label="Connecting to the API">
             <span class="d-none d-sm-inline">Connecting&hellip;</span>
@@ -30,8 +52,17 @@
 
 @code {
     [Parameter, EditorRequired]
-    public ConnectionStatus Status { get; set; }
+    public ConnectionDisplay Display { get; set; }
+
+    /// <summary>The transport the push connection negotiated, when it is up. Shown in the tooltip.</summary>
+    [Parameter]
+    public string? Transport { get; set; }
 
     [Parameter]
     public EventCallback OnRetry { get; set; }
+
+    private string LiveLabel =>
+        string.IsNullOrEmpty(Transport)
+            ? "Live. Updates are pushed as they happen."
+            : $"Live. Updates are pushed as they happen, over {Transport}.";
 }
