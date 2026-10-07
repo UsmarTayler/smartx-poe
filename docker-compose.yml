@@ -21,6 +21,10 @@ services:
       Ingestion__MaxQueueDepth: ${SMARTX_QUEUE_DEPTH:-10000}
       # Simulates the per-reading processing cost of a constrained gateway. Zero is an unconstrained one.
       Ingestion__SimulatedGatewayCost: ${SMARTX_PROCESS_DELAY:-00:00:00}
+      # How soon after an event an operator's action counts as a response to it, and how fast learned habits fade. A short
+      # window lets the pattern analysis be demonstrated in minutes instead of over a shift.
+      Patterns__Window: ${SMARTX_PATTERN_WINDOW:-00:10:00}
+      Patterns__HalfLife: ${SMARTX_PATTERN_HALFLIFE:-7.00:00:00}
     volumes:
       # Encrypted files and their index, kept across container restarts and rebuilds.
       - attachments:/data/attachments

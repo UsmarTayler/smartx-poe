@@ -113,7 +113,7 @@ internal static class HistoryEndpoints
             return Results.ValidationProblem(errors, title: "The event range is not valid");
         }
 
-        var events = history.GetEvents(start, end).Where(entry => entry.Kind != HistoryKind.Search).ToList();
+        var events = history.GetEvents(start, end).Where(entry => entry.Kind is not (HistoryKind.Search or HistoryKind.Selection)).ToList();
         var truncated = events.Count > count;
 
         if (truncated)
@@ -158,7 +158,7 @@ internal static class HistoryEndpoints
         }
 
         var activity = history.GetEvents(start, end)
-            .Where(entry => entry.Kind == HistoryKind.Search || IsOperatorCommand(entry))
+            .Where(entry => entry.Kind is HistoryKind.Search or HistoryKind.Selection || IsOperatorCommand(entry))
             .Select(ToActivity)
             .ToList();
 
@@ -173,11 +173,17 @@ internal static class HistoryEndpoints
     {
         var details = entry.Event!;
         var isSearch = entry.Kind == HistoryKind.Search;
+        var kind = entry.Kind switch
+        {
+            HistoryKind.Search => ActivityKind.Search,
+            HistoryKind.Selection => ActivityKind.Selection,
+            _ => ActivityKind.Command,
+        };
 
         return new ActivityEntry(
             entry.Sequence,
             entry.Timestamp,
-            isSearch ? ActivityKind.Search : ActivityKind.Command,
+            kind,
             details.Summary,
             details.Filters,
             details.ResultCount,
