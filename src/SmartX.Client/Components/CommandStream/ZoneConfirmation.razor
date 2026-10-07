@@ -69,7 +69,8 @@
     {
         null => "unknown",
         var value when device.Kind == ActuatorKind.Dimmer => $"{value:0.##}",
-        var value => value != 0 ? "on or open" : "off or closed",
+        var value when device.Kind == ActuatorKind.Valve => value != 0 ? "open" : "closed",
+        var value => value != 0 ? "on" : "off",
     };
 
     private Task Confirm() => OnConfirm.InvokeAsync();

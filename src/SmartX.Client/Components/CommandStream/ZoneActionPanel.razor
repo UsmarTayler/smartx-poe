@@ -12,9 +12,9 @@
     <MudText Typo="Typo.subtitle2" HtmlTag="h3">Apply to zone</MudText>
 
     <div class="smartx-zone-action__form">
-        <ZonePicker Zones="Catalog.Zones" Value="_zone" ValueChanged="value => { _zone = value; }" Label="Zone" Placeholder="Choose a zone" />
+        <ZonePicker Zones="Catalog.Zones" Value="@_zone" ValueChanged="value => { _zone = value; }" Label="Zone" Placeholder="Choose a zone" />
 
-        <MudSelect T="CommandAction" Label="Action" @bind-Value="_action" Variant="Variant.Outlined" Margin="Margin.Dense" AnchorOrigin="Origin.BottomCenter">
+        <MudSelect T="CommandAction" Label="Action" @bind-Value="_action" ToStringFunc="ActionLabel" Variant="Variant.Outlined" Margin="Margin.Dense" AnchorOrigin="Origin.BottomCenter">
             @foreach (var choice in CommandChoices.ForZone)
             {
                 <MudSelectItem T="CommandAction" Value="choice.Action">@choice.Label</MudSelectItem>
@@ -88,7 +88,11 @@
         await Commands.StartAsync();
     }
 
-    private double? Level => _action == CommandAction.SetLevel ? _level : null;
+    // The select would otherwise show the enum's name ("ValveClose") instead of the label the menu items use.
+    private static string ActionLabel(CommandAction action) =>
+        CommandChoices.ForZone.FirstOrDefault(choice => choice.Action == action)?.Label ?? action.ToString();
+
+    private double? Level =>_action == CommandAction.SetLevel ? _level : null;
 
     private async Task PreviewAsync()
     {

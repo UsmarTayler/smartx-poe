@@ -557,9 +557,11 @@ h1:focus {
 }
 
 .smartx-stream__row--critical { border-left: 4px solid #d03b3b; }
-.smartx-stream__time { color: var(--mud-palette-text-secondary); }
-.smartx-stream__device { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.smartx-stream__value { font-variant-numeric: tabular-nums; }
+/* Time, value and the critical badge keep their width; only the device name gives way, and it ellipsises. */
+.smartx-stream__time { color: var(--mud-palette-text-secondary); flex: 0 0 auto; white-space: nowrap; }
+.smartx-stream__device { flex: 1 1 auto; min-width: 6ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.smartx-stream__value { font-variant-numeric: tabular-nums; flex: 0 0 auto; white-space: nowrap; }
+.smartx-stream__row .smartx-status { flex: 0 0 auto; white-space: nowrap; }
 
 .smartx-pinned { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
 
