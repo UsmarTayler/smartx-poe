@@ -70,6 +70,18 @@ public sealed class IngestionOptions
     /// </remarks>
     public int MaxConsecutiveCritical { get; set; } = 20;
 
+    /// <summary>
+    /// How long the worker pauses after each reading it processes. Zero, and meant to stay zero outside a demonstration.
+    /// </summary>
+    /// <remarks>
+    /// The real worker drains the queue faster than the simulated fleet can fill it, so the standard lane is empty and the
+    /// critical lane has nothing to overtake. That is the right behaviour and a poor demonstration. This gives the worker a
+    /// per-reading cost, as a slower store or a busier machine would, so a backlog can be built on purpose and the priority
+    /// lane can be watched jumping it. It is configuration and not a code path of its own: the worker is otherwise
+    /// unchanged, and nothing is slowed unless this is set.
+    /// </remarks>
+    public TimeSpan DemoProcessingDelay { get; set; } = TimeSpan.Zero;
+
     /// <summary>The rules that classify a reading as critical.</summary>
     public IList<CriticalRule> CriticalRules { get; set; } =
     [
