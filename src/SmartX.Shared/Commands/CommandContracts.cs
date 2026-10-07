@@ -99,6 +99,12 @@ public enum UndoOutcome
     NothingToUndo
 }
 
+/// <summary>The limits the command system runs with, so a client can show them and not guess.</summary>
+/// <param name="MaxUndoDepth">How many operator actions the undo stack remembers.</param>
+/// <param name="PendingTimeoutSeconds">How long a command may wait for its device to collect it.</param>
+/// <param name="DeliveredTimeoutSeconds">How long a delivered command may wait for confirmation.</param>
+public sealed record CommandLimits(int MaxUndoDepth, double PendingTimeoutSeconds, double DeliveredTimeoutSeconds);
+
 /// <summary>One device a zone-wide action would reach.</summary>
 /// <param name="MacAddress">The actuator.</param>
 /// <param name="Room">The room it was registered in, which in the demo fleet is the device's own label.</param>

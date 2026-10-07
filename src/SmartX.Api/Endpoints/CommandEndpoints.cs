@@ -27,6 +27,7 @@ internal static class CommandEndpoints
         commands.MapGet("", List).WithName("ListCommands");
         commands.MapGet("/log", Log).WithName("GetCommandLog");
         commands.MapGet("/undo-stack", UndoStack).WithName("GetUndoStack");
+        commands.MapGet("/limits", Limits).WithName("GetCommandLimits");
         commands.MapPost("/undo", Undo).WithName("UndoCommand");
         commands.MapGet("/composite/{id:guid}", GetComposite).WithName("GetCompositeCommand");
         commands.MapGet("/{id:guid}", Get).WithName("GetCommand");
@@ -160,6 +161,13 @@ internal static class CommandEndpoints
     }
 
     private static IResult UndoStack(CommandService commands) => Results.Ok(commands.UndoStack());
+
+    /// <summary>The configured limits: how deep the undo stack goes and how long a command may wait.</summary>
+    private static IResult Limits(Microsoft.Extensions.Options.IOptions<CommandOptions> options) =>
+        Results.Ok(new CommandLimits(
+            options.Value.MaxUndoDepth,
+            options.Value.PendingTimeout.TotalSeconds,
+            options.Value.DeliveredTimeout.TotalSeconds));
 
     /// <summary>Pops the most recent action and undoes it.</summary>
     /// <remarks>

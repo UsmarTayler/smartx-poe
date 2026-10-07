@@ -224,6 +224,10 @@ public sealed class SmartXApiClient(HttpClient http)
         }
     }
 
+    /// <summary>How deep the undo stack goes, and how long a command may wait.</summary>
+    public Task<ApiResult<CommandLimits>> GetCommandLimitsAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<CommandLimits>("api/commands/limits", cancellationToken);
+
     /// <summary>Marks an alert as seen. The condition is not touched.</summary>
     public Task<ApiResult<ActiveAlert>> AcknowledgeAlertAsync(AlertKey key, CancellationToken cancellationToken = default) =>
         SendAsync<ActiveAlert>(token => http.PostAsJsonAsync("api/alerts/acknowledge", key, token), cancellationToken);

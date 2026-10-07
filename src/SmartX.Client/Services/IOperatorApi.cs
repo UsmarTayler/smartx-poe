@@ -29,6 +29,8 @@ public interface IOperatorApi
 
     Task<ApiResult<UndoResult>> UndoAsync(CancellationToken cancellationToken = default);
 
+    Task<ApiResult<CommandLimits>> GetCommandLimitsAsync(CancellationToken cancellationToken = default);
+
     Task<ApiResult<ActiveAlert>> AcknowledgeAlertAsync(AlertKey key, CancellationToken cancellationToken = default);
 
     Task<ApiResult<DeviceDesiredState>> SetScenarioAsync(string macAddress, SimulationScenario scenario, CancellationToken cancellationToken = default);
@@ -61,6 +63,9 @@ public sealed class OperatorApi(SmartXApiClient api, ApiConnection connection) :
 
     public Task<ApiResult<UndoResult>> UndoAsync(CancellationToken cancellationToken = default) =>
         Reported(api.UndoAsync(cancellationToken));
+
+    public Task<ApiResult<CommandLimits>> GetCommandLimitsAsync(CancellationToken cancellationToken = default) =>
+        Reported(api.GetCommandLimitsAsync(cancellationToken));
 
     public Task<ApiResult<ActiveAlert>> AcknowledgeAlertAsync(AlertKey key, CancellationToken cancellationToken = default) =>
         Reported(api.AcknowledgeAlertAsync(key, cancellationToken));

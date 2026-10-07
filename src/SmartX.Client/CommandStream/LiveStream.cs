@@ -192,7 +192,7 @@ public sealed class LiveStream : IAsyncDisposable
     /// The devices that match the page's filters, or null to show everything. The stream is filtered by the same filters as
     /// the device list because it asks the same question: which devices am I interested in.
     /// </param>
-    public IReadOnlyList<StreamRow> Rows(IReadOnlySet<string>? allowed)
+    public List<StreamRow> Rows(IReadOnlySet<string>? allowed)
     {
         lock (_gate)
         {
