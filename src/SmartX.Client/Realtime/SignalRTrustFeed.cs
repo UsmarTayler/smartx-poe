@@ -113,7 +113,13 @@ public sealed class SignalRTrustFeed(
 
     private void OnPollingUpdated()
     {
-        Current = polling.Current;
+        var polled = polling.Current;
+
+        // The polling feed starts empty, and a poll that fails leaves it empty with a problem. Copying that over
+        // would wipe the last known state at the very moment the API went away, which is when an operator most
+        // wants it. So an unloaded result contributes only its problem; what this feed already holds stays.
+        Current = polled.IsLoaded ? polled : Current with { Problem = polled.Problem };
+
         Raise();
     }
 

@@ -26,7 +26,7 @@
 
         <MudSpacer />
 
-        <ConnectionIndicator Display="ConnectionDisplays.From(Connection.Status, Realtime.State)" Transport="Realtime.Transport" OnRetry="RetryConnectionAsync" />
+        <ConnectionIndicator Display="ConnectionDisplays.From(Connection.Status, Realtime.State)" Transport="@Realtime.Transport" OnRetry="RetryConnectionAsync" />
 
         <MudTooltip Text="@ThemeToggleLabel">
             <MudIconButton Icon="@(IsDark ? Icons.Material.Filled.LightMode : Icons.Material.Filled.DarkMode)"
