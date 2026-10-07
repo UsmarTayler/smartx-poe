@@ -68,6 +68,9 @@ internal sealed class TrustEngine : ITrustEngine
     public event Action<TrustTransition>? BandChanged;
 
     /// <inheritdoc />
+    public event Action<string>? NodeEvaluated;
+
+    /// <inheritdoc />
     public IReadOnlyCollection<string> DegradedNodes
     {
         get
@@ -88,9 +91,18 @@ internal sealed class TrustEngine : ITrustEngine
             return;
         }
 
+        bool isNew;
+
         lock (_gate)
         {
+            isNew = !_nodes.ContainsKey(mac);
             GetOrTrack(mac, _time.GetUtcNow());
+        }
+
+        // A node that has just appeared is news to anything showing the mesh, though no score has moved.
+        if (isNew)
+        {
+            RaiseEvaluated(mac);
         }
     }
 
@@ -131,6 +143,7 @@ internal sealed class TrustEngine : ITrustEngine
         }
 
         Raise(crossings);
+        RaiseEvaluated(mac);
     }
 
     /// <inheritdoc />
@@ -186,6 +199,7 @@ internal sealed class TrustEngine : ITrustEngine
         }
 
         Raise(crossings);
+        RaiseEvaluated(mac);
 
         return applied;
     }
@@ -194,13 +208,17 @@ internal sealed class TrustEngine : ITrustEngine
     public void Reevaluate()
     {
         List<Crossings>? transitions = null;
+        List<string> evaluated;
 
         lock (_gate)
         {
             var now = _time.GetUtcNow();
+            evaluated = new List<string>(_nodes.Count);
 
             foreach (var node in _nodes.Values)
             {
+                evaluated.Add(node.MacAddress);
+
                 if (Evaluate(node, now) is { IsEmpty: false } crossings)
                 {
                     (transitions ??= []).Add(crossings);
@@ -214,6 +232,11 @@ internal sealed class TrustEngine : ITrustEngine
             {
                 Raise(transition);
             }
+        }
+
+        foreach (var mac in evaluated)
+        {
+            RaiseEvaluated(mac);
         }
     }
 
@@ -382,30 +405,13 @@ internal sealed class TrustEngine : ITrustEngine
     };
 
     private static int WorstFirst(NodeTrustSnapshot left, NodeTrustSnapshot right) =>
-        CompareWorstFirst(left.Band, left.Score, left.MacAddress, right.Band, right.Score, right.MacAddress);
+        TrustFormula.CompareWorstFirst(left, right);
 
-    /// <summary>Orders by urgency of band, then by score ascending, then by MAC.</summary>
-    /// <remarks>
-    /// Band comes first because score alone gets unproven nodes wrong: an unproven 0.5 is
-    /// numerically below a degrading 0.6, so a plain score sort would rank a node nobody has heard
-    /// from above one that is actually slipping. The MAC tie-break makes the order total, so two
-    /// nodes on the same score cannot swap places between refreshes and visibly shuffle the rows.
-    /// </remarks>
+    // The ordering lives in TrustFormula so a client merging pushed nodes sorts exactly as this does.
     private static int CompareWorstFirst(
         TrustBand leftBand, double leftScore, string leftMac,
-        TrustBand rightBand, double rightScore, string rightMac)
-    {
-        var bySeverity = TrustFormula.Severity(leftBand).CompareTo(TrustFormula.Severity(rightBand));
-
-        if (bySeverity != 0)
-        {
-            return bySeverity;
-        }
-
-        var byScore = leftScore.CompareTo(rightScore);
-
-        return byScore != 0 ? byScore : string.CompareOrdinal(leftMac, rightMac);
-    }
+        TrustBand rightBand, double rightScore, string rightMac) =>
+        TrustFormula.CompareWorstFirst(leftBand, leftScore, leftMac, rightBand, rightScore, rightMac);
 
     /// <summary>
     /// Recomputes one node's score, band and reason, and reports whether it crossed the fault boundary.
@@ -575,6 +581,29 @@ internal sealed class TrustEngine : ITrustEngine
         if (crossings.Fault is { } transition)
         {
             Deliver(transition.Band == TrustBand.Fault ? FaultEntered : FaultCleared, transition);
+        }
+    }
+
+    /// <summary>Tells subscribers a node was evaluated, isolating each from the others. Lock released.</summary>
+    private void RaiseEvaluated(string mac)
+    {
+        var handlers = NodeEvaluated;
+
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (Action<string> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(mac);
+            }
+            catch (Exception exception)
+            {
+                _logger.LogError(exception, "A node evaluation subscriber threw while handling node {Node}.", mac);
+            }
         }
     }
 
