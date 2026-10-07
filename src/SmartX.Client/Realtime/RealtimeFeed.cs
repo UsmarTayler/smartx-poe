@@ -178,10 +178,14 @@ public abstract class RealtimeFeed<TSnapshot> : IFeed, IFeedDiagnostics
     /// </summary>
     /// <param name="method">The server-to-client method name.</param>
     /// <param name="apply">Applies the message. Called with the feed's state lock held.</param>
-    protected void Listen<TMessage>(string method, Action<TMessage> apply)
+    /// <param name="accept">
+    /// Decides whether the message is this feed's at all. Two topics can share a client method, and a message for another
+    /// topic must be ignored before the sequence rule sees it, because its sequence number means nothing here.
+    /// </param>
+    protected void Listen<TMessage>(string method, Action<TMessage> apply, Func<TMessage, bool>? accept = null)
         where TMessage : IRealtimeMessage
     {
-        var registration = Connection.On<TMessage>(method, message => Receive(message, apply));
+        var registration = Connection.On<TMessage>(method, message => Receive(message, apply, accept));
 
         lock (_state)
         {
@@ -189,9 +193,14 @@ public abstract class RealtimeFeed<TSnapshot> : IFeed, IFeedDiagnostics
         }
     }
 
-    private void Receive<TMessage>(TMessage message, Action<TMessage> apply)
+    private void Receive<TMessage>(TMessage message, Action<TMessage> apply, Func<TMessage, bool>? accept)
         where TMessage : IRealtimeMessage
     {
+        if (accept is not null && !accept(message))
+        {
+            return;
+        }
+
         lock (_state)
         {
             switch (_phase)

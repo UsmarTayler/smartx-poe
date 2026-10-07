@@ -491,7 +491,7 @@ internal sealed class RealtimeBroadcaster : BackgroundService
 
             var topic = RealtimeTopics.Device(mac);
 
-            await _hub.Clients.Group(topic).ReadingsArrived(new ReadingsBatch(NextSequence(topic), mine, 0));
+            await _hub.Clients.Group(topic).ReadingsArrived(new ReadingsBatch(NextSequence(topic), mine, 0, topic));
         }
     }
 

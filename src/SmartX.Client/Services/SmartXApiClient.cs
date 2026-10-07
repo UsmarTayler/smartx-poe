@@ -107,6 +107,159 @@ public sealed class SmartXApiClient(HttpClient http)
     public Task<ApiResult<StreamSnapshot>> GetStreamSnapshotAsync(CancellationToken cancellationToken = default) =>
         GetAsync<StreamSnapshot>("api/realtime/stream", cancellationToken);
 
+    // ---- the operator's page: searching, timelines, commands, undo, alerts --------------------------------------
+
+    /// <summary>Finds devices matching every filter given. A filter left null does not constrain the result.</summary>
+    public Task<ApiResult<DeviceSearchResponse>> SearchDevicesAsync(
+        DeviceSearchFilters filters,
+        CancellationToken cancellationToken = default)
+    {
+        List<string> query = [];
+
+        void Add(string name, object? value)
+        {
+            if (value is not null && !string.IsNullOrWhiteSpace(value.ToString()))
+            {
+                query.Add($"{name}={Uri.EscapeDataString(value.ToString()!)}");
+            }
+        }
+
+        Add("q", filters.Q);
+        Add("category", filters.Category);
+        Add("actuatorKind", filters.ActuatorKind);
+        Add("zone", filters.Zone);
+        Add("band", filters.Band);
+        Add("alert", filters.Alert);
+
+        return GetAsync<DeviceSearchResponse>(
+            query.Count == 0 ? "api/devices/search" : $"api/devices/search?{string.Join('&', query)}",
+            cancellationToken);
+    }
+
+    /// <summary>One sensor's readings over a range, downsampled into at most <paramref name="maxPoints"/> buckets.</summary>
+    public Task<ApiResult<SensorTimeline>> GetTimelineAsync(
+        string macAddress,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        int maxPoints,
+        CancellationToken cancellationToken = default) =>
+        GetAsync<SensorTimeline>(
+            $"api/sensors/{Uri.EscapeDataString(macAddress)}/timeline?from={Uri.EscapeDataString(from.ToString("O"))}" +
+            $"&to={Uri.EscapeDataString(to.ToString("O"))}&maxPoints={maxPoints}",
+            cancellationToken);
+
+    /// <summary>One sensor's most recent readings with the sequence of its device topic, for a device feed to start from.</summary>
+    public Task<ApiResult<DeviceSnapshot>> GetDeviceSnapshotAsync(string macAddress, CancellationToken cancellationToken = default) =>
+        GetAsync<DeviceSnapshot>($"api/realtime/device/{Uri.EscapeDataString(macAddress)}", cancellationToken);
+
+    /// <summary>Sends one command to one actuator.</summary>
+    public Task<ApiResult<Command>> IssueCommandAsync(IssueCommandRequest request, CancellationToken cancellationToken = default) =>
+        SendAsync<Command>(token => http.PostAsJsonAsync("api/commands", request, token), cancellationToken);
+
+    /// <summary>Which devices a zone-wide action would reach, without sending it.</summary>
+    public Task<ApiResult<ZonePreview>> PreviewZoneCommandAsync(
+        string zoneId,
+        CommandAction action,
+        double? level,
+        CancellationToken cancellationToken = default) =>
+        GetAsync<ZonePreview>(
+            $"api/commands/zone/preview?zoneId={Uri.EscapeDataString(zoneId)}&action={action}" +
+            (level is { } value ? $"&level={value.ToString(System.Globalization.CultureInfo.InvariantCulture)}" : string.Empty),
+            cancellationToken);
+
+    /// <summary>Sends one action to every matching actuator in a zone and beneath it, as one undoable step.</summary>
+    public Task<ApiResult<CompositeCommandResult>> IssueZoneCommandAsync(
+        ZoneCommandRequest request,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<CompositeCommandResult>(token => http.PostAsJsonAsync("api/commands/zone", request, token), cancellationToken);
+
+    /// <summary>The undo stack, most recent action first.</summary>
+    public Task<ApiResult<IReadOnlyList<UndoStackEntry>>> GetUndoStackAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<IReadOnlyList<UndoStackEntry>>("api/commands/undo-stack", cancellationToken);
+
+    /// <summary>
+    /// Undoes the most recent action, and returns what the API says happened, whatever the status code.
+    /// </summary>
+    /// <remarks>
+    /// The undo endpoint answers 200 when something was undone, 409 when it was refused and 404 when the stack was
+    /// empty, and puts the same <see cref="UndoResult"/> in all three bodies. A refusal is a result the operator reads,
+    /// not an error to be turned into a generic message, so all three are read as the result they carry.
+    /// </remarks>
+    public async Task<ApiResult<UndoResult>> UndoAsync(CancellationToken cancellationToken = default)
+    {
+        HttpResponseMessage response;
+
+        try
+        {
+            response = await http.PostAsync("api/commands/undo", content: null, cancellationToken);
+        }
+        catch (HttpRequestException)
+        {
+            return ApiResult<UndoResult>.Failure(ApiProblem.Unreachable());
+        }
+
+        using (response)
+        {
+            if (response.StatusCode is System.Net.HttpStatusCode.BadGateway or System.Net.HttpStatusCode.GatewayTimeout)
+            {
+                return ApiResult<UndoResult>.Failure(ApiProblem.Unreachable());
+            }
+
+            if (response.StatusCode is System.Net.HttpStatusCode.OK or System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.Conflict)
+            {
+                try
+                {
+                    if (await response.Content.ReadFromJsonAsync<UndoResult>(cancellationToken) is { } result)
+                    {
+                        return ApiResult<UndoResult>.Success(result);
+                    }
+                }
+                catch (JsonException)
+                {
+                    // Fall through to the problem below.
+                }
+            }
+
+            return ApiResult<UndoResult>.Failure(await ReadProblemAsync(response, cancellationToken));
+        }
+    }
+
+    /// <summary>Marks an alert as seen. The condition is not touched.</summary>
+    public Task<ApiResult<ActiveAlert>> AcknowledgeAlertAsync(AlertKey key, CancellationToken cancellationToken = default) =>
+        SendAsync<ActiveAlert>(token => http.PostAsJsonAsync("api/alerts/acknowledge", key, token), cancellationToken);
+
+    /// <summary>Records the scenario an operator wants a device to run.</summary>
+    public Task<ApiResult<DeviceDesiredState>> SetScenarioAsync(
+        string macAddress,
+        SimulationScenario scenario,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<DeviceDesiredState>(
+            token => http.PostAsJsonAsync($"api/simulation/{Uri.EscapeDataString(macAddress)}/scenario", new ScenarioChangeRequest(scenario), token),
+            cancellationToken);
+
+    /// <summary>What operators did: searches and commands, with the alerts active at the time.</summary>
+    public Task<ApiResult<IReadOnlyList<ActivityEntry>>> GetActivityAsync(
+        DateTimeOffset? from = null,
+        DateTimeOffset? to = null,
+        CancellationToken cancellationToken = default)
+    {
+        List<string> query = [];
+
+        if (from is { } start)
+        {
+            query.Add($"from={Uri.EscapeDataString(start.ToString("O"))}");
+        }
+
+        if (to is { } end)
+        {
+            query.Add($"to={Uri.EscapeDataString(end.ToString("O"))}");
+        }
+
+        return GetAsync<IReadOnlyList<ActivityEntry>>(
+            query.Count == 0 ? "api/activity" : $"api/activity?{string.Join('&', query)}",
+            cancellationToken);
+    }
+
     public Task<ApiResult<AttachmentLimits>> GetAttachmentLimitsAsync(CancellationToken cancellationToken = default) =>
         GetAsync<AttachmentLimits>("api/attachments/limits", cancellationToken);
 
