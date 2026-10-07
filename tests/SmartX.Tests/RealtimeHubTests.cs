@@ -427,14 +427,50 @@ public class RealtimeHubTests
         var client = await host.ConnectAsync(RealtimeTopics.Alerts);
         var key = new AlertKey(NodeA, AlertKind.Disconnected);
 
+        // One step at a time. A message carries the alert's state when it is sent and not when the event happened,
+        // so three changes made faster than the sender can act on them are legitimately sent as what they add up
+        // to. Waiting between them is how each is seen separately.
         host.Alerts.Raise(key);
-        host.Alerts.Acknowledge(key);
-        host.Alerts.Clear(key);
+        await client.WaitForAsync<AlertUpdate>(RealtimeMethods.AlertsUpdated, 1);
 
+        host.Alerts.Acknowledge(key);
+        await client.WaitForAsync<AlertUpdate>(RealtimeMethods.AlertsUpdated, 2);
+
+        host.Alerts.Clear(key);
         var updates = await client.WaitForAsync<AlertUpdate>(RealtimeMethods.AlertsUpdated, 3);
 
+        Assert.False(Assert.Single(updates[0].Upserted).Acknowledged);
         Assert.True(Assert.Single(updates[1].Upserted).Acknowledged);
         Assert.Equal(key, Assert.Single(updates[2].Cleared));
+    }
+
+    [Fact]
+    public async Task An_alert_raised_and_cleared_in_quick_succession_always_ends_with_the_clear_on_the_wire()
+    {
+        await using var host = RealtimeHost.Create();
+        var client = await host.ConnectAsync(RealtimeTopics.Alerts);
+        var key = new AlertKey(NodeA, AlertKind.Disconnected);
+
+        host.Alerts.Raise(key);
+        host.Alerts.Clear(key);
+
+        // Depending on how fast the sender is, the client sees the raise and then the clear, or only the clear:
+        // a message carries the alert's state when it is sent, and by then the raise may be history. Either way
+        // the last thing it is told is that the alert is gone, and it is never told the alert is active after
+        // the clear. That is the property that matters, and it holds for both.
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+
+        while (!client.Messages<AlertUpdate>(RealtimeMethods.AlertsUpdated).Any(update => update.Cleared.Contains(key)) && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(10);
+        }
+
+        await TestClient.SettleAsync();
+
+        var updates = client.Messages<AlertUpdate>(RealtimeMethods.AlertsUpdated);
+
+        Assert.Equal(key, Assert.Single(updates[^1].Cleared));
+        Assert.Empty(updates[^1].Upserted);
     }
 
     [Fact]
