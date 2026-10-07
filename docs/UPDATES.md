@@ -21,6 +21,9 @@ reconstructed afterwards.
 | [U7](#u7-simulated-data-did-not-arrive-like-a-devices) | 2026-09-29 | Simulation, ingestion | Move the simulator out of the API so it reports over HTTP, and queue accepted readings | `7216026`, `e6f8f0b` |
 | [U8](#u8-silent-devices-stayed-unregistered-after-an-api-restart) | 2026-09-30 | Simulator | Re-register the whole fleet on the first 404 | `f528e93` |
 | [U9](#u9-a-silent-devices-control-channel-was-implicit-and-untested) | 2026-09-30 | Simulator | State and test that a silent device keeps polling its shadow | `06e1195` |
+| [U10](#u10-the-command-log-grew-without-bound) | 2026-10-04 | Commands, history | Move the command log into the retained history store | `d2039dc` |
+| [U11](#u11-one-timing-test-could-fail-a-cold-first-run) | 2026-10-07 | Tests | Keep wall-clock assertions out of the default run | `a06eec1` |
+| [U12](#u12-the-telemetry-page-made-one-request-per-sensor) | 2026-10-08 | Telemetry, client | Load every sensor's recent readings in one request | `21a315e` |
 
 ---
 
@@ -356,10 +359,36 @@ command is in the README. Five clean-build runs of the full suite passed.
 
 ---
 
+## U12. The telemetry page made one request per sensor
+
+**Source:** Part 1 review of the client, left open when the trust panel was fixed (U5); raised again in Prompt 13
+
+**What was wrong.** Opening the telemetry page asked the API for each sensor's recent readings separately: one request
+per sensor, 48 with the demo fleet, sent together. It was the same fault as the trust panel's N + 2 (U5), in the one
+page that had not been given the same treatment.
+
+**Why it mattered.** The cost of opening a page grew with the size of the mesh, and every visit paid it. Navigation is
+assessed, and a page that fires dozens of requests on every open is the opposite of instant.
+
+**What changed.** `GET /api/telemetry/recent` returns the retained readings for every registered sensor, keyed by MAC, in
+one response. A sensor with no readings has an empty list, so the keys are exactly the registered sensors. The client's
+`TelemetryService.LoadAllAsync` makes that one call. The single-sensor endpoint stays, and the page still uses it after
+sending a reading by hand. A test counts outgoing requests with 3 sensors and with 48 and asserts exactly one both times,
+and that every card still has its readings.
+
+- `src/SmartX.Api/Endpoints/TelemetryEndpoints.cs`
+- `src/SmartX.Client/Services/SmartXApiClient.cs`
+- `src/SmartX.Client/Services/TelemetryService.cs`
+- `tests/SmartX.Tests/TelemetryLoadRequestTests.cs`
+
+**Commit:** `21a315e` perf(telemetry): load every sensor's recent readings in one request
+
+---
+
 ## Entry template
 
 ```markdown
-## U12. Short title of the problem
+## U13. Short title of the problem
 
 **Source:** where the feedback came from (lecturer feedback on Part 1, code review, testing)
 
