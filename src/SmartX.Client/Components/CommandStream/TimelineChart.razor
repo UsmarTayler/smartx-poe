@@ -92,7 +92,9 @@
 
                 @foreach (var tick in g.XTicks)
                 {
-                    @AxisLabel(tick.Position, g.Plot.Bottom + 14, "middle", tick.Label)
+                    @* A label centred on a tick at either edge would be cut off by the SVG, so those two lean inwards. *@
+                    @AxisLabel(tick.Position, g.Plot.Bottom + 14,
+                               tick.Position > g.Plot.Right - 24 ? "end" : tick.Position < g.Plot.Left + 24 ? "start" : "middle", tick.Label)
                 }
 
                 @* The band first, then the line over it. *@

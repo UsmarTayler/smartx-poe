@@ -12,7 +12,7 @@
     <MudText Typo="Typo.subtitle2" HtmlTag="h3">Apply to zone</MudText>
 
     <div class="smartx-zone-action__form">
-        <ZonePicker Zones="Catalog.Zones" Value="@_zone" ValueChanged="value => { _zone = value; }" Label="Zone" Placeholder="Choose a zone" />
+        <ZonePicker Zones="Catalog.Zones" Value="@_zone" ValueChanged="value => { _zone = value; }" Label="Zone" Placeholder="Choose a zone" ShowRules="false" />
 
         <MudSelect T="CommandAction" Label="Action" @bind-Value="_action" ToStringFunc="ActionLabel" Variant="Variant.Outlined" Margin="Margin.Dense" AnchorOrigin="Origin.BottomCenter">
             @foreach (var choice in CommandChoices.ForZone)

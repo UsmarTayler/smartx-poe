@@ -5,7 +5,7 @@
 <MudSelect T="string" Label="@Label" Placeholder="@Placeholder" Clearable="Clearable"
            Value="Value" ValueChanged="ValueChanged"
            Variant="Variant.Outlined" Margin="Margin.Dense" AnchorOrigin="Origin.BottomCenter"
-           Validation="Validation" ToStringFunc="PathOf" HelperText="@HelperText"
+           Validation="Validation" ToStringFunc="PathOf" HelperText="@(ShowRules ? HelperText : null)"
            Disabled="Zones.Count == 0">
     @foreach (var zone in Zones)
     {
@@ -32,6 +32,10 @@
     /// <summary>Whether the choice can be cleared, for a filter where "no zone" is an answer.</summary>
     [Parameter]
     public bool Clearable { get; set; }
+
+    /// <summary>Whether to describe the chosen zone's rules underneath. Only registration needs them; a search filter does not.</summary>
+    [Parameter]
+    public bool ShowRules { get; set; } = true;
 
     [Parameter]
     public string? Value { get; set; }

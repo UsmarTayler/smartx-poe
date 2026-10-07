@@ -30,7 +30,7 @@
         </MudSelect>
 
         <ZonePicker Zones="Catalog.Zones" Value="@Filters.Zone" ValueChanged="value => Change(Filters with { Zone = value })"
-                    Label="Zone (includes sub-zones)" Clearable="true" />
+                    Label="Zone (incl. sub-zones)" Placeholder="Any zone" Clearable="true" ShowRules="false" />
 
         <MudSelect T="TrustBand?" Label="Trust band" Value="Filters.Band" ValueChanged="value => Change(Filters with { Band = value })"
                    Clearable="true" Variant="Variant.Outlined" Margin="Margin.Dense" AnchorOrigin="Origin.BottomCenter">
