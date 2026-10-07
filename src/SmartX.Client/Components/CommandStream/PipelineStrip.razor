@@ -114,7 +114,13 @@
                 ? string.Empty
                 : $"Last critical: {Describe(last.MacAddress)}, {last.Reason}, {last.Value:0.##} {last.Unit}, took the critical lane. ";
 
-            return $"{prefix}Critical lane average wait {Wait(critical.AverageWaitMilliseconds)}; standard lane average wait {Wait(standard.AverageWaitMilliseconds)}: {advantage.Value:0}× sooner.";
+            var waits = $"Critical lane average wait {Wait(critical.AverageWaitMilliseconds)}; standard lane average wait {Wait(standard.AverageWaitMilliseconds)}";
+
+            // The priority queue only matters once the standard queue has a backlog. With nothing waiting the two lanes
+            // take the same time, and saying "1× sooner" would claim an advantage that is not there, so the strip says so.
+            return advantage.Value < 1.5
+                ? $"{prefix}{waits}: about the same, because nothing is queued. Raise the simulator rate to see the critical lane pull ahead."
+                : $"{prefix}{waits}: {advantage.Value:0.#}× sooner.";
         }
     }
 
