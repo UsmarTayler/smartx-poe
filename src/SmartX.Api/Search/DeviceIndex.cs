@@ -170,6 +170,25 @@ internal sealed class DeviceIndex
     internal string? RoomOfLocked(string macAddress) =>
         _devices.TryGetValue(macAddress, out var entry) ? entry.Registration.Location.Room : null;
 
+    /// <summary>The registration an indexed device was registered with.</summary>
+    /// <returns><see langword="false"/> when the device is not indexed.</returns>
+    public bool TryGetRegistration(string macAddress, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out SensorRegistration? registration)
+    {
+        lock (Gate)
+        {
+            if (_devices.TryGetValue(macAddress, out var entry))
+            {
+                registration = entry.Registration;
+
+                return true;
+            }
+        }
+
+        registration = null;
+
+        return false;
+    }
+
     /// <summary>The trust band an indexed device is in now.</summary>
     public TrustBand? BandOf(string macAddress)
     {
