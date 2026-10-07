@@ -1,0 +1,124 @@
+@implements IAsyncDisposable
+@inject IOperatorApi Api
+@inject ICommandFeed Commands
+@inject AppState State
+
+@* What the operator has done: the latest searches and commands, with how many alerts were active at the time. This is the
+   record the predictive engine later learns from, shown so a marker can see it being kept. It is collapsed by default,
+   and it asks the API for nothing until it is opened. *@
+<MudPaper Outlined="true" Class="pa-3" role="region" aria-label="Recent activity">
+    <button type="button" class="smartx-activity__toggle" aria-expanded="@(State.ActivityExpanded ? "true" : "false")"
+            aria-controls="smartx-activity-list" @onclick="ToggleAsync">
+        <MudIcon Icon="@(State.ActivityExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" aria-hidden="true" />
+        <MudText Typo="Typo.h6" HtmlTag="span">Recent activity</MudText>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">searches and commands, newest first</MudText>
+    </button>
+
+    @if (State.ActivityExpanded)
+    {
+        <div id="smartx-activity-list">
+            <MudButton Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Refresh" OnClick="LoadAsync" Disabled="_loading">Refresh</MudButton>
+
+            @if (_problem is not null)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" role="status">@_problem</MudAlert>
+            }
+
+            @if (_entries.Count == 0 && !_loading)
+            {
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">No searches or commands in the last hour.</MudText>
+            }
+            else
+            {
+                <ul class="smartx-activity" aria-label="Recent activity">
+                    @foreach (var entry in _entries)
+                    {
+                        <li class="smartx-activity__item" @key="entry.Sequence">
+                            <span class="smartx-status" style="--smartx-status: @(entry.Kind == ActivityKind.Search ? "#2f5d8a" : "#6b6a66")">
+                                <MudIcon Icon="@(entry.Kind == ActivityKind.Search ? Icons.Material.Filled.Search : Icons.Material.Filled.Terminal)" Size="Size.Small" aria-hidden="true" />
+                                <span>@(entry.Kind == ActivityKind.Search ? "Search" : "Command")</span>
+                            </span>
+                            <span class="smartx-activity__what">@entry.Summary</span>
+                            <span class="mud-text-secondary">@ReadingFormatter.Time(entry.Timestamp)</span>
+                            <span class="mud-text-secondary" title="Alerts that were active when this was done">@entry.ActiveAlerts.Count alerts active</span>
+                        </li>
+                    }
+                </ul>
+            }
+        </div>
+    }
+</MudPaper>
+
+@code {
+    private const int Shown = 40;
+
+    private IReadOnlyList<ActivityEntry> _entries = [];
+    private string? _problem;
+    private bool _loading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        State.Changed += OnStateChanged;
+        Commands.Updated += OnCommandsChanged;
+
+        await Commands.StartAsync();
+
+        if (State.ActivityExpanded)
+        {
+            await LoadAsync();
+        }
+    }
+
+    private async Task ToggleAsync()
+    {
+        State.SetActivityExpanded(!State.ActivityExpanded);
+
+        if (State.ActivityExpanded)
+        {
+            await LoadAsync();
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+
+        var result = await Api.GetActivityAsync();
+
+        _loading = false;
+
+        if (result.IsSuccess)
+        {
+            // Oldest first from the API, newest first here, and bounded.
+            _entries = [.. result.Value.OrderByDescending(entry => entry.Sequence).Take(Shown)];
+            _problem = null;
+        }
+        else
+        {
+            _problem = result.Problem.Message;
+        }
+    }
+
+    private void OnStateChanged() => _ = InvokeAsync(StateHasChanged);
+
+    // A command that was just sent is activity. Only refreshed while the list is open.
+    private void OnCommandsChanged()
+    {
+        if (State.ActivityExpanded)
+        {
+            _ = InvokeAsync(async () =>
+            {
+                await LoadAsync();
+                StateHasChanged();
+            });
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        State.Changed -= OnStateChanged;
+        Commands.Updated -= OnCommandsChanged;
+
+        await Commands.StopAsync();
+    }
+}

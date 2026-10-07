@@ -1,0 +1,240 @@
+@implements IAsyncDisposable
+@inject IOperatorApi Api
+@inject ICommandFeed Commands
+@inject SensorService Catalog
+
+@* The undo stack, top first, and the result of undoing exactly as the API reports it. Undo restores the state a command
+   replaced; it is not the opposite action. An entry that cannot be undone says why before anyone presses anything, in
+   the server's own words (CommandRules, shared with the API), and the button then says what pressing it will really do.
+   A refused entry is still removed by the server, so for one that cannot work the button reads "Clear last". *@
+<MudPaper Outlined="true" Class="pa-3" role="region" aria-label="Undo stack">
+    <div class="smartx-stream__header">
+        <MudText Typo="Typo.h6" HtmlTag="h2">Undo stack</MudText>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">@_stack.Count of up to @(_limit?.ToString() ?? "…") actions</MudText>
+    </div>
+
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Class="mt-2"
+               StartIcon="@(TopBlocked ? Icons.Material.Filled.DeleteSweep : Icons.Material.Filled.Undo)"
+               Disabled="@(_stack.Count == 0 || _busy)" OnClick="UndoAsync">
+        @(TopBlocked ? "Clear last (can't be undone)" : "Undo last")
+    </MudButton>
+
+    @if (_loadProblem is not null)
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="mt-2" role="status">@_loadProblem</MudAlert>
+    }
+
+    @if (_result is { } result)
+    {
+        var style = OutcomeStyle(result.Outcome);
+
+        <div class="smartx-undo-result" role="status" aria-live="polite">
+            <span class="smartx-status" style="--smartx-status: @style.Colour">
+                <MudIcon Icon="@style.Icon" Size="Size.Small" aria-hidden="true" />
+                <span>@style.Label</span>
+            </span>
+            <MudText Typo="Typo.body2">@result.Message</MudText>
+
+            @if (result.Items.Count > 0)
+            {
+                <ul class="smartx-undo-items" aria-label="What happened to each device">
+                    @foreach (var item in result.Items)
+                    {
+                        <li @key="item.CommandId">
+                            <strong>@Name(item.MacAddress)</strong>: @ItemLabel(item.Result)@(item.Reason is { } reason ? $". {reason}" : string.Empty)
+                        </li>
+                    }
+                </ul>
+            }
+        </div>
+    }
+
+    @if (_stack.Count == 0)
+    {
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mt-2">Nothing to undo. Commands you send appear here.</MudText>
+    }
+    else
+    {
+        <ol class="smartx-undo-stack" aria-label="Actions, most recent first">
+            @foreach (var entry in _stack)
+            {
+                var reasons = Reasons(entry);
+                var blocked = AllBlocked(entry);
+
+                <li class="smartx-undo-stack__item" @key="entry.EntryId">
+                    <div class="smartx-undo-stack__what"><strong>@entry.Description</strong></div>
+                    <div class="smartx-undo-stack__meta mud-text-secondary">issued @ReadingFormatter.Time(entry.IssuedAt)</div>
+                    <div class="smartx-undo-stack__state">
+                        @if (entry.CompositeId is null && entry.Commands.Count == 1)
+                        {
+                            <CommandStateChip State="entry.Commands[0].State" />
+                        }
+                        else
+                        {
+                            <span class="smartx-status" style="--smartx-status: @CompositeColour(entry.Status)">
+                                <MudIcon Icon="@CompositeIcon(entry.Status)" Size="Size.Small" aria-hidden="true" />
+                                <span>@CompositeLabel(entry.Status) · @entry.Commands.Count devices</span>
+                            </span>
+                            <span class="mud-text-secondary">@Summary(entry)</span>
+                        }
+                    </div>
+
+                    @if (reasons.Count > 0)
+                    {
+                        <div class="smartx-undo-stack__why">
+                            <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" aria-hidden="true" />
+                            <span>
+                                @(blocked ? "Cannot be undone." : "Part of this cannot be undone.")
+                                @reasons[0]
+                            </span>
+                        </div>
+                    }
+                </li>
+            }
+        </ol>
+    }
+</MudPaper>
+
+@code {
+    private IReadOnlyList<UndoStackEntry> _stack = [];
+    private UndoResult? _result;
+    private int? _limit;
+    private string? _loadProblem;
+    private bool _busy;
+    private bool _loading;
+    private bool _again;
+
+    private bool TopBlocked => _stack.Count > 0 && AllBlocked(_stack[0]);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Commands.Updated += OnCommandsChanged;
+
+        await Commands.StartAsync();
+
+        var limits = await Api.GetCommandLimitsAsync();
+        _limit = limits.IsSuccess ? limits.Value.MaxUndoDepth : null;
+
+        await ReloadAsync();
+    }
+
+    private void OnCommandsChanged() => _ = InvokeAsync(ReloadAsync);
+
+    /// <summary>Re-reads the stack. A request that arrives while one is running asks for one more afterwards.</summary>
+    private async Task ReloadAsync()
+    {
+        if (_loading)
+        {
+            _again = true;
+
+            return;
+        }
+
+        _loading = true;
+
+        do
+        {
+            _again = false;
+
+            var result = await Api.GetUndoStackAsync();
+
+            if (result.IsSuccess)
+            {
+                _stack = result.Value;
+                _loadProblem = null;
+            }
+            else
+            {
+                _loadProblem = result.Problem.Message;
+            }
+
+            StateHasChanged();
+        }
+        while (_again);
+
+        _loading = false;
+    }
+
+    private async Task UndoAsync()
+    {
+        _busy = true;
+
+        var result = await Api.UndoAsync();
+
+        _busy = false;
+
+        // Shown exactly as the API reports it: reverted, partly reverted with the refused devices named, or refused
+        // with the reason. Nothing is reworded here.
+        _result = result.IsSuccess
+            ? result.Value
+            : new UndoResult(UndoOutcome.Refused, result.Problem.Message, null, []);
+
+        await ReloadAsync();
+    }
+
+    private static bool AllBlocked(UndoStackEntry entry) =>
+        entry.Commands.Count > 0 && entry.Commands.All(command => CommandRules.WhyNotUndoable(command) is not null);
+
+    /// <summary>The distinct reasons some of an entry's commands cannot be undone.</summary>
+    private static IReadOnlyList<string> Reasons(UndoStackEntry entry) =>
+        [.. entry.Commands
+            .Select(CommandRules.WhyNotUndoable)
+            .Where(reason => reason is not null)
+            .Select(reason => reason!)];
+
+    private string Name(string mac) =>
+        Catalog.Sensors.FirstOrDefault(sensor => string.Equals(sensor.MacAddress, mac, StringComparison.OrdinalIgnoreCase))?.Location.Room ?? mac;
+
+    private static string Summary(UndoStackEntry entry) =>
+        string.Join(", ", entry.Commands
+            .GroupBy(command => command.State)
+            .OrderBy(group => group.Key)
+            .Select(group => $"{group.Count()} {CommandStateStyle.For(group.Key).Label.ToLowerInvariant()}"));
+
+    private static string ItemLabel(UndoItemResult result) => result switch
+    {
+        UndoItemResult.Cancelled => "withdrawn before it reached the device",
+        UndoItemResult.RestoreIssued => "restore command issued",
+        UndoItemResult.AlreadyCancelled => "already cancelled",
+        _ => "refused",
+    };
+
+    private static (string Colour, string Icon, string Label) OutcomeStyle(UndoOutcome outcome) => outcome switch
+    {
+        UndoOutcome.Reverted => ("#0ca30c", Icons.Material.Filled.CheckCircle, "Reverted"),
+        UndoOutcome.PartiallyReverted => ("#fab219", Icons.Material.Filled.Warning, "Partly reverted"),
+        UndoOutcome.Refused => ("#d03b3b", Icons.Material.Filled.Block, "Refused"),
+        _ => ("#6b6a66", Icons.Material.Filled.Info, "Nothing to undo"),
+    };
+
+    private static string CompositeColour(CompositeStatus status) => status switch
+    {
+        CompositeStatus.Applied => "#0ca30c",
+        CompositeStatus.PartiallyApplied => "#fab219",
+        CompositeStatus.NotApplied => "#d03b3b",
+        _ => "#6b6a66",
+    };
+
+    private static string CompositeIcon(CompositeStatus status) => status switch
+    {
+        CompositeStatus.Applied => Icons.Material.Filled.CheckCircle,
+        CompositeStatus.PartiallyApplied => Icons.Material.Filled.Warning,
+        CompositeStatus.NotApplied => Icons.Material.Filled.Error,
+        _ => Icons.Material.Filled.HourglassEmpty,
+    };
+
+    private static string CompositeLabel(CompositeStatus status) => status switch
+    {
+        CompositeStatus.Applied => "Applied",
+        CompositeStatus.PartiallyApplied => "Partly applied",
+        CompositeStatus.NotApplied => "Not applied",
+        _ => "In progress",
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        Commands.Updated -= OnCommandsChanged;
+
+        await Commands.StopAsync();
+    }
+}

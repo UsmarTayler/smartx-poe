@@ -1,0 +1,109 @@
+@implements IAsyncDisposable
+@inject IAlertFeed Alerts
+@inject IOperatorApi Api
+@inject SensorService Catalog
+
+@* The alerts that are on, from the push feed. Most severe first, then newest. A condition that keeps firing is one row with
+   a repeat count, which is the alert set's duplicate prevention made visible: "suppressed x14" is fourteen times the
+   condition fired and was counted instead of raised again. Acknowledging marks an alert as seen and does not clear it. *@
+<MudPaper Outlined="true" Class="pa-3" role="region" aria-label="Alerts">
+    <div class="smartx-stream__header">
+        <MudText Typo="Typo.h6" HtmlTag="h2">Alerts</MudText>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">
+            @State.Stats.Active active · @State.Stats.Raised.ToString("N0") raised · @State.Stats.Suppressed.ToString("N0") repeats suppressed · @State.Stats.Cleared.ToString("N0") cleared
+        </MudText>
+    </div>
+
+    @if (_problem is not null)
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="mt-2" role="status">@_problem</MudAlert>
+    }
+
+    @if (!State.IsLoaded)
+    {
+        <div aria-hidden="true"><MudSkeleton Height="44px" Class="mt-2" /><MudSkeleton Height="44px" Class="mt-2" /></div>
+    }
+    else if (_ordered.Count == 0)
+    {
+        <EmptyState Icon="@Icons.Material.Outlined.NotificationsNone" Title="No active alerts" Text="Nothing is wrong right now." />
+    }
+    else
+    {
+        <ul class="smartx-alerts" aria-label="Active alerts, most severe first">
+            @foreach (var alert in _ordered.Take(Limit))
+            {
+                var style = AlertKindStyle.For(alert.Key.Kind);
+
+                <li class="smartx-alerts__item" @key="alert.Key">
+                    <span class="smartx-status" style="--smartx-status: @style.Colour">
+                        <MudIcon Icon="@style.Icon" Size="Size.Small" aria-hidden="true" />
+                        <span>@style.Label</span>
+                    </span>
+                    <span class="smartx-alerts__device"><strong>@(alert.Room ?? alert.Key.Mac)</strong> <span class="smartx-mono mud-text-secondary">@alert.Key.Mac[^5..]</span></span>
+                    <span class="mud-text-secondary">raised @ReadingFormatter.Time(alert.RaisedAt)</span>
+                    @if (alert.SuppressedCount > 0)
+                    {
+                        <span class="smartx-alerts__repeats" title="The condition fired this many more times while the alert was already on">suppressed &times;@alert.SuppressedCount.ToString("N0")</span>
+                    }
+                    @if (alert.Acknowledged)
+                    {
+                        <span class="smartx-status" style="--smartx-status: #6b6a66">
+                            <MudIcon Icon="@Icons.Material.Filled.DoneAll" Size="Size.Small" aria-hidden="true" />
+                            <span>Acknowledged</span>
+                        </span>
+                    }
+                    else
+                    {
+                        <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Check"
+                                   OnClick="() => AcknowledgeAsync(alert)"
+                                   aria-label="@($"Acknowledge {style.Label} on {alert.Room ?? alert.Key.Mac}")">Acknowledge</MudButton>
+                    }
+                </li>
+            }
+        </ul>
+
+        @if (_ordered.Count > Limit)
+        {
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">And @(_ordered.Count - Limit) more, less severe than these.</MudText>
+        }
+    }
+</MudPaper>
+
+@code {
+    // Bounded, because a panel that renders every alert a failing mesh could raise is the unbounded list this page avoids.
+    private const int Limit = 50;
+
+    private IReadOnlyList<ActiveAlert> _ordered = [];
+    private string? _problem;
+
+    private AlertFeedState State => Alerts.Current;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Alerts.Updated += OnChanged;
+        _ordered = AlertOrdering.Order(State.Alerts);
+
+        await Alerts.StartAsync();
+    }
+
+    private void OnChanged()
+    {
+        _ordered = AlertOrdering.Order(State.Alerts);
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private async Task AcknowledgeAsync(ActiveAlert alert)
+    {
+        var result = await Api.AcknowledgeAlertAsync(alert.Key);
+
+        // A 404 means it cleared between being seen and being clicked. That is not a fault, and the push has told us.
+        _problem = result.IsSuccess || result.Problem.Status == 404 ? null : result.Problem.Message;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Alerts.Updated -= OnChanged;
+
+        await Alerts.StopAsync();
+    }
+}
