@@ -82,6 +82,26 @@ public sealed class SmartXApiClient(HttpClient http)
         GetAsync<TrustSummary>("api/trust/summary", cancellationToken);
 
     /// <summary>What the server will accept as an attachment.</summary>
+    /// <summary>The current trust state with the sequence number it is as of, for a real-time feed to start from.</summary>
+    public Task<ApiResult<TrustSnapshot>> GetTrustSnapshotAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<TrustSnapshot>("api/realtime/trust", cancellationToken);
+
+    /// <summary>The active alerts and recent critical readings, with the sequence number they are as of.</summary>
+    public Task<ApiResult<AlertSnapshot>> GetAlertSnapshotAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<AlertSnapshot>("api/realtime/alerts", cancellationToken);
+
+    /// <summary>Recent commands, with the sequence number they are as of.</summary>
+    public Task<ApiResult<CommandSnapshot>> GetCommandSnapshotAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<CommandSnapshot>("api/realtime/commands", cancellationToken);
+
+    /// <summary>The ingestion pipeline's statistics, with the sequence number they are as of.</summary>
+    public Task<ApiResult<PipelineUpdate>> GetPipelineSnapshotAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<PipelineUpdate>("api/realtime/pipeline", cancellationToken);
+
+    /// <summary>The latest reading from each node, with the sequence number it is as of.</summary>
+    public Task<ApiResult<StreamSnapshot>> GetStreamSnapshotAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<StreamSnapshot>("api/realtime/stream", cancellationToken);
+
     public Task<ApiResult<AttachmentLimits>> GetAttachmentLimitsAsync(CancellationToken cancellationToken = default) =>
         GetAsync<AttachmentLimits>("api/attachments/limits", cancellationToken);
 
