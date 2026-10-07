@@ -85,13 +85,36 @@ public sealed class TelemetryService(SmartXApiClient api, ApiConnection connecti
         _ => new NumericPacket<float>(sensor.MacAddress, (float)reading.Value, reading.Timestamp, sensor.Category, sensor.Unit),
     };
 
-    /// <summary>Loads every sensor's recent readings concurrently.</summary>
+    /// <summary>Loads every sensor's recent readings.</summary>
     /// <remarks>
-    /// All requests start before any is awaited. Loading them one after another would make the page's
-    /// load time grow with the number of sensors.
+    /// One request, for every sensor. It used to be one request per sensor, so the cost of opening the page grew
+    /// with the size of the mesh.
     /// </remarks>
-    public Task LoadAllAsync(IReadOnlyList<SensorRegistration> sensors, CancellationToken cancellationToken = default) =>
-        Task.WhenAll(sensors.Select(sensor => LoadRecentAsync(sensor.MacAddress, cancellationToken)));
+    public async Task LoadAllAsync(IReadOnlyList<SensorRegistration> sensors, CancellationToken cancellationToken = default)
+    {
+        var result = await api.GetAllRecentReadingsAsync(cancellationToken);
+
+        connection.Report(result.Problem is not { IsUnreachable: true });
+
+        foreach (var sensor in sensors)
+        {
+            var state = For(sensor.MacAddress);
+
+            if (result.IsSuccess)
+            {
+                state.Recent = result.Value.TryGetValue(sensor.MacAddress, out var recent) ? recent : [];
+                state.LoadProblem = null;
+            }
+            else
+            {
+                state.LoadProblem = result.Problem;
+            }
+
+            state.IsLoaded = true;
+        }
+
+        Changed?.Invoke();
+    }
 
     /// <summary>Loads one sensor's retained readings from its ring buffer on the API.</summary>
     public async Task LoadRecentAsync(string macAddress, CancellationToken cancellationToken = default)

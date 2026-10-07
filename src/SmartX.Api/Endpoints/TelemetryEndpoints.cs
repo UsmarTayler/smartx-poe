@@ -63,6 +63,7 @@ internal static class TelemetryEndpoints
         api.MapPost("/telemetry", IngestAsync).WithName("IngestTelemetry");
         api.MapPost("/telemetry/batch", IngestBatchAsync).WithName("IngestTelemetryBatch");
         api.MapGet("/sensors/{mac}/telemetry", GetHistoryAsync).WithName("GetSensorTelemetry");
+        api.MapGet("/telemetry/recent", GetAllRecentAsync).WithName("GetAllRecentTelemetry");
 
         return api;
     }
@@ -147,6 +148,32 @@ internal static class TelemetryEndpoints
             statusCode: StatusCodes.Status503ServiceUnavailable,
             title: "The ingestion queue is full",
             detail: $"The gateway is behind on processing. Retry in {seconds} seconds.");
+    }
+
+    /// <summary>
+    /// The readings currently retained for every registered sensor, oldest first, keyed by MAC.
+    /// </summary>
+    /// <remarks>
+    /// One request for the whole mesh. The telemetry page used to ask for each sensor's history separately, which
+    /// is one request per sensor every time the page opens: 48 with the demo fleet and more as the mesh grows. This
+    /// is the same treatment the trust panel got in Part 1, when its per-node history calls were folded into the
+    /// list response. A sensor with no readings yet has an empty list, so the keys are exactly the registered
+    /// sensors. The single-sensor endpoint stays for anything that wants one.
+    /// </remarks>
+    private static async Task<IResult> GetAllRecentAsync(
+        ISensorRegistry registry,
+        ITelemetryStore store,
+        CancellationToken cancellationToken)
+    {
+        var sensors = await registry.ListAsync(cancellationToken);
+        var recent = new Dictionary<string, IReadOnlyList<ITelemetryPacket>>(sensors.Count, StringComparer.Ordinal);
+
+        foreach (var sensor in sensors)
+        {
+            recent[sensor.MacAddress] = await store.RecentAsync(sensor.MacAddress, cancellationToken);
+        }
+
+        return Results.Ok(recent);
     }
 
     /// <summary>The readings currently retained for one node, oldest first.</summary>

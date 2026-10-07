@@ -62,6 +62,11 @@ public sealed class SmartXApiClient(HttpClient http)
     /// The gateway's receipt. The API validates the reading while the caller waits and processes it just
     /// afterwards, so a success here means accepted for processing, not yet stored.
     /// </returns>
+    /// <summary>The retained readings for every registered sensor, by MAC address, in one request.</summary>
+    public Task<ApiResult<Dictionary<string, List<ITelemetryPacket>>>> GetAllRecentReadingsAsync(
+        CancellationToken cancellationToken = default) =>
+        GetAsync<Dictionary<string, List<ITelemetryPacket>>>("api/telemetry/recent", cancellationToken);
+
     public Task<ApiResult<TelemetryReceipt>> SendReadingAsync<T>(
         string macAddress,
         T value,
