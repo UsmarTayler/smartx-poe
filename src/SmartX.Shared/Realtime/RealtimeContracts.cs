@@ -172,7 +172,18 @@ public readonly record struct ReadingPush(
     double Value,
     string Unit,
     bool IsState,
-    DateTimeOffset AcceptedAt);
+    DateTimeOffset AcceptedAt)
+{
+    /// <summary>Describes a packet as a pushed reading. A state is 1 for engaged and 0 for released.</summary>
+    public static ReadingPush From(ITelemetryPacket packet, DateTimeOffset acceptedAt)
+    {
+        var value = packet is StatePacket state
+            ? state.Value ? 1d : 0d
+            : packet.TryGetNumericValue(out var number) ? number : 0d;
+
+        return new ReadingPush(packet.NodeId, packet.Timestamp, value, packet.Unit, packet is StatePacket, acceptedAt);
+    }
+}
 
 /// <summary>Readings accepted since the last flush, sent as one message.</summary>
 /// <param name="Sequence">Its place in its topic's order.</param>
@@ -186,6 +197,12 @@ public readonly record struct ReadingPush(
 /// and its own client re-render. One message every flush window costs the same however many readings it holds.
 /// </remarks>
 public sealed record ReadingsBatch(long Sequence, IReadOnlyList<ReadingPush> Readings, int Dropped) : IRealtimeMessage;
+
+/// <summary>One device's recent readings, as of a sequence number. The snapshot behind a <c>device:{mac}</c> topic.</summary>
+/// <param name="Sequence">The device topic's sequence when the snapshot was taken.</param>
+/// <param name="MacAddress">The device.</param>
+/// <param name="Readings">Its most recent readings, oldest first.</param>
+public sealed record DeviceSnapshot(long Sequence, string MacAddress, IReadOnlyList<ReadingPush> Readings) : IRealtimeMessage;
 
 /// <summary>The latest reading from each node, as of a sequence number.</summary>
 /// <param name="Sequence">The stream topic's sequence when the snapshot was taken.</param>

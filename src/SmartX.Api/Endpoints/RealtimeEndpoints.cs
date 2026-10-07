@@ -3,6 +3,7 @@ using SmartX.Api.Alerts;
 using SmartX.Api.Commands;
 using SmartX.Api.Ingestion;
 using SmartX.Api.Realtime;
+using SmartX.Api.Storage;
 using SmartX.Api.Trust;
 using SmartX.Shared;
 
@@ -34,6 +35,7 @@ internal static class RealtimeEndpoints
         realtime.MapGet("/commands", Commands).WithName("GetCommandSnapshot");
         realtime.MapGet("/pipeline", Pipeline).WithName("GetPipelineSnapshot");
         realtime.MapGet("/stream", Stream).WithName("GetStreamSnapshot");
+        realtime.MapGet("/device/{mac}", DeviceAsync).WithName("GetDeviceSnapshot");
 
         return api;
     }
@@ -68,4 +70,33 @@ internal static class RealtimeEndpoints
     }
 
     private static IResult Stream(RealtimeBroadcaster broadcaster) => Results.Ok(broadcaster.GetStreamSnapshot());
+
+    /// <summary>One device's recent readings with the sequence of its <c>device:{mac}</c> topic.</summary>
+    /// <remarks>
+    /// The sequence is read before the readings, as everywhere else. The worker stores a reading before it announces
+    /// it, so any batch numbered at or below the sequence read here is already in what is read from the store.
+    /// </remarks>
+    private static async Task<IResult> DeviceAsync(
+        string mac,
+        RealtimeBroadcaster broadcaster,
+        ISensorRegistry registry,
+        ITelemetryStore store,
+        CancellationToken cancellationToken)
+    {
+        if (await registry.FindAsync(mac, cancellationToken) is not { } sensor)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status404NotFound,
+                title: "Sensor not registered",
+                detail: $"No sensor is registered with MAC address '{mac}'.");
+        }
+
+        var sequence = broadcaster.SequenceOf(RealtimeTopics.Device(sensor.MacAddress));
+        var recent = await store.RecentAsync(sensor.MacAddress, cancellationToken);
+
+        return Results.Ok(new DeviceSnapshot(
+            sequence,
+            sensor.MacAddress,
+            [.. recent.Select(packet => ReadingPush.From(packet, packet.Timestamp))]));
+    }
 }

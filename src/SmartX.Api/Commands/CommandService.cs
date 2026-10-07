@@ -19,6 +19,9 @@ internal enum IssueFailure
 /// <summary>The result of issuing one command.</summary>
 internal sealed record CommandIssue(Command? Command, IssueFailure Failure, string? Error);
 
+/// <summary>What a zone-wide action would do, or why it cannot.</summary>
+internal sealed record ZonePreviewResult(ZonePreview? Preview, IssueFailure Failure, string? Error);
+
 /// <summary>The result of issuing a zone-wide command.</summary>
 internal sealed record ZoneIssue(CompositeCommandResult? Result, IssueFailure Failure, string? Error);
 
@@ -149,40 +152,12 @@ internal sealed class CommandService(
         IZoneCatalogue catalogue,
         IEnumerable<SensorRegistration> sensors)
     {
-        if (!Enum.IsDefined(action))
+        if (!TrySelectZoneTargets(zoneId, action, level, catalogue, sensors, out var selected, out var failure))
         {
-            return new ZoneIssue(null, IssueFailure.Invalid, CommandActionRules.Validate(null, action, level, default));
+            return failure;
         }
 
-        if (!catalogue.TryFind(zoneId, out var zone))
-        {
-            return new ZoneIssue(null, IssueFailure.UnknownZone, $"No zone is registered with id '{zoneId}'.");
-        }
-
-        var kind = CommandActionRules.KindFor(action);
-
-        var targets = catalogue.NodesBeneath(zone.Id, sensors)
-            .Where(sensor => sensor.Category == SensorCategory.Actuator && sensor.ActuatorKind == kind)
-            .OrderBy(sensor => sensor.MacAddress, StringComparer.Ordinal)
-            .ToList();
-
-        if (targets.Count == 0)
-        {
-            return new ZoneIssue(
-                null,
-                IssueFailure.NoMatchingActuators,
-                $"There is no {kind} in zone '{zone.Name}' or anywhere beneath it, so {action} has nothing to act on.");
-        }
-
-        // Every target is checked before any command is created, so a level outside one device's range
-        // refuses the whole action instead of issuing half of it.
-        foreach (var sensor in targets)
-        {
-            if (Refusal(sensor, action, level) is { } refusal)
-            {
-                return new ZoneIssue(null, refusal.Failure, $"{sensor.MacAddress}: {refusal.Message}");
-            }
-        }
+        var (zone, kind, targets) = selected;
 
         var compositeId = Guid.NewGuid();
         var commands = targets
@@ -200,6 +175,102 @@ internal sealed class CommandService(
             new CompositeCommandResult(compositeId, zone.Id, action, commands, StatusOf(commands)),
             IssueFailure.None,
             null);
+    }
+
+    /// <summary>
+    /// What a zone-wide action would reach, without issuing it.
+    /// </summary>
+    /// <remarks>
+    /// Runs exactly the selection <see cref="IssueForZone"/> runs, the same recursive downward walk, the same kind
+    /// filter and the same refusals, because it is the same method. A preview that had its own copy of the walk
+    /// could show one set of devices and then act on another.
+    /// </remarks>
+    public ZonePreviewResult PreviewZone(
+        string zoneId,
+        CommandAction action,
+        double? level,
+        IZoneCatalogue catalogue,
+        IEnumerable<SensorRegistration> sensors)
+    {
+        if (!TrySelectZoneTargets(zoneId, action, level, catalogue, sensors, out var selected, out var failure))
+        {
+            return new ZonePreviewResult(null, failure.Failure, failure.Error);
+        }
+
+        var devices = selected.Sensors
+            .Select(sensor => new ZoneTarget(
+                sensor.MacAddress,
+                sensor.Location.Room,
+                sensor.Location.ZoneId,
+                selected.Kind,
+                states.TryGet(sensor.MacAddress, out var observed) ? observed.Value : null))
+            .ToList();
+
+        return new ZonePreviewResult(new ZonePreview(selected.Zone.Id, selected.Zone.Name, action, level, devices), IssueFailure.None, null);
+    }
+
+    /// <summary>The zone, the kind of actuator and the devices a zone-wide action reaches.</summary>
+    private readonly record struct ZoneTargets(DeploymentZone Zone, ActuatorKind Kind, IReadOnlyList<SensorRegistration> Sensors);
+
+    /// <summary>Finds the devices a zone-wide action reaches, or says why there are none.</summary>
+    private static bool TrySelectZoneTargets(
+        string zoneId,
+        CommandAction action,
+        double? level,
+        IZoneCatalogue catalogue,
+        IEnumerable<SensorRegistration> sensors,
+        out ZoneTargets selected,
+        out ZoneIssue failure)
+    {
+        selected = default;
+        failure = default!;
+
+        if (!Enum.IsDefined(action))
+        {
+            failure = new ZoneIssue(null, IssueFailure.Invalid, CommandActionRules.Validate(null, action, level, default));
+
+            return false;
+        }
+
+        if (!catalogue.TryFind(zoneId, out var zone))
+        {
+            failure = new ZoneIssue(null, IssueFailure.UnknownZone, $"No zone is registered with id '{zoneId}'.");
+
+            return false;
+        }
+
+        var kind = CommandActionRules.KindFor(action);
+
+        var targets = catalogue.NodesBeneath(zone.Id, sensors)
+            .Where(sensor => sensor.Category == SensorCategory.Actuator && sensor.ActuatorKind == kind)
+            .OrderBy(sensor => sensor.MacAddress, StringComparer.Ordinal)
+            .ToList();
+
+        if (targets.Count == 0)
+        {
+            failure = new ZoneIssue(
+                null,
+                IssueFailure.NoMatchingActuators,
+                $"There is no {kind} in zone '{zone.Name}' or anywhere beneath it, so {action} has nothing to act on.");
+
+            return false;
+        }
+
+        // Every target is checked before anything is created, so a level outside one device's range refuses the
+        // whole action instead of issuing half of it.
+        foreach (var sensor in targets)
+        {
+            if (Refusal(sensor, action, level) is { } refusal)
+            {
+                failure = new ZoneIssue(null, refusal.Failure, $"{sensor.MacAddress}: {refusal.Message}");
+
+                return false;
+            }
+        }
+
+        selected = new ZoneTargets(zone, kind, targets);
+
+        return true;
     }
 
     private static (IssueFailure Failure, string Message)? Refusal(SensorRegistration sensor, CommandAction action, double? level)

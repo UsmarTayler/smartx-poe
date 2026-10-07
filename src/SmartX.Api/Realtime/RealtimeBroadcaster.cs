@@ -268,17 +268,7 @@ internal sealed class RealtimeBroadcaster : BackgroundService
         }
     }
 
-    private static ReadingPush ToPush(ProcessedReading reading)
-    {
-        var packet = reading.Packet;
-        var isState = packet is StatePacket;
-
-        var value = packet is StatePacket state
-            ? state.Value ? 1d : 0d
-            : packet.TryGetNumericValue(out var number) ? number : 0d;
-
-        return new ReadingPush(packet.NodeId, packet.Timestamp, value, packet.Unit, isState, reading.AcceptedAt);
-    }
+    private static ReadingPush ToPush(ProcessedReading reading) => ReadingPush.From(reading.Packet, reading.AcceptedAt);
 
     // ---- sending: immediate messages -----------------------------------------------------------------------
 

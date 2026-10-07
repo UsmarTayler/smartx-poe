@@ -23,6 +23,7 @@ internal static class CommandEndpoints
 
         commands.MapPost("", IssueAsync).WithName("IssueCommand");
         commands.MapPost("/zone", IssueForZoneAsync).WithName("IssueZoneCommand");
+        commands.MapGet("/zone/preview", PreviewZoneAsync).WithName("PreviewZoneCommand");
         commands.MapGet("", List).WithName("ListCommands");
         commands.MapGet("/log", Log).WithName("GetCommandLog");
         commands.MapGet("/undo-stack", UndoStack).WithName("GetUndoStack");
@@ -53,6 +54,46 @@ internal static class CommandEndpoints
         return issue.Command is { } command
             ? Results.Accepted($"/api/commands/{command.Id}", command)
             : Refused(issue.Error!);
+    }
+
+    /// <summary>
+    /// Which devices a zone-wide action would reach, without sending it.
+    /// </summary>
+    /// <remarks>
+    /// For the confirmation dialog: an operator sees exactly the devices before anything is issued. It runs the same
+    /// selection as the real action, so the list shown is the list acted on. The refusals are the real action's too,
+    /// with the same status codes: 404 for an unknown zone, 400 for an action that cannot be done.
+    /// </remarks>
+    private static async Task<IResult> PreviewZoneAsync(
+        string zoneId,
+        string action,
+        double? level,
+        ISensorRegistry registry,
+        IZoneStore zones,
+        CommandService commands,
+        CancellationToken cancellationToken)
+    {
+        if (!Enum.TryParse<CommandAction>(action, ignoreCase: true, out var parsed) || !Enum.IsDefined(parsed))
+        {
+            return Results.ValidationProblem(
+                new Dictionary<string, string[]> { ["action"] = [$"'{action}' is not an action. Choose one of: {string.Join(", ", Enum.GetNames<CommandAction>())}."] },
+                title: "The preview cannot be made");
+        }
+
+        var catalogue = await zones.GetCatalogueAsync(cancellationToken);
+        var sensors = await registry.ListAsync(cancellationToken);
+
+        var preview = commands.PreviewZone(zoneId, parsed, level, catalogue, sensors);
+
+        return preview switch
+        {
+            { Preview: { } result } => Results.Ok(result),
+            { Failure: IssueFailure.UnknownZone } => Results.Problem(
+                statusCode: StatusCodes.Status404NotFound,
+                title: "Zone not found",
+                detail: preview.Error),
+            _ => Refused(preview.Error!),
+        };
     }
 
     private static async Task<IResult> IssueForZoneAsync(
