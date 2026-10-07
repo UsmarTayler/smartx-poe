@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Applied by SmartX.Tests.csproj, so a bare "dotnet test" (and Visual Studio's Test Explorer) leaves the
+  benchmarks out. They assert thresholds on a wall clock, and a threshold can be missed on a cold or busy machine
+  for no fault of the code. The two filters combine, so asking for the benchmarks on top of this file finds
+  nothing. The README gives the command that runs them on purpose: it swaps in benchmark.runsettings.
+-->
+<RunSettings>
+  <RunConfiguration>
+    <TestCaseFilter>Category!=Benchmark</TestCaseFilter>
+  </RunConfiguration>
+</RunSettings>

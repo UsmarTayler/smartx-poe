@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Used to run the benchmarks on purpose. It replaces default.runsettings, which excludes them, so the filter given
+  on the command line is the only one in force. The README has the full command.
+-->
+<RunSettings>
+  <RunConfiguration />
+</RunSettings>

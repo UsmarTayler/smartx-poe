@@ -3,6 +3,7 @@ using SmartX.Api.Alerts;
 using SmartX.Api.Search;
 using SmartX.Api.Storage;
 using SmartX.Shared;
+using Xunit.Abstractions;
 
 namespace SmartX.Tests;
 
@@ -14,7 +15,7 @@ namespace SmartX.Tests;
 /// Uses the real demo fleet and the real demo hierarchy, so zone filtering runs over a tree three levels deep
 /// with siblings, and the categories, actuator kinds and zones are the ones an operator would actually see.
 /// </remarks>
-public class DeviceIndexTests
+public class DeviceIndexTests(ITestOutputHelper output)
 {
     private static readonly IZoneCatalogue Catalogue = new ZoneCatalogue(DemoZoneHierarchy.Zones);
 
@@ -508,13 +509,12 @@ public class DeviceIndexTests
 
     // ---- scale ----------------------------------------------------------------------------------------------
 
-    [Fact]
-    public void A_search_for_a_rare_condition_among_many_devices_is_fast_and_right()
+    /// <summary>Twenty thousand devices across the demo zones, five of the power meters faulted.</summary>
+    private static (MeshTestHost Mesh, List<string> FaultedPowerMeters) BuildLargeIndex()
     {
         var clock = new ManualTimeProvider(new DateTimeOffset(2026, 3, 1, 12, 0, 0, TimeSpan.Zero));
         var mesh = MeshTestHost.Create(clock);
 
-        // Twenty thousand devices across the demo zones.
         const int devices = 20_000;
         var rare = new List<string>();
 
@@ -544,14 +544,45 @@ public class DeviceIndexTests
             }
         }
 
-        var started = Stopwatch.GetTimestamp();
-        var found = mesh.Index.Search(new DeviceSearchFilters(Category: SensorCategory.PowerConsumption, Band: TrustBand.Fault), Catalogue);
-        var elapsed = Stopwatch.GetElapsedTime(started);
+        return (mesh, rare);
+    }
 
+    [Fact]
+    public void A_search_for_a_rare_condition_among_many_devices_finds_exactly_those_devices()
+    {
+        var (mesh, rare) = BuildLargeIndex();
+
+        var found = mesh.Index.Search(new DeviceSearchFilters(Category: SensorCategory.PowerConsumption, Band: TrustBand.Fault), Catalogue);
+
+        // Correctness only. How fast it is belongs to the benchmark below, because a stopwatch threshold in the
+        // default run is a test that can fail on a slow or busy machine for no fault of the code.
         Assert.Equal(5, rare.Count);
         Assert.Equal(rare.Order(StringComparer.Ordinal), found.Select(hit => hit.MacAddress));
+    }
 
-        // The work is bounded by the rare set, not by the twenty thousand. Generous, to be robust on a busy machine.
-        Assert.True(elapsed < TimeSpan.FromMilliseconds(250), $"The search took {elapsed.TotalMilliseconds:N1} ms.");
+    [Fact]
+    [Trait("Category", "Benchmark")]
+    public void Benchmark_a_search_for_a_rare_condition_costs_about_the_size_of_the_rare_set()
+    {
+        var (mesh, _) = BuildLargeIndex();
+        var filters = new DeviceSearchFilters(Category: SensorCategory.PowerConsumption, Band: TrustBand.Fault);
+
+        mesh.Index.Search(filters, Catalogue);
+
+        const int repeats = 200;
+        var started = Stopwatch.GetTimestamp();
+
+        for (var i = 0; i < repeats; i++)
+        {
+            mesh.Index.Search(filters, Catalogue);
+        }
+
+        var perSearch = Stopwatch.GetElapsedTime(started) / repeats;
+
+        // The work is bounded by the rare set (five devices), not by the twenty thousand.
+        output.WriteLine($"Devices indexed          : 20,000");
+        output.WriteLine($"Category + band search   : {perSearch.TotalMicroseconds:N1} us per search");
+
+        Assert.True(perSearch < TimeSpan.FromMilliseconds(250), $"A search took {perSearch.TotalMilliseconds:N1} ms.");
     }
 }
