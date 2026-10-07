@@ -47,6 +47,18 @@ public interface ITrustEngine
     /// </remarks>
     event Action<TrustTransition>? BandChanged;
 
+    /// <summary>
+    /// Raised after a node's score was recomputed, or the node began to be tracked. Carries the node's MAC.
+    /// </summary>
+    /// <remarks>
+    /// For consumers that show scores live. A band change is rare and a score changes on every packet, so a
+    /// panel that followed only band changes would show stale numbers between them. The event says <i>which</i>
+    /// node, not what changed: a consumer that wants the numbers asks for them, and a consumer that is not
+    /// looking can ignore the call at the cost of one method call. Raised after the engine's lock is released,
+    /// and once per node on a re-evaluation of the whole mesh, so handlers must be quick.
+    /// </remarks>
+    event Action<string>? NodeEvaluated;
+
     /// <summary>The nodes currently degrading or faulted.</summary>
     IReadOnlyCollection<string> DegradedNodes { get; }
 

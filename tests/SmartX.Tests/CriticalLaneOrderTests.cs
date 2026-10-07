@@ -41,7 +41,7 @@ public class CriticalLaneOrderTests
         var trust = new TrustEngine(Options.Create(new TrustOptions()), TimeProvider.System, NullLogger<TrustEngine>.Instance);
         var mesh = MeshTestHost.Create(TimeProvider.System);
         var worker = new TelemetryProcessor(
-            queue, store, trust, new SmartX.Api.Commands.InMemoryActuatorStateStore(), mesh.History, mesh.Alerts, NullLogger<TelemetryProcessor>.Instance);
+            queue, store, trust, new SmartX.Api.Commands.InMemoryActuatorStateStore(), mesh.History, mesh.Alerts, new SmartX.Api.Ingestion.ProcessedReadings(), NullLogger<TelemetryProcessor>.Instance);
 
         for (var value = 0; value < BacklogSize; value++)
         {

@@ -15,6 +15,27 @@ internal enum RaiseOutcome
     Suppressed
 }
 
+/// <summary>What changed about an alert.</summary>
+internal enum AlertChangeKind
+{
+    /// <summary>The alert was not active and now is.</summary>
+    Raised,
+
+    /// <summary>The condition fired again while the alert was already active. Counted, not raised.</summary>
+    Suppressed,
+
+    /// <summary>An operator acknowledged the alert.</summary>
+    Acknowledged,
+
+    /// <summary>The alert's condition ended.</summary>
+    Cleared
+}
+
+/// <summary>An alert changing, as announced by <see cref="AlertTracker.Changed"/>.</summary>
+/// <param name="Kind">What happened.</param>
+/// <param name="Key">Which alert. A consumer that wants its current state asks the tracker for it.</param>
+internal readonly record struct AlertChange(AlertChangeKind Kind, AlertKey Key);
+
 /// <summary>What happened when an operator acknowledged an alert.</summary>
 internal enum AcknowledgeOutcome
 {
@@ -84,6 +105,43 @@ internal sealed class AlertTracker(
 
     private Lock Gate => index.Gate;
 
+    /// <summary>
+    /// Raised whenever an alert is raised, repeated, acknowledged or cleared.
+    /// </summary>
+    /// <remarks>
+    /// A domain event, so whatever shows alerts live can follow them without this class knowing it exists. It is
+    /// raised <i>inside</i> the tracker's lock, which is what keeps the events in the order the changes were
+    /// made: two threads cannot interleave and announce a clear before the raise it clears. The price is that a
+    /// handler must be quick and must never call back into the tracker's lock-taking members from another
+    /// thread; the realtime broadcaster only queues the change and returns. A handler that throws is ignored, so
+    /// a faulty subscriber can never break alerting.
+    /// </remarks>
+    public event Action<AlertChange>? Changed;
+
+    private void Announce(AlertChangeKind kind, AlertKey key)
+    {
+        var handlers = Changed;
+
+        if (handlers is null)
+        {
+            return;
+        }
+
+        var change = new AlertChange(kind, key);
+
+        foreach (Action<AlertChange> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(change);
+            }
+            catch
+            {
+                // Deliberately swallowed. See the remarks on Changed.
+            }
+        }
+    }
+
     /// <summary>What an active alert remembers besides its key.</summary>
     private sealed class AlertDetail(DateTimeOffset raisedAt, string? detail)
     {
@@ -120,6 +178,7 @@ internal sealed class AlertTracker(
             existing.Suppressed++;
             existing.Detail = detail ?? existing.Detail;
             _suppressed++;
+            Announce(AlertChangeKind.Suppressed, key);
 
             return RaiseOutcome.Suppressed;
         }
@@ -136,6 +195,8 @@ internal sealed class AlertTracker(
             key.Mac,
             HistoryKind.AlertRaised,
             new HistoryEventDetails($"{key.Kind} raised", detail, Alert: key.Kind)));
+
+        Announce(AlertChangeKind.Raised, key);
 
         return RaiseOutcome.Raised;
     }
@@ -177,6 +238,8 @@ internal sealed class AlertTracker(
             key.Mac,
             HistoryKind.AlertCleared,
             new HistoryEventDetails($"{key.Kind} cleared", Alert: key.Kind)));
+
+        Announce(AlertChangeKind.Cleared, key);
 
         return true;
     }
@@ -287,7 +350,14 @@ internal sealed class AlertTracker(
                 return AcknowledgeOutcome.NotActive;
             }
 
-            return _acknowledged.Add(key) ? AcknowledgeOutcome.Acknowledged : AcknowledgeOutcome.AlreadyAcknowledged;
+            if (!_acknowledged.Add(key))
+            {
+                return AcknowledgeOutcome.AlreadyAcknowledged;
+            }
+
+            Announce(AlertChangeKind.Acknowledged, key);
+
+            return AcknowledgeOutcome.Acknowledged;
         }
     }
 
@@ -317,6 +387,33 @@ internal sealed class AlertTracker(
                     .ThenBy(alert => alert.Key.Mac, StringComparer.Ordinal)
                     .ThenBy(alert => alert.Key.Kind),
             ];
+        }
+    }
+
+    /// <summary>One active alert as it is now.</summary>
+    /// <returns><see langword="false"/> when the alert is not active.</returns>
+    public bool TryGet(AlertKey key, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out ActiveAlert? alert)
+    {
+        lock (Gate)
+        {
+            if (!_active.Contains(key))
+            {
+                alert = null;
+
+                return false;
+            }
+
+            var detail = _details[key];
+
+            alert = new ActiveAlert(
+                key,
+                index.RoomOfLocked(key.Mac),
+                detail.RaisedAt,
+                detail.Suppressed,
+                _acknowledged.Contains(key),
+                detail.Detail);
+
+            return true;
         }
     }
 

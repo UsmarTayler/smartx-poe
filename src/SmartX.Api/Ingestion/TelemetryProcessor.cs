@@ -30,6 +30,7 @@ internal sealed class TelemetryProcessor(
     IActuatorStateStore actuators,
     IHistoryStore history,
     AlertTracker alerts,
+    ProcessedReadings processed,
     ILogger<TelemetryProcessor> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -99,6 +100,9 @@ internal sealed class TelemetryProcessor(
         // Counted as processed only now, with everything done, so the stats never claim work that is still
         // in flight.
         queue.Complete(reading);
+
+        // Say so, and carry on. Whoever listens (the real-time broadcaster, today) is not this class's business.
+        processed.Publish(new ProcessedReading(reading.Packet, reading.Sequence, reading.EnqueuedAt, reading.Alert));
 
         if (reading.Alert is { } alert)
         {
