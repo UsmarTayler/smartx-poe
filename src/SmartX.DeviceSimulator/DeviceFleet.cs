@@ -215,6 +215,12 @@ internal sealed class DeviceFleet(
         }
     }
 
+    /// <summary>How often a device reports now: its own cadence, sped up by the configured multiplier.</summary>
+    private TimeSpan LiveCadence(SimulatedDevice device) =>
+        _options.ReportingRateMultiplier > 1
+            ? TimeSpan.FromTicks(Math.Max(TimeSpan.TicksPerMillisecond, (long)(device.Cadence.Ticks / _options.ReportingRateMultiplier)))
+            : device.Cadence;
+
     internal async Task TickDeviceAsync(SimulatedDevice device, DateTimeOffset now, CancellationToken cancellationToken)
     {
         // TWO CHANNELS, deliberately kept apart. Telemetry is the data plane: it is what the simulated device
@@ -238,11 +244,13 @@ internal sealed class DeviceFleet(
 
         // Kept on its own cadence rather than reset to now, so a slow tick does not stretch the interval. A
         // device that has fallen more than an interval behind skips ahead instead of bursting to catch up.
-        device.NextDue += device.Cadence;
+        var cadence = LiveCadence(device);
+
+        device.NextDue += cadence;
 
         if (device.NextDue <= now)
         {
-            device.NextDue = now + device.Cadence;
+            device.NextDue = now + cadence;
         }
 
         JsonElement reading;

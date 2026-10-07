@@ -55,6 +55,8 @@ services:
       Simulator__DeviceCount: ${SMARTX_DEVICE_COUNT:-48}
       Simulator__Mix: ${SMARTX_SCENARIO_MIX:-Demo}
       Simulator__BackfillDuration: ${SMARTX_BACKFILL:-00:10:00}
+      Simulator__ReportingRateMultiplier: ${SMARTX_RATE:-1}
+      Simulator__TickInterval: ${SMARTX_TICK:-00:00:00.500}
     depends_on:
       api:
         # Health checks narrow the start-up race, they do not remove it: the API can still restart later,
