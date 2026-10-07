@@ -136,6 +136,8 @@ internal sealed class PatternEngine : IPatternEngine
     private readonly Dictionary<string, string> _targetLabels = new(StringComparer.Ordinal);
 
     private long _nextInstance;
+    private int _pairs;
+    private int _pruneAfter;
     private DateTimeOffset? _watchingSince;
     private DateTimeOffset _latest;
 
@@ -259,17 +261,58 @@ internal sealed class PatternEngine : IPatternEngine
             _followed.Add(trigger, actions);
         }
 
-        Count(actions, action, weight, now);
+        if (Count(actions, action, weight, now) && ++_pairs > Math.Max(_options.MaxLearnedPairs, _pruneAfter))
+        {
+            Prune(now);
+        }
     }
 
-    private void Count<TKey>(Dictionary<TKey, DecayedCount> counts, TKey key, double amount, DateTimeOffset now)
+    /// <returns>Whether this was a count that did not exist before.</returns>
+    private bool Count<TKey>(Dictionary<TKey, DecayedCount> counts, TKey key, double amount, DateTimeOffset now)
         where TKey : notnull
     {
         // A reference into the dictionary's own storage: the struct is changed where it lives, with no copy and no
         // allocation, which is the point of a struct here.
-        ref var count = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(counts, key, out _);
+        ref var count = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(counts, key, out var existed);
 
         count.Add(amount, now, _options.HalfLife);
+
+        return !existed;
+    }
+
+    /// <summary>Forgets the most faded pairs until the table fits its bound, if enough of them have faded. Caller holds the lock.</summary>
+    /// <remarks>
+    /// Starts with pairs worth almost nothing and widens the net by a factor of ten each pass, up to a tenth of one pairing.
+    /// Anything worth more than that is never forgotten to make room, so a burst of fresh pairs can take the table past its
+    /// bound for a while rather than lose what has just been learned. After a pass that did not get under the bound the next
+    /// one waits for a tenth of the bound's worth of new pairs, so a table that cannot shrink does not search itself on every
+    /// event.
+    /// </remarks>
+    private void Prune(DateTimeOffset now)
+    {
+        for (var floor = 0.001; _pairs > _options.MaxLearnedPairs && floor <= 0.1; floor *= 10)
+        {
+            foreach (var trigger in _followed.Keys.ToList())
+            {
+                var actions = _followed[trigger];
+
+                foreach (var action in actions.Keys.ToList())
+                {
+                    if (actions[action].ValueAt(now, _options.HalfLife) < floor)
+                    {
+                        actions.Remove(action);
+                        _pairs--;
+                    }
+                }
+
+                if (actions.Count == 0)
+                {
+                    _followed.Remove(trigger);
+                }
+            }
+        }
+
+        _pruneAfter = _pairs > _options.MaxLearnedPairs ? _pairs + Math.Max(1, _options.MaxLearnedPairs / 10) : 0;
     }
 
     /// <summary>Moves the engine's clock forward. A moment earlier than the latest seen is treated as the latest.</summary>

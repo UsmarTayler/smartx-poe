@@ -73,6 +73,15 @@ public sealed class PatternOptions
     /// </remarks>
     public int MaxTriggersInWindow { get; set; } = 5000;
 
+    /// <summary>The most (trigger, action) pairs the engine remembers. Past it, the most faded are forgotten.</summary>
+    /// <remarks>
+    /// A bound on memory. Counts fade, but a faded count still occupies its slot, and a large mesh meeting many distinct
+    /// triggers and many distinct actions could grow the table for ever. When the table is over this, entries that have faded
+    /// to almost nothing are dropped first, then progressively less faded ones, until it fits. What is lost is by
+    /// construction what mattered least.
+    /// </remarks>
+    public int MaxLearnedPairs { get; set; } = 250_000;
+
     /// <summary>Where the low watch level sits, as a fraction of the sensor's registered range.</summary>
     public double WatchLowFraction { get; set; } = 0.20;
 
@@ -149,6 +158,11 @@ internal static class PatternOptionsValidation
             || options.WatchLowFraction + options.RearmMargin >= options.WatchHighFraction - options.RearmMargin)
         {
             yield return "Patterns:RearmMargin cannot be negative and must leave the two re-arm levels apart.";
+        }
+
+        if (options.MaxLearnedPairs < 1)
+        {
+            yield return "Patterns:MaxLearnedPairs must be at least 1.";
         }
 
         if (options.GeneralZoneDepth < 0)

@@ -326,6 +326,44 @@ public class PatternEngineTests
     }
 
     [Fact]
+    public void The_table_of_learned_pairs_is_bounded_and_forgets_what_has_faded_first()
+    {
+        var engine = Engine(options =>
+        {
+            options.MaxLearnedPairs = 20;
+            options.HalfLife = TimeSpan.FromDays(1);
+        });
+
+        static string Device(int index) => $"B8:27:EB:70:00:{index:X2}";
+
+        // Thirty distinct things done in answer to one trigger, a long time ago. All of them are fresh when they are
+        // learned, so none is forgotten to make room: the table is allowed to run over its bound rather than lose them.
+        engine.RecordTrigger(Low(MoistB, T0));
+
+        for (var index = 0; index < 30; index++)
+        {
+            engine.RecordAction(View(Device(index), T0 + TimeSpan.FromSeconds(index + 1)));
+        }
+
+        Assert.Equal(30, All(engine, T0 + TimeSpan.FromMinutes(1), new PatternQuery(Level: PatternLevel.Specific)).Count);
+
+        // Ten days later, fifteen new ones. The old thirty have faded to about a thousandth, and go first.
+        var later = T0 + TimeSpan.FromDays(10);
+        engine.RecordTrigger(Low(MoistB, later));
+
+        for (var index = 100; index < 115; index++)
+        {
+            engine.RecordAction(View(Device(index), later + TimeSpan.FromSeconds(index - 99)));
+        }
+
+        var kept = All(engine, later + TimeSpan.FromMinutes(1), new PatternQuery(Level: PatternLevel.Specific));
+
+        Assert.True(kept.Count <= 20, $"{kept.Count} pairs are kept against a bound of 20.");
+        Assert.All(kept, item => Assert.True(item.Support > 0.5));
+        Assert.Equal(15, kept.Count);
+    }
+
+    [Fact]
     public void Triggers_the_directory_does_not_know_are_still_learned_at_the_specific_level()
     {
         var engine = Engine();
