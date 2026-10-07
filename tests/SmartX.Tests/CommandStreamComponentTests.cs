@@ -847,6 +847,6 @@ public class DeviceDetailComponentTests : StreamComponentTests
         cut.FindAll("[aria-label='Timeline range'] button").Single(button => button.TextContent.Contains("6 h", StringComparison.Ordinal)).Click();
 
         await ClientRig.UntilAsync(() => Api.TimelineCalls > before, "the timeline to be asked for again");
-        Assert.Equal(State.TimelineRange, SmartX.Client.State.TimelineRange.SixHours);
+        Assert.Equal(SmartX.Client.State.TimelineRange.SixHours, State.TimelineRange);
     }
 }
