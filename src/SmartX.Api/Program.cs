@@ -5,6 +5,7 @@ using SmartX.Api.Commands;
 using SmartX.Api.Endpoints;
 using SmartX.Api.History;
 using SmartX.Api.Ingestion;
+using SmartX.Api.Realtime;
 using SmartX.Api.Search;
 using SmartX.Api.Storage;
 using SmartX.Api.Trust;
@@ -21,11 +22,15 @@ var allowedOrigins = builder.Configuration
     .GetSection("Cors:AllowedOrigins")
     .Get<string[]>() ?? [];
 
+// AllowCredentials is for SignalR. A browser sends its negotiate request with credentials, and a CORS
+// response without Access-Control-Allow-Credentials makes it fail even though the origin is allowed. It is only
+// legal because the origins are listed by name: a wildcard origin cannot be combined with credentials.
 builder.Services.AddCors(options =>
     options.AddPolicy(ClientCorsPolicy, policy => policy
         .WithOrigins(allowedOrigins)
         .AllowAnyHeader()
-        .AllowAnyMethod()));
+        .AllowAnyMethod()
+        .AllowCredentials()));
 
 // Singletons, because these are the storage. A scoped or transient lifetime would hand each
 // request its own empty dictionary, so a sensor registered by one call would not exist for the
@@ -121,6 +126,26 @@ builder.Services.AddSingleton<AlertTracker>();
 builder.Services.AddSingleton<ActivityRecorder>();
 builder.Services.AddHostedService<TrustEventBridge>();
 
+// Real-time push. The domain raises events and knows nothing of SignalR; the broadcaster is the one subscriber
+// that forwards them to the hub. See RealtimeBroadcaster for what is batched, coalesced and immediate.
+builder.Services
+    .AddOptions<RealtimeOptions>()
+    .Bind(builder.Configuration.GetSection(RealtimeOptions.SectionName))
+    .Validate(options => options.FlushInterval > TimeSpan.Zero, "Realtime:FlushInterval must be positive.")
+    .Validate(options => options.PipelineInterval > TimeSpan.Zero, "Realtime:PipelineInterval must be positive.")
+    .Validate(options => options.MaxBufferedReadings >= 1, "Realtime:MaxBufferedReadings must be at least 1.")
+    .Validate(options => options.TrustScoreEpsilon >= 0, "Realtime:TrustScoreEpsilon cannot be negative.")
+    .Validate(options => options.RecentPriorityAlerts >= 0, "Realtime:RecentPriorityAlerts cannot be negative.")
+    .Validate(options => options.SnapshotCommands >= 1, "Realtime:SnapshotCommands must be at least 1.")
+    .Validate(options => options.MaxQueuedMessages >= 1, "Realtime:MaxQueuedMessages must be at least 1.")
+    .ValidateOnStart();
+
+builder.Services.AddSignalR();
+builder.Services.AddSingleton<RealtimeSubscriptions>();
+builder.Services.AddSingleton<ProcessedReadings>();
+builder.Services.AddSingleton<RealtimeBroadcaster>();
+builder.Services.AddHostedService(services => services.GetRequiredService<RealtimeBroadcaster>());
+
 builder.Services.AddSingleton<TelemetryIngestionQueue>();
 builder.Services.AddSingleton<CriticalClassifier>();
 builder.Services.AddHostedService<TelemetryProcessor>();
@@ -173,6 +198,11 @@ api.MapCommandEndpoints();
 api.MapHistoryEndpoints();
 api.MapAlertEndpoints();
 api.MapSearchEndpoints();
+api.MapRealtimeEndpoints();
+
+// The hub is mapped on the app and not on the /api group: it is a different kind of endpoint, with its own path,
+// which the client's web server forwards separately from /api.
+app.MapHub<TelemetryHub>(SmartX.Shared.RealtimeTopics.HubPath);
 
 app.Run();
 
