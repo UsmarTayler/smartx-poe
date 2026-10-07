@@ -625,3 +625,48 @@ h1:focus {
 }
 
 .smartx-activity__toggle:focus-visible { outline: 2px solid var(--mud-palette-primary); outline-offset: 2px; }
+
+/* Timeline chart. Series colour is the theme's primary, which is deliberately different in each theme (a dark blue on
+   white, a light blue on the dark surface) so contrast holds in both; the band is the same colour at low opacity. Axis
+   text is the secondary text colour and never the series colour. */
+.smartx-chart { outline: none; }
+.smartx-chart:focus-visible { outline: 2px solid var(--mud-palette-primary); outline-offset: 2px; border-radius: 4px; }
+.smartx-chart__toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px; }
+.smartx-chart__frame { position: relative; }
+.smartx-chart__svg { width: 100%; height: auto; display: block; }
+.smartx-chart__grid { stroke: var(--mud-palette-lines-default); stroke-width: 1; opacity: 0.7; }
+.smartx-chart__axis { fill: var(--mud-palette-text-secondary); font-size: 10px; font-variant-numeric: tabular-nums; }
+.smartx-chart__envelope { fill: var(--mud-palette-primary); fill-opacity: 0.2; stroke: none; }
+.smartx-chart__average { stroke: var(--mud-palette-primary); }
+.smartx-chart__lone { fill: var(--mud-palette-primary); }
+.smartx-chart__step { stroke: var(--mud-palette-primary); }
+.smartx-chart__crosshair { stroke: var(--mud-palette-text-secondary); stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
+.smartx-chart__hit { cursor: crosshair; }
+.smartx-chart__shape { fill: var(--mud-palette-surface); stroke: var(--mud-palette-text-primary); stroke-width: 1.5; }
+.smartx-chart__icon { fill: var(--mud-palette-text-primary); pointer-events: none; }
+.smartx-chart__marker--triangle .smartx-chart__shape { stroke: #b57d00; }
+.smartx-chart__marker--circle .smartx-chart__shape { stroke: #0ca30c; }
+.smartx-chart__marker--square .smartx-chart__shape { stroke: #6b6a66; }
+
+.smartx-chart__tooltip {
+    position: absolute;
+    top: 4px;
+    transform: translateX(-50%);
+    max-width: 90%;
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    background: var(--mud-palette-surface);
+    border: 1px solid var(--mud-palette-lines-default);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    pointer-events: none;
+}
+
+.smartx-chart__legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 4px 0 0; padding: 0; font-size: 0.75rem; color: var(--mud-palette-text-secondary); }
+.smartx-chart__legend li { display: inline-flex; align-items: center; gap: 4px; }
+
+.smartx-chart__table-wrap { max-height: 280px; overflow: auto; }
+.smartx-chart__table { width: 100%; border-collapse: collapse; font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+.smartx-chart__table th, .smartx-chart__table td { text-align: left; padding: 3px 8px; border-bottom: 1px solid var(--mud-palette-lines-default); }
+
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

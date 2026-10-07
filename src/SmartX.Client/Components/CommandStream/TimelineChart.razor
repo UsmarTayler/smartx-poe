@@ -1,0 +1,332 @@
+@using System.Globalization
+@* A device's readings over time, drawn as SVG in the family of the trust sparkline: no charting library, no script, and the
+   bucketed data goes in as the API returned it.
+
+   What it draws, and why:
+   - A light band from each bucket's minimum to its maximum, and the average as a 2 px line on top. The band is what keeps a
+     spike visible: an average alone would hide it. The band is drawn first and nothing covers it.
+   - One y-axis. Gridlines are light and recessive, axis labels are in the secondary text colour and never in the series
+     colour, so the numbers read as scale and not as data.
+   - Events (commands, alerts raised and cleared, trust changes) on the time axis, 16 px across, each with its own shape and
+     its own icon, so they can be told apart without colour.
+   - A state sensor is a step line of its transitions, not an average of 0 and 1.
+   - Hover or arrow keys show a crosshair and a tooltip for a bucket; the hit areas are wider than the marks. Anyone who
+     cannot use a chart can switch to the same data as a table. *@
+<div class="smartx-chart" role="group" aria-label="@AriaLabel" tabindex="0" @onkeydown="OnKey" @onmouseleave="Clear">
+    <div class="smartx-chart__toolbar">
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">@Summary</MudText>
+        <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="() => _table = !_table" aria-pressed="@(_table ? "true" : "false")"
+                   StartIcon="@(_table ? Icons.Material.Filled.ShowChart : Icons.Material.Filled.TableChart)">
+            @(_table ? "Show chart" : "Show as table")
+        </MudButton>
+    </div>
+
+    @if (_geometry is null || _geometry.IsEmpty)
+    {
+        <MudText Typo="Typo.body2" Class="mud-text-secondary pa-2" role="status">No readings in this range yet.</MudText>
+    }
+    else if (_table)
+    {
+        <div class="smartx-chart__table-wrap">
+            <table class="smartx-chart__table">
+                <caption class="visually-hidden">@AriaLabel</caption>
+                <thead>
+                    @if (_geometry.Shape == TimelineShape.Buckets)
+                    {
+                        <tr><th scope="col">From</th><th scope="col">Minimum</th><th scope="col">Maximum</th><th scope="col">Average</th><th scope="col">Readings</th></tr>
+                    }
+                    else
+                    {
+                        <tr><th scope="col">From</th><th scope="col">State</th></tr>
+                    }
+                </thead>
+                <tbody>
+                    @foreach (var bucket in _geometry.Buckets)
+                    {
+                        <tr @key="bucket.Bucket.Start">
+                            <td>@ReadingFormatter.Time(bucket.Bucket.Start)</td>
+                            @if (_geometry.Shape == TimelineShape.Buckets)
+                            {
+                                <td>@Value(bucket.Bucket.Min)</td>
+                                <td>@Value(bucket.Bucket.Max)</td>
+                                <td>@Value(bucket.Bucket.Average)</td>
+                                <td>@bucket.Bucket.Count</td>
+                            }
+                            else
+                            {
+                                <td>@(bucket.Bucket.Max > 0 ? "engaged" : "released")</td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+
+            @if (_geometry.Markers.Count > 0)
+            {
+                <table class="smartx-chart__table mt-2">
+                    <caption class="visually-hidden">Events in this range</caption>
+                    <thead><tr><th scope="col">At</th><th scope="col">Event</th><th scope="col">What</th></tr></thead>
+                    <tbody>
+                        @foreach (var marker in _geometry.Markers)
+                        {
+                            <tr><td>@ReadingFormatter.Time(marker.At)</td><td>@TimelineChartModel.KindLabel(marker.Kind)</td><td>@marker.Label</td></tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+    }
+    else
+    {
+        var g = _geometry;
+
+        <div class="smartx-chart__frame">
+            <svg class="smartx-chart__svg" viewBox="0 0 @g.Width @g.Height" role="img" focusable="false" aria-label="@AriaLabel">
+                <title>@AriaLabel</title>
+
+                @foreach (var tick in g.YTicks)
+                {
+                    <line class="smartx-chart__grid" x1="@N(g.Plot.Left)" x2="@N(g.Plot.Right)" y1="@N(tick.Position)" y2="@N(tick.Position)" />
+                    @AxisLabel(g.Plot.Left - 6, tick.Position + 3, "end", tick.Label)
+                }
+
+                @foreach (var tick in g.XTicks)
+                {
+                    @AxisLabel(tick.Position, g.Plot.Bottom + 14, "middle", tick.Label)
+                }
+
+                @* The band first, then the line over it. *@
+                @foreach (var segment in g.EnvelopeSegments)
+                {
+                    <polygon class="smartx-chart__envelope" points="@segment" />
+                }
+
+                @foreach (var segment in g.AverageSegments)
+                {
+                    <polyline class="smartx-chart__average" points="@segment" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
+                }
+
+                @foreach (var point in g.LonePoints)
+                {
+                    <circle class="smartx-chart__lone" cx="@N(point.X)" cy="@N(point.Y)" r="2.5" />
+                }
+
+                @if (g.StepPath.Length > 0)
+                {
+                    <path class="smartx-chart__step" d="@g.StepPath" fill="none" stroke-width="2" stroke-linejoin="round" />
+                }
+
+                @if (_hover is { } hovered)
+                {
+                    <line class="smartx-chart__crosshair" x1="@N(Centre(hovered))" x2="@N(Centre(hovered))" y1="@N(g.Plot.Top)" y2="@N(g.Plot.Bottom)" />
+                }
+
+                @* Hit areas: one per bucket, spanning the plot's height, wider than any mark. *@
+                @for (var index = 0; index < g.Buckets.Count; index++)
+                {
+                    var at = index;
+                    var bucket = g.Buckets[index];
+
+                    <rect class="smartx-chart__hit" x="@N(bucket.X)" y="@N(g.Plot.Top)" width="@N(bucket.Width)" height="@N(g.Plot.Height)"
+                          fill="transparent" @onmouseenter="() => Hover(at)" />
+                }
+
+                @foreach (var marker in g.Markers)
+                {
+                    <g class="smartx-chart__marker smartx-chart__marker--@marker.Shape" transform="translate(@N(marker.X) @N(g.Plot.Bottom + 26))"
+                       data-kind="@marker.Kind" aria-label="@($"{TimelineChartModel.KindLabel(marker.Kind)}: {marker.Label}")" @onmouseenter="() => HoverMarker(marker)">
+                        <title>@($"{TimelineChartModel.KindLabel(marker.Kind)} at {ReadingFormatter.Time(marker.At)}: {marker.Label}")</title>
+                        @switch (marker.Shape)
+                        {
+                            case "diamond":
+                                <polygon class="smartx-chart__shape" points="0,-8 8,0 0,8 -8,0" />
+                                break;
+                            case "triangle":
+                                <polygon class="smartx-chart__shape" points="0,-9 9,7 -9,7" />
+                                break;
+                            case "square":
+                                <rect class="smartx-chart__shape" x="-7" y="-7" width="14" height="14" />
+                                break;
+                            default:
+                                <circle class="smartx-chart__shape" r="8" />
+                                break;
+                        }
+                        <g class="smartx-chart__icon" transform="translate(-6 -6) scale(0.5)">@((MarkupString)marker.Icon)</g>
+                        <circle r="13" fill="transparent" />
+                    </g>
+                }
+            </svg>
+
+            @if (Tooltip is { } tip)
+            {
+                <div class="smartx-chart__tooltip" style="left: @N(Math.Clamp(tip.X / g.Width * 100, 8, 92))%" role="status">
+                    @tip.Text
+                </div>
+            }
+        </div>
+
+        <ul class="smartx-chart__legend" aria-label="Event key">
+            @foreach (var kind in _kinds)
+            {
+                var (shape, icon) = TimelineChartModel.MarkerStyle(kind);
+
+                <li>
+                    <svg width="18" height="18" viewBox="-10 -10 20 20" aria-hidden="true" class="smartx-chart__marker smartx-chart__marker--@shape">
+                        @switch (shape)
+                        {
+                            case "diamond": <polygon class="smartx-chart__shape" points="0,-8 8,0 0,8 -8,0" /> break;
+                            case "triangle": <polygon class="smartx-chart__shape" points="0,-9 9,7 -9,7" /> break;
+                            case "square": <rect class="smartx-chart__shape" x="-7" y="-7" width="14" height="14" /> break;
+                            default: <circle class="smartx-chart__shape" r="8" /> break;
+                        }
+                        <g class="smartx-chart__icon" transform="translate(-6 -6) scale(0.5)">@((MarkupString)icon)</g>
+                    </svg>
+                    <span>@TimelineChartModel.KindLabel(kind)</span>
+                </li>
+            }
+        </ul>
+    }
+</div>
+
+@code {
+    private static readonly HistoryKind[] _kinds =
+        [HistoryKind.Command, HistoryKind.AlertRaised, HistoryKind.AlertCleared, HistoryKind.TrustTransition];
+
+    private ChartGeometry? _geometry;
+    private int? _hover;
+    private ChartMarker? _hoverMarker;
+    private bool _table;
+
+    /// <summary>What the server returned for the range.</summary>
+    [Parameter]
+    public SensorTimeline? Timeline { get; set; }
+
+    /// <summary>Readings pushed since the timeline was fetched. They extend the chart to the right.</summary>
+    [Parameter]
+    public IReadOnlyList<ReadingPush> Live { get; set; } = [];
+
+    /// <summary>The chart's width in view-box units. The SVG scales to its container; this fixes the drawing's proportions.</summary>
+    [Parameter]
+    public int Width { get; set; } = 480;
+
+    [Parameter]
+    public int Height { get; set; } = 230;
+
+    /// <summary>What the chart is of, for its accessible name.</summary>
+    [Parameter]
+    public string? Title { get; set; }
+
+    private string AriaLabel =>
+        $"{Title ?? "Readings"}, {(_geometry is null || _geometry.IsEmpty ? "no readings" : $"{ReadingFormatter.Time(_geometry.From)} to {ReadingFormatter.Time(_geometry.To)}")}";
+
+    private string Summary
+    {
+        get
+        {
+            if (_geometry is null || _geometry.IsEmpty)
+            {
+                return "No readings";
+            }
+
+            return _geometry.Shape == TimelineShape.Buckets
+                ? $"{_geometry.Buckets.Sum(bucket => bucket.Bucket.Count):N0} readings in {_geometry.Buckets.Count} buckets. Band: minimum to maximum. Line: average."
+                : $"{_geometry.Buckets.Count} state changes.";
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        _geometry = Timeline is null ? null : TimelineChartModel.Build(Timeline, Live, Width, Height);
+
+        if (_hover is { } index && (_geometry is null || index >= _geometry.Buckets.Count))
+        {
+            _hover = null;
+        }
+    }
+
+    private void Hover(int index)
+    {
+        _hover = index;
+        _hoverMarker = null;
+    }
+
+    private void HoverMarker(ChartMarker marker)
+    {
+        _hoverMarker = marker;
+    }
+
+    private void Clear()
+    {
+        _hover = null;
+        _hoverMarker = null;
+    }
+
+    // Arrow keys step through the buckets, so the tooltip is reachable without a mouse.
+    private void OnKey(KeyboardEventArgs args)
+    {
+        if (_geometry is null || _geometry.Buckets.Count == 0)
+        {
+            return;
+        }
+
+        switch (args.Key)
+        {
+            case "ArrowRight":
+                _hover = Math.Min((_hover ?? -1) + 1, _geometry.Buckets.Count - 1);
+                _hoverMarker = null;
+                break;
+            case "ArrowLeft":
+                _hover = Math.Max((_hover ?? _geometry.Buckets.Count) - 1, 0);
+                _hoverMarker = null;
+                break;
+            case "Escape":
+                Clear();
+                break;
+        }
+    }
+
+    private double Centre(int index) => _geometry!.Buckets[index].X + (_geometry.Buckets[index].Width / 2);
+
+    private (double X, string Text)? Tooltip
+    {
+        get
+        {
+            if (_geometry is null)
+            {
+                return null;
+            }
+
+            if (_hoverMarker is { } marker)
+            {
+                return (marker.X, $"{TimelineChartModel.KindLabel(marker.Kind)} at {ReadingFormatter.Time(marker.At)}: {marker.Label}{(marker.Detail is { } detail ? $". {detail}" : string.Empty)}");
+            }
+
+            if (_hover is not { } index || index >= _geometry.Buckets.Count)
+            {
+                return null;
+            }
+
+            var bucket = _geometry.Buckets[index];
+            var b = bucket.Bucket;
+
+            var text = _geometry.Shape == TimelineShape.Buckets
+                ? $"{ReadingFormatter.Time(b.Start)} to {ReadingFormatter.Time(b.End)}. Minimum {Value(b.Min)}, maximum {Value(b.Max)}, average {Value(b.Average)}, {b.Count} reading{(b.Count == 1 ? string.Empty : "s")}."
+                : $"{ReadingFormatter.Time(b.Start)}: {(b.Max > 0 ? "engaged" : "released")}.";
+
+            if (bucket.Events.Count > 0)
+            {
+                text += " Events: " + string.Join("; ", bucket.Events.Select(e => $"{TimelineChartModel.KindLabel(e.Kind)} {e.Label}")) + ".";
+            }
+
+            return (Centre(index), text);
+        }
+    }
+
+    private string Value(double value) => $"{ReadingFormatter.Number(Math.Round(value, 3))} {_geometry?.Unit}".Trim();
+
+    // Razor reads a <text> tag as its own text-block syntax, so SVG text is written out as markup instead.
+    private static MarkupString AxisLabel(double x, double y, string anchor, string text) =>
+        new($"<text class=\"smartx-chart__axis\" x=\"{N(x)}\" y=\"{N(y)}\" text-anchor=\"{anchor}\">{System.Net.WebUtility.HtmlEncode(text)}</text>");
+
+    private static string N(double value) => value.ToString("0.##", CultureInfo.InvariantCulture);
+}
