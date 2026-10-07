@@ -157,6 +157,15 @@ public sealed class SmartXApiClient(HttpClient http)
 
         using (response)
         {
+            // A web server in front of the API answers 502 or 504 when the API behind it is down, which is the
+            // same fact as a refused connection, said by someone else. Treated alike, so the app reports that the
+            // API is unreachable and keeps the last data on screen instead of showing "Bad Gateway" as if it were
+            // an answer. 503 is not included: the API itself uses it, to say a queue is full.
+            if (response.StatusCode is System.Net.HttpStatusCode.BadGateway or System.Net.HttpStatusCode.GatewayTimeout)
+            {
+                return ApiResult<T>.Failure(ApiProblem.Unreachable());
+            }
+
             if (!response.IsSuccessStatusCode)
             {
                 return ApiResult<T>.Failure(await ReadProblemAsync(response, cancellationToken));

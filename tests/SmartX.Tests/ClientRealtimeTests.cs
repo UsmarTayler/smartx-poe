@@ -866,4 +866,69 @@ public class ClientRealtimeTests
         Assert.Equal(256, service.For(A).Recent.Count);
         Assert.Equal(699, ((NumericPacket<int>)service.For(A).Latest!).Value);
     }
+
+    // ---- the API going away -----------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task When_the_hub_drops_and_the_api_is_down_too_polling_keeps_the_last_known_state_on_screen()
+    {
+        await using var rig = await LiveRigAsync();
+        rig.Snapshots.Trust = () => TrustSnapshot(1, Node(A, TrustBand.Fault, 0.2), Node(B));
+        await rig.Trust.StartAsync();
+        Assert.Equal(2, rig.Trust.Current.Nodes.Count);
+
+        // The whole API goes: the push connection drops and every poll fails as well.
+        rig.Http.Fail = true;
+        rig.Hub.Drop();
+        await rig.WaitForStateAsync(RealtimeState.Polling);
+        await ClientRig.UntilAsync(() => rig.Trust.Current.Problem is not null, "a failed poll to be recorded");
+
+        // The polling feed has never loaded anything, and its failure must not blank what the push feed knew.
+        Assert.True(rig.Trust.Current.IsLoaded);
+        Assert.Equal(2, rig.Trust.Current.Nodes.Count);
+        Assert.Equal(TrustBand.Fault, Held(rig, A).Band);
+    }
+
+    [Fact]
+    public async Task After_a_server_restart_the_next_snapshot_sets_the_sequence_baseline_even_though_the_numbers_went_backwards()
+    {
+        await using var rig = await LiveRigAsync();
+
+        // A long-running server: sequence 5,000.
+        rig.Snapshots.Trust = () => TrustSnapshot(5_000, Node(A));
+        await rig.Trust.StartAsync();
+
+        // It restarts. Its sequence numbers start again from the beginning, and the client reconnects.
+        rig.Snapshots.Trust = () => TrustSnapshot(2, Node(A), Node(B));
+        rig.Hub.Drop();
+        rig.Hub.Restore();
+        await ClientRig.UntilAsync(() => rig.Trust.Current.Nodes.Count == 2, "the snapshot from the restarted server");
+
+        // Message 3 is newer than the snapshot it follows, however much smaller it is than 5,000.
+        rig.Hub.Deliver(RealtimeMethods.TrustUpdated, TrustUpdate(3, Node(B, TrustBand.Fault, 0.1)));
+
+        Assert.Equal(TrustBand.Fault, Held(rig, B).Band);
+    }
+
+    [Theory]
+    [InlineData(System.Net.HttpStatusCode.BadGateway, true)]
+    [InlineData(System.Net.HttpStatusCode.GatewayTimeout, true)]
+    [InlineData(System.Net.HttpStatusCode.ServiceUnavailable, false)]
+    [InlineData(System.Net.HttpStatusCode.NotFound, false)]
+    public async Task A_gateway_error_from_the_web_server_in_front_of_the_api_counts_as_the_api_being_unreachable(
+        System.Net.HttpStatusCode status, bool unreachable)
+    {
+        var api = new SmartXApiClient(new HttpClient(new FixedStatusHandler(status)) { BaseAddress = new Uri("http://stub/") });
+
+        var result = await api.GetTrustSnapshotAsync();
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(unreachable, result.Problem!.IsUnreachable);
+    }
+
+    private sealed class FixedStatusHandler(System.Net.HttpStatusCode status) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(status));
+    }
 }
