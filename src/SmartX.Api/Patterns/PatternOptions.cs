@@ -41,6 +41,12 @@ public sealed class PatternOptions
     /// again as likely as it would otherwise be, which is a clear effect that a handful of observations can still show. Lower
     /// admits noise; much higher needs more history than a short shift produces. Confidence alone cannot do this job: a pump
     /// page that is open all day follows every trigger with confidence near 1, and lift is what exposes that as meaningless.
+    /// <para>
+    /// "Anyway" is the share of time that falls within a window of an occurrence of the action. A burst is one window and not
+    /// many, constant activity covers everything, and an action seen now and then covers a window each time. So an engine
+    /// that has watched for a few windows cannot yet show much lift for anything: it needs enough time to see what is
+    /// ordinary, which is hours at the default window, and a short window shortens that.
+    /// </para>
     /// </remarks>
     public double MinimumLift { get; set; } = 1.5;
 

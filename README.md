@@ -31,6 +31,7 @@ The brief has three pillars. Parts 1 and 2 deliver the first and lay the ground 
 - [History, timelines, alerts and search](#history-timelines-alerts-and-search)
 - [Real-time push](#real-time-push)
 - [The Command Stream page](#the-command-stream-page)
+- [Pattern analysis and investigations](#pattern-analysis-and-investigations)
 - [Feature walkthrough](#feature-walkthrough)
 - [Where the assessed concepts live](#where-the-assessed-concepts-live)
 - [Configuration reference](#configuration-reference)
@@ -758,7 +759,8 @@ rebuilt from scratch and a handful of random searches against a brute-force scan
 ### What the operator did
 
 Every search is recorded as a history event: the filters, the result count and the **alerts active at that
-moment**. Command entries carry the same snapshot. The pattern analysis later in the project learns from what
+moment**. Command entries carry the same snapshot, and so does opening a device in the Command Stream (`POST
+/api/activity/selection`). The [pattern analysis](#pattern-analysis-and-investigations) learns from what
 operators do in what situations, and neither the search nor the alerts that were active can be reconstructed
 afterwards, so recording starts now. `GET /api/activity?from=&to=` returns searches and the commands an operator
 caused (issued, cancelled, undone) in time order. The server records the searches it receives, and assumes the
@@ -1160,6 +1162,14 @@ Restart the API, or the Docker stack, and the attachments are still there.
 | Rules shared by server and client | [`CommandRules.cs`](src/SmartX.Shared/Commands/CommandRules.cs) | `WhyNotUndoable` and `StatusOf`: the server refuses with these words and the client explains with the same ones |
 | Redraw only on change | [`LiveStreamPanel.razor`](src/SmartX.Client/Components/CommandStream/LiveStreamPanel.razor) | `ShouldRender` returns a dirty flag that only the stream, the search and the catalogue set |
 | Component tests | [`CommandStreamComponentTests.cs`](tests/SmartX.Tests/CommandStreamComponentTests.cs), [`StreamComponentKit.cs`](tests/SmartX.Tests/StreamComponentKit.cs) | bUnit against the real feeds on a fake hub, a fake API and a fake clock |
+| Queue for a sliding window | [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `Queue<TriggerInstance> _window`: triggers in time order, expired from the front, so an action is paired with the triggers in the window and nothing is searched; the same FIFO structure as the ingestion lane, doing a different job |
+| HashSet to count once | [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `HashSet<(long Instance, ActionKey Action)> _paired`: `Add` returning false is why four opens of one pump after one moisture drop are one response |
+| Dictionaries of dictionaries | [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `Dictionary<TriggerKey, Dictionary<ActionKey, DecayedCount>>`: how often each action followed each trigger, with support, confidence and lift worked out from it |
+| Value-type keys, no boxing | [`PatternKeys.cs`](src/SmartX.Api/Patterns/PatternKeys.cs) | `TriggerKey` and `ActionKey` as `readonly record struct`s, so a lookup on every event allocates nothing |
+| Lazy decay in a struct | [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `DecayedCount`: a count that remembers when it last changed and is faded only when read, changed in place through `CollectionsMarshal` |
+| Hysteresis | [`ReadingTriggerDetector.cs`](src/SmartX.Api/Patterns/ReadingTriggerDetector.cs) | a watch level fires once and is re-armed only past a margin, so a hovering reading is one trigger |
+| Recursion over the zone tree, reused | [`DeviceDirectory.cs`](src/SmartX.Api/Patterns/DeviceDirectory.cs) | walks up `ParentId` to the depth the general level groups at, so "the same zone" is the Part 1 hierarchy |
+| The escalation seam, used | [`InvestigationService.cs`](src/SmartX.Api/Patterns/InvestigationService.cs) | subscribes to `FaultEntered` and `FaultCleared`; a verdict adjusts a node's sensitivity through `ITrustEngine.AdjustSensitivity`, bounded by a floor |
 | Dictionary and HashSet | [`TrustEngine.cs`](src/SmartX.Api/Trust/TrustEngine.cs) | `_nodes`, keyed by MAC for O(1) lookup per packet, and `_degraded`, where each failing node appears once |
 | The ingestion pipeline, stage by stage | [`TelemetryEndpoints.cs`](src/SmartX.Api/Endpoints/TelemetryEndpoints.cs) | `IngestBatchAsync`, with each stage numbered in comments, and `TryCreatePacket` |
 | Polymorphic JSON | [`ITelemetryPacket.cs`](src/SmartX.Shared/Packets/ITelemetryPacket.cs) | `[JsonDerivedType]` over the packet types |
@@ -1218,6 +1228,31 @@ setting.
 | --- | --- | --- |
 | `Alerts:DisconnectedAfterIntervals` | `3` | How many of a node's own heartbeat intervals it may stay silent before it is called disconnected. |
 | `Alerts:ClearAfterValidReadings` | `3` | How many valid readings in a row end an out-of-range or wrong-type alert. |
+
+### API: `Patterns`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Patterns:Window` | `00:10:00` | How soon after a trigger an action counts as following it. Also the bound on what an action costs. |
+| `Patterns:MinimumSupport` | `3` | How many times, weighted and faded, an action must have followed a trigger before it counts as a pattern. |
+| `Patterns:MinimumLift` | `1.5` | How many times more often than chance it must follow. At 1 the trigger tells you nothing. |
+| `Patterns:HalfLife` | `7.00:00:00` | How long until a pairing counts half as much. |
+| `Patterns:SearchWeight` | `0.4` | What a search that narrowed to a few devices counts for, against 1 for opening a device or sending a command. |
+| `Patterns:MaxSearchResultsForAction` | `3` | The most devices a search can return and still be read as being about them. |
+| `Patterns:MaxTriggersInWindow` | `5000` | The most triggers held in the window. The oldest are dropped past it. |
+| `Patterns:MaxLearnedPairs` | `250000` | The most (trigger, action) pairs remembered. Past it, the most faded are forgotten first. |
+| `Patterns:WatchLowFraction` / `WatchHighFraction` | `0.20` / `0.80` | Where a sensor's low and high watch levels sit, as a fraction of its registered range. |
+| `Patterns:RearmMargin` | `0.05` | How far back past a level a reading must come before it can fire again (hysteresis). |
+| `Patterns:GeneralZoneDepth` | `1` | The depth in the zone tree that devices are grouped under at the general level. |
+
+### API: `Investigations`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Investigations:MaxRetained` | `200` | How many are kept. The oldest closed ones go first; an open one is never dropped to make room. |
+| `Investigations:MaxReadings` | `60` | The most readings kept in one, the latest in its window. |
+| `Investigations:DismissFactor` | `0.85` | What a node's weight for a failure is multiplied by each time a fault caused by it is dismissed. |
+| `Investigations:SensitivityFloor` | `0.5` | The lowest the scale can reach. Detection can be dulled and never switched off. |
 
 ### API: `Realtime`
 
@@ -1332,6 +1367,8 @@ These go in `.env`:
 | `SMARTX_RATE` | `1` | Becomes `Simulator__ReportingRateMultiplier`: how many times faster than normal the fleet reports. |
 | `SMARTX_TICK` | `00:00:00.500` | Becomes `Simulator__TickInterval`: how often the simulator wakes to send what is due. Lower it as the rate rises. |
 | `SMARTX_PROCESS_DELAY` | `00:00:00` | Becomes `Ingestion__SimulatedGatewayCost`: the simulated per-reading cost of a constrained gateway; see [the Command Stream page](#seeing-a-critical-reading-overtake-the-standard-queue). |
+| `SMARTX_PATTERN_WINDOW` | `00:10:00` | Becomes `Patterns__Window`. A short one, such as `00:01:00`, lets the pattern example be shown in minutes. |
+| `SMARTX_PATTERN_HALFLIFE` | `7.00:00:00` | Becomes `Patterns__HalfLife`. |
 | `SMARTX_CLIENT_PORT` | `8080` | Host port for the client. Open this one in the browser. |
 | `SMARTX_API_PORT` | `5266` | Host port for the API, for `curl` and the scenario endpoint. |
 
@@ -1438,6 +1475,12 @@ This demonstrates the *encryption mechanism*, not production key management.
 | `GET` | `/api/alerts/stats` | Raised, suppressed and cleared totals, and how many are active and acknowledged |
 | `GET` | `/api/devices/search` | Devices matching every filter given: `?q=`, `?category=`, `?actuatorKind=`, `?zone=` (includes every sub-zone), `?band=`, `?alert=`. `404` for an unknown zone, `400` for an unknown value |
 | `GET` | `/api/activity` | What operators did, searches and commands, with the alerts active at the time. `?from=`, `?to=` |
+| `POST` | `/api/activity/selection` | `{ "macAddress" }`: the operator opened a device. `204`, or `404` for a device that is not registered |
+| `GET` | `/api/patterns` | Learned associations, best first, with support, confidence, lift and the level. `?trigger=`, `?mac=`, `?level=Specific|General`, `?includeWeak=true`, `?limit=`. The thresholds in force come back with them |
+| `GET` | `/api/patterns/for/{mac}` | What tends to follow each kind of trigger seen on this device, from the device's own history where it has enough and from its kind in its zone where not, saying which. `404` |
+| `GET` | `/api/investigations` | Investigations, newest first. `?status=Open|Resolved`, `?limit=` |
+| `GET` | `/api/investigations/{id}` | One, with its window, alerts, trust samples, readings, precedent and sensitivity. `404` |
+| `POST` | `/api/investigations/{id}/verdict` | `{ "verdict": "Confirm|Dismiss|Relabel", "cause"? }`. A relabel needs a cause. A later verdict replaces an earlier one and undoes what it changed. `200`, `400`, `404` |
 | `GET` | `/api/realtime/trust` | Every node's trust and the mesh summary, with the sequence number they are as of: the snapshot a trust feed starts from |
 | `GET` | `/api/realtime/alerts` | Active alerts, totals and recent critical readings, as of a sequence number |
 | `GET` | `/api/realtime/commands` | Recent commands, as of a sequence number |

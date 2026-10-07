@@ -35,11 +35,12 @@ public class PatternEngineTests
         Assert.True(pattern.Qualified);
 
         // Five pairings (a hair under, from a week-long half-life over two hours), every trigger answered, and the action
-        // happening far more after the trigger than it does in a window picked at random.
+        // happening far more after the trigger than it does in a window picked at random: five windows of ten minutes cover
+        // about 41% of the two hours the engine has watched, and the trigger makes the action certain.
         Assert.InRange(pattern.Support, 4.8, 5.0);
         Assert.InRange(pattern.Confidence, 0.99, 1.0);
-        Assert.InRange(pattern.Baseline, 0.30, 0.38);
-        Assert.InRange(pattern.Lift, 2.5, 3.5);
+        Assert.InRange(pattern.Baseline, 0.38, 0.45);
+        Assert.InRange(pattern.Lift, 2.2, 2.7);
     }
 
     [Fact]
@@ -122,11 +123,61 @@ public class PatternEngineTests
         Assert.False(busy.Qualified);
 
         Assert.True(pump.Qualified);
-        Assert.True(pump.Lift > 3);
+        Assert.True(pump.Lift > 2.5);
 
         // And only the pump is offered by default.
         var offered = engine.Associations(new PatternQuery(Level: PatternLevel.Specific), now);
         Assert.Equal(PumpA, Assert.Single(offered).Action.Target);
+    }
+
+    [Fact]
+    public void A_burst_of_opens_covers_about_one_window_and_not_one_per_open()
+    {
+        PatternEngine Run(int opens)
+        {
+            var engine = Engine();
+            engine.RecordTrigger(Low(MoistB, T0));
+
+            for (var index = 0; index < opens; index++)
+            {
+                engine.RecordAction(View(PumpA, T0 + TimeSpan.FromSeconds(30 + 3 * index)));
+            }
+
+            // The same two hours watched, whatever happened in them.
+            engine.RecordTrigger(Low(MoistD, T0 + TimeSpan.FromHours(2)));
+
+            return engine;
+        }
+
+        var now = T0 + TimeSpan.FromHours(2);
+
+        double Baseline(PatternEngine engine) => All(engine, now, new PatternQuery(Level: PatternLevel.Specific))
+            .Single(item => item.Action.Target == PumpA).Baseline;
+
+        var once = Baseline(Run(1));
+        var tenTimes = Baseline(Run(10));
+
+        // Ten opens in half a minute cover a window and a little more, not ten windows.
+        Assert.InRange(once, 0.07, 0.09);
+        Assert.InRange(tenTimes / once, 1.0, 1.1);
+    }
+
+    [Fact]
+    public void An_action_repeated_at_gaps_shorter_than_the_window_covers_all_of_the_time_between()
+    {
+        var engine = Engine();
+        engine.RecordTrigger(Low(MoistB, T0));
+
+        // Every two minutes for an hour, against a window of ten: each open covers only the two minutes since the last.
+        for (var minute = 1; minute <= 60; minute += 2)
+        {
+            engine.RecordAction(View(PumpA, T0 + TimeSpan.FromMinutes(minute)));
+        }
+
+        var baseline = All(engine, T0 + TimeSpan.FromMinutes(61), new PatternQuery(Level: PatternLevel.Specific))
+            .Single(item => item.Action.Target == PumpA).Baseline;
+
+        Assert.InRange(baseline, 0.95, 1.0);
     }
 
     [Fact]

@@ -58,6 +58,9 @@ internal struct DecayedCount
     public double Value;
     public DateTimeOffset At;
 
+    /// <summary>When the thing counted last happened. Only used by coverage, which needs the gap since the last time.</summary>
+    public DateTimeOffset Last;
+
     /// <summary>What the count is worth at a moment, after fading.</summary>
     public readonly double ValueAt(DateTimeOffset now, TimeSpan halfLife) =>
         Value <= 0 ? 0 : Value * TrustFormula.DecayWeight(now - At, halfLife);
@@ -67,6 +70,18 @@ internal struct DecayedCount
     {
         Value = ValueAt(now, halfLife) + amount;
         At = now;
+    }
+
+    /// <summary>
+    /// Adds the stretch of time an occurrence at this moment newly accounts for: the window, or the gap since the last
+    /// occurrence if that is shorter. The first occurrence accounts for the whole window.
+    /// </summary>
+    public void AddCoverage(TimeSpan window, DateTimeOffset now, TimeSpan halfLife)
+    {
+        var gap = now - Last;
+
+        Add((gap < window ? gap : window).TotalSeconds, now, halfLife);
+        Last = now;
     }
 }
 
@@ -88,9 +103,10 @@ internal struct DecayedCount
 /// <para>
 /// <b>Lift is what separates a habit from a coincidence.</b> If an operator has Pump A open all day, it follows nearly every
 /// trigger, and confidence alone would recommend it everywhere. Lift divides confidence by the chance of the action in any
-/// window of the same length, estimated from how often it happens at all, and only a lift above one means the trigger
-/// made the difference. The baseline is <c>1 - exp(-rate x window)</c>, where the rate is the action's faded count divided
-/// by the faded length of time the engine has been watching, so the counts and the time share one clock and one decay.
+/// window of the same length, and only a lift above one means the trigger made the difference. That chance is the share of
+/// time that falls within a window of an occurrence of the action (see <see cref="BaselineOf"/>), counted so that a burst is
+/// not many occurrences and constant activity covers everything, over the faded length of time the engine has been watching,
+/// so the two share one clock and one decay.
 /// </para>
 /// <para>
 /// <b>Two levels.</b> Every event updates a specific key (this device) and a general one (this kind of device, in this zone).
@@ -125,8 +141,8 @@ internal sealed class PatternEngine : IPatternEngine
     // Pairings already counted: (trigger instance, action). A set, so that counting the same one twice is impossible.
     private readonly HashSet<(long Instance, ActionKey Action)> _paired = [];
 
-    // How often each action followed each trigger, how often each trigger happened, and how often each action happened at
-    // all. Doubles, because they fade.
+    // How often each action followed each trigger, how often each trigger happened, and how much time each action covers
+    // with its windows (the baseline for lift). Doubles, because they fade.
     private readonly Dictionary<TriggerKey, Dictionary<ActionKey, DecayedCount>> _followed = [];
     private readonly Dictionary<TriggerKey, DecayedCount> _triggers = [];
     private readonly Dictionary<ActionKey, DecayedCount> _actions = [];
@@ -215,13 +231,13 @@ internal sealed class PatternEngine : IPatternEngine
             var specific = new ActionKey(PatternLevel.Specific, action.Kind, action.MacAddress, action.Command);
             ActionKey? general = null;
 
-            Count(_actions, specific, weight, now);
+            Cover(_actions, specific, now);
             _targetLabels.TryAdd(specific.Target, known ? profile.Room : action.MacAddress);
 
             if (known)
             {
                 general = new ActionKey(PatternLevel.General, action.Kind, profile.Class, action.Command);
-                Count(_actions, general.Value, weight, now);
+                Cover(_actions, general.Value, now);
                 _targetLabels.TryAdd(profile.Class, profile.ClassLabel);
             }
 
@@ -278,6 +294,14 @@ internal sealed class PatternEngine : IPatternEngine
         count.Add(amount, now, _options.HalfLife);
 
         return !existed;
+    }
+
+    /// <summary>Records that an action happened, as the stretch of time it newly puts a window around. See <see cref="BaselineOf"/>.</summary>
+    private void Cover(Dictionary<ActionKey, DecayedCount> coverage, ActionKey key, DateTimeOffset now)
+    {
+        ref var count = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(coverage, key, out _);
+
+        count.AddCoverage(_options.Window, now, _options.HalfLife);
     }
 
     /// <summary>Forgets the most faded pairs until the table fits its bound, if enough of them have faded. Caller holds the lock.</summary>
@@ -528,24 +552,28 @@ internal sealed class PatternEngine : IPatternEngine
     /// "anyway".
     /// </summary>
     /// <remarks>
-    /// The rate is the action's faded count over the faded length of time the engine has been watching. Both fade with the
-    /// same half-life, so they stay comparable: a faded count is the integral of the rate against the fading weight, and so
-    /// is the faded watching time, and their ratio is the rate. The watching time is never taken as shorter than one window,
-    /// so an engine that has only just started does not divide a few events by a few seconds and conclude they are constant.
-    /// A Poisson chance of at least one event in the window then follows from the rate.
+    /// The chance that a window starting at a random moment contains the action is the share of time that is within a window
+    /// of an occurrence. An action at time t is inside the window of any trigger in the stretch from t minus the window to
+    /// t, so the time covered is the union of those stretches. Counted as the occurrences arrive in order, each adds the
+    /// window, or the gap since the last one if that is shorter, because the rest was already covered. So a device opened
+    /// three times in ten seconds covers one window plus a few seconds, not three windows; a device opened every two minutes
+    /// covers all of the time; and one opened now and then covers a window each time.
+    /// <para>
+    /// The covered time and the watching time both fade with the same half-life, so they stay comparable. The watching time is
+    /// never taken as shorter than one window, so an engine that has only just started does not conclude that a few
+    /// events are everything that ever happens.
+    /// </para>
     /// </remarks>
     private double BaselineOf(ActionKey action, DateTimeOffset now)
     {
-        if (!_actions.TryGetValue(action, out var counted) || _watchingSince is not { } since)
+        if (!_actions.TryGetValue(action, out var covered) || _watchingSince is not { } since)
         {
             return 0;
         }
 
-        var count = counted.ValueAt(now, _options.HalfLife);
         var seconds = Math.Max(EffectiveSpan(now - since).TotalSeconds, _options.Window.TotalSeconds);
-        var expected = count / seconds * _options.Window.TotalSeconds;
 
-        return 1 - Math.Exp(-expected);
+        return Math.Min(1, covered.ValueAt(now, _options.HalfLife) / seconds);
     }
 
     /// <summary>The length of an elapsed period as the fading counts see it: each moment weighted by how faded it is now.</summary>
@@ -559,6 +587,15 @@ internal sealed class PatternEngine : IPatternEngine
 
     private static int BestFirst(PatternAssociation left, PatternAssociation right)
     {
+        // Ones that count come before ones that do not. Lift alone cannot put them in that order: it is a ratio of two counts
+        // that fade together, so a habit that has all but vanished keeps its lift while its support goes to nothing.
+        var byQualified = right.Qualified.CompareTo(left.Qualified);
+
+        if (byQualified != 0)
+        {
+            return byQualified;
+        }
+
         var byLift = right.Lift.CompareTo(left.Lift);
 
         if (byLift != 0)
