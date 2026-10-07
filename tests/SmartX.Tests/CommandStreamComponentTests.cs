@@ -166,6 +166,7 @@ public class LiveStreamComponentTests() : StreamComponentTests(streamCapacity: 2
     {
         await StartedAsync();
         var cut = Render<LiveStreamPanel>();
+        await SettledAsync(cut);
 
         cut.Find("button[aria-pressed]").Click();
         Rig.Hub.Deliver(RealtimeMethods.ReadingsArrived, StreamKit.Batch(1, StreamKit.Reading(StreamKit.Meter, 1, 1), StreamKit.Reading(StreamKit.Meter, 2, 2)));
@@ -230,7 +231,8 @@ public class LiveStreamComponentTests() : StreamComponentTests(streamCapacity: 2
         Assert.Contains("250", pinned.TextContent, StringComparison.Ordinal);
         Assert.Contains("critical lane", pinned.TextContent, StringComparison.Ordinal);
 
-        pinned.QuerySelector("button")!.Click();
+        await SettledAsync(cut);
+        cut.Find("ul[aria-label='Critical readings'] li button").Click();
 
         cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("ul[aria-label='Critical readings'] li")));
         Assert.Empty(Stream.Pinned);
@@ -329,14 +331,6 @@ public class CommandControlsComponentTests : StreamComponentTests
     private static Command Now(CommandState state, string? failure = null) =>
         StreamKit.Cmd(StreamKit.Valve, ActuatorKind.Valve, CommandAction.ValveClose, state, Id, failure: failure);
 
-    // Started and loaded before the component is drawn: a snapshot arriving later would redraw it between a find and a click.
-    private async Task FeedLoadedAsync()
-    {
-        await Rig.Commands.StartAsync();
-        await ClientRig.UntilAsync(() => Rig.Commands.Current.IsLoaded, "the commands snapshot");
-        await ListeningAsync(Rig, RealtimeMethods.CommandChanged);
-    }
-
     private static string Chip(string label) => $"[aria-label='Command {label}']";
 
     [Fact]
@@ -362,8 +356,9 @@ public class CommandControlsComponentTests : StreamComponentTests
     public async Task The_state_chip_follows_the_command_from_pending_through_delivered_to_acknowledged()
     {
         Api.Issue = (_, _, _) => Now(CommandState.Pending);
-        await FeedLoadedAsync();
+        await PreloadFeedsAsync();
         var cut = RenderFor(ActuatorKind.Valve);
+        await SettledAsync(cut);
 
         cut.FindAll(".smartx-commands__buttons button").Single(button => button.TextContent.Contains("Close valve", StringComparison.Ordinal)).Click();
 
@@ -387,8 +382,9 @@ public class CommandControlsComponentTests : StreamComponentTests
     public async Task A_command_that_times_out_says_so_in_words_and_gives_the_reason()
     {
         Api.Issue = (_, _, _) => Now(CommandState.Pending);
-        await FeedLoadedAsync();
+        await PreloadFeedsAsync();
         var cut = RenderFor(ActuatorKind.Valve);
+        await SettledAsync(cut);
 
         cut.FindAll(".smartx-commands__buttons button")[0].Click();
         cut.WaitForElement(Chip("Pending"));
@@ -441,7 +437,7 @@ public class UndoPanelComponentTests : StreamComponentTests
     }
 
     [Fact]
-    public void A_refusal_is_shown_exactly_as_the_api_worded_it()
+    public async Task A_refusal_is_shown_exactly_as_the_api_worded_it()
     {
         var timedOut = StreamKit.Cmd(StreamKit.Valve, ActuatorKind.Valve, CommandAction.ValveClose, CommandState.TimedOut);
         const string reason = "The command timed out, so the gateway does not know whether the device applied it.";
@@ -452,8 +448,10 @@ public class UndoPanelComponentTests : StreamComponentTests
             null,
             [new UndoItem(timedOut.Id, StreamKit.Valve, UndoItemResult.Refused, null, reason)]);
 
+        await PreloadFeedsAsync();
         var cut = Open(this);
         cut.WaitForAssertion(() => Assert.False(cut.Find("button").HasAttribute("disabled")));
+        await SettledAsync(cut);
 
         cut.Find("button").Click();
 
@@ -466,7 +464,7 @@ public class UndoPanelComponentTests : StreamComponentTests
     }
 
     [Fact]
-    public void A_partial_result_names_what_was_restored_and_what_was_refused_and_why()
+    public async Task A_partial_result_names_what_was_restored_and_what_was_refused_and_why()
     {
         var done = StreamKit.Cmd(StreamKit.Valve, ActuatorKind.Valve, CommandAction.ValveClose, CommandState.Acknowledged);
         var silent = StreamKit.Cmd("B8:27:EB:10:00:2B", ActuatorKind.Valve, CommandAction.ValveClose, CommandState.TimedOut);
@@ -480,8 +478,10 @@ public class UndoPanelComponentTests : StreamComponentTests
                 new UndoItem(silent.Id, "B8:27:EB:10:00:2B", UndoItemResult.Refused, null, "It timed out, so its real state is unknown."),
             ]);
 
+        await PreloadFeedsAsync();
         var cut = Open(this);
         cut.WaitForAssertion(() => Assert.False(cut.Find("button").HasAttribute("disabled")));
+        await SettledAsync(cut);
 
         cut.Find("button").Click();
 
@@ -552,12 +552,14 @@ public class ZoneActionComponentTests : StreamComponentTests
 
     private async Task<IRenderedComponent<ZoneActionPanel>> ChooseZoneAsync()
     {
+        await PreloadFeedsAsync();
         RenderPopoverHost();
         var cut = Render<ZoneActionPanel>();
 
         // Choosing from the picker is the picker calling back with the zone's id; the select's popup is MudBlazor's own.
         var picker = cut.FindComponent<ZonePicker>();
         await cut.InvokeAsync(() => picker.Instance.ValueChanged.InvokeAsync("zone-3"));
+        await SettledAsync(cut);
 
         return cut;
     }
@@ -834,9 +836,12 @@ public class DeviceDetailComponentTests : StreamComponentTests
     public async Task Choosing_another_range_asks_for_that_range_and_is_remembered()
     {
         Api.Timeline = _ => StreamKit.Spike();
+        await PreloadFeedsAsync();
         RenderPopoverHost();
         var cut = Render<DeviceDetail>(parameters => parameters.Add(detail => detail.Mac, StreamKit.Meter));
         cut.WaitForElement("g.smartx-chart__marker");
+        await ClientRig.UntilAsync(() => Rig.Snapshots.DeviceCalls > 0, "the device snapshot");
+        await SettledAsync(cut);
         var before = Api.TimelineCalls;
 
         cut.FindAll("[aria-label='Timeline range'] button").Single(button => button.TextContent.Contains("6 h", StringComparison.Ordinal)).Click();

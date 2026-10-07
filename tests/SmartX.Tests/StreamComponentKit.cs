@@ -264,6 +264,58 @@ public abstract class StreamComponentTests : IAsyncLifetime
     protected void RenderPopoverHost() => Render<MudBlazor.MudPopoverProvider>();
 
 
+    /// <summary>
+    /// Starts the feeds a component will start and waits for their snapshots, before the component is drawn.
+    /// </summary>
+    /// <remarks>
+    /// A snapshot arriving after a component is drawn redraws it, and a test that has just found a button then clicks a handler
+    /// that no longer exists. That is a race in the test and not in the component, so the test takes the snapshots out of the
+    /// way first. The component's own start is then a no-op, because starts are reference counted.
+    /// </remarks>
+    protected async Task PreloadFeedsAsync()
+    {
+        await Rig.Trust.StartAsync();
+        await Rig.Alerts.StartAsync();
+        await Rig.Commands.StartAsync();
+
+        await ClientRig.UntilAsync(
+            () => Rig.Trust.Current.IsLoaded && Rig.Alerts.Current.IsLoaded && Rig.Commands.Current.IsLoaded,
+            "the feeds' snapshots");
+        await ListeningAsync(Rig, RealtimeMethods.CommandChanged);
+    }
+
+    /// <summary>
+    /// Waits until a component has stopped redrawing for a moment, so what a test finds is what is on the screen.
+    /// </summary>
+    /// <remarks>
+    /// Used before the first interaction, to close the window between finding an element and clicking it. It only ever
+    /// delays a test; no assertion depends on how long it waited.
+    /// </remarks>
+    protected static async Task SettledAsync<TComponent>(IRenderedComponent<TComponent> cut)
+        where TComponent : Microsoft.AspNetCore.Components.IComponent
+    {
+        var last = -1;
+        var stableSince = DateTime.UtcNow;
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            var now = cut.RenderCount;
+
+            if (now != last)
+            {
+                last = now;
+                stableSince = DateTime.UtcNow;
+            }
+            else if (DateTime.UtcNow - stableSince > TimeSpan.FromMilliseconds(100))
+            {
+                return;
+            }
+
+            await Task.Delay(10);
+        }
+    }
+
     /// <summary>Waits for the hub to have handlers for a method, which is when a feed has started listening.</summary>
     protected static Task ListeningAsync(ClientRig rig, string method) =>
         ClientRig.UntilAsync(() => rig.Hub.HandlerCount(method) > 0, $"a listener for {method}");
