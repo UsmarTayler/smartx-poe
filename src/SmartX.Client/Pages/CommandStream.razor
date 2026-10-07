@@ -1,0 +1,30 @@
+@page "/command-stream"
+@implements IAsyncDisposable
+@inject SensorService Catalog
+
+<PageTitle>Command Stream · Smart-X</PageTitle>
+
+<PageHeader Title="Real-Time Command Stream"
+            Subtitle="Watch readings arrive, find a device, send it a command, and undo what you sent." />
+
+@* A container query and not a media query decides the columns. The page sits beside a drawer on wide screens, so the
+   room the dashboard has is not the width of the window, and a media query would call a 1280 px window "desktop" while
+   the content is only about a thousand pixels wide. The regions are laid out by the width they actually get: one column
+   when stacked (alerts, pipeline, device search, stream, then undo and activity), two from about 560 px, three from about
+   900 px. *@
+<div class="smartx-cs-host">
+    <div class="smartx-cs">
+        <div class="smartx-cs__area smartx-cs__area--pipeline"><PipelineStrip /></div>
+    </div>
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        // The catalogue of sensors and zones is what the regions describe devices and zones from. It is refreshed on
+        // every visit, as the other pages do: what is cached renders at once, and anything registered since is added.
+        await Catalog.LoadAsync();
+    }
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}

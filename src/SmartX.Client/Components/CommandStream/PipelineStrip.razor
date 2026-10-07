@@ -1,0 +1,211 @@
+@implements IAsyncDisposable
+@inject IPipelineFeed Pipeline
+@inject IAlertFeed Alerts
+@inject IOperatorApi Api
+@inject SensorService Catalog
+@inject TimeProvider Time
+
+@* The ingestion queues, made visible. Two lanes side by side, from the pipeline statistics the API pushes once a second:
+   the standard FIFO queue and the critical priority lane. The point of the strip is the comparison. A critical reading
+   overtakes a backlog, and the wait figures are the real ones from the pipeline, so the difference is a number and not a
+   claim. Icon, text and colour travel together; the critical lane's accent is an outline, never the only signal. *@
+<MudPaper Outlined="true" Class="smartx-pipeline pa-3" role="region" aria-label="Ingestion pipeline">
+    <div class="smartx-pipeline__lanes">
+        @foreach (var lane in _lanes)
+        {
+            var critical = lane.Lane == "critical";
+            var flash = critical && Flashing;
+
+            <section class="smartx-lane @(critical ? "smartx-lane--critical" : "") @(flash ? "smartx-lane--flash" : "")"
+                     aria-label="@(critical ? "Critical lane" : "Standard queue")">
+                <header class="smartx-lane__title">
+                    <MudIcon Icon="@(critical ? Icons.Material.Filled.PriorityHigh : Icons.Material.Filled.Queue)" Size="Size.Small" aria-hidden="true" />
+                    <MudText Typo="Typo.subtitle2" HtmlTag="h2">@(critical ? "Critical lane" : "Standard queue")</MudText>
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">@(critical ? "priority queue, taken first" : "FIFO, in arrival order")</MudText>
+                </header>
+                <dl class="smartx-lane__figures">
+                    <div><dt>Depth</dt><dd>@lane.Depth.ToString("N0")@(critical ? "" : $" / {Capacity:N0}")</dd></div>
+                    <div><dt>Processed</dt><dd>@Rate(lane.ProcessedPerSecond)</dd></div>
+                    <div><dt>Average wait</dt><dd>@Wait(lane.AverageWaitMilliseconds)</dd></div>
+                    <div><dt>Longest wait</dt><dd>@Wait(lane.MaximumWaitMilliseconds)</dd></div>
+                </dl>
+            </section>
+        }
+
+        @if (_lanes.Count == 0)
+        {
+            <MudText Typo="Typo.body2" Class="mud-text-secondary" role="status">Waiting for the first pipeline sample&hellip;</MudText>
+        }
+    </div>
+
+    <div class="smartx-pipeline__footer">
+        <span class="smartx-status" style="--smartx-status: @(Rejected > 0 ? "#d03b3b" : "#6b6a66")" title="Readings refused with 503 because a lane was full">
+            <MudIcon Icon="@(Rejected > 0 ? Icons.Material.Filled.Block : Icons.Material.Filled.CheckCircleOutline)" Size="Size.Small" aria-hidden="true" />
+            <span>@Rejected.ToString("N0") rejected (503)</span>
+        </span>
+
+        <MudText Typo="Typo.body2" Class="smartx-pipeline__comparison" role="status">@Comparison</MudText>
+    </div>
+
+    <div class="smartx-pipeline__simulate">
+        <MudSelect T="string" Label="Simulate on" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                   @bind-Value="_device" AnchorOrigin="Origin.BottomCenter" Class="smartx-pipeline__device"
+                   ToStringFunc="Describe" HelperText="Sets the device's scenario through the shadow endpoint">
+            @foreach (var sensor in Candidates)
+            {
+                <MudSelectItem T="string" Value="sensor.MacAddress">@Describe(sensor.MacAddress)</MudSelectItem>
+            }
+        </MudSelect>
+        <MudButton Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Bolt"
+                   Disabled="@(string.IsNullOrEmpty(_device) || _busy)" OnClick="() => SimulateAsync(SimulationScenario.Critical)">
+            Simulate critical event
+        </MudButton>
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Undo"
+                   Disabled="@(string.IsNullOrEmpty(_device) || _busy)" OnClick="() => SimulateAsync(SimulationScenario.Nominal)">
+            Back to normal
+        </MudButton>
+    </div>
+
+    @if (_message is not null)
+    {
+        <MudText Typo="Typo.caption" Class="@($"mt-1 {(_failed ? "mud-error-text" : "mud-text-secondary")}")" role="status">@_message</MudText>
+    }
+</MudPaper>
+
+@code {
+    private readonly PipelineRates _rates = new();
+    private IReadOnlyList<LaneView> _lanes = [];
+    private string? _device;
+    private string? _message;
+    private bool _failed;
+    private bool _busy;
+    private DateTimeOffset _flashUntil;
+    private long _lastPriority;
+
+    private static readonly TimeSpan FlashFor = TimeSpan.FromSeconds(5);
+
+    private long Capacity => Pipeline.Current.Stats?.Capacity ?? 0;
+
+    private long Rejected => Pipeline.Current.Stats?.RejectedWhenFull ?? 0;
+
+    private bool Flashing => Time.GetUtcNow() < _flashUntil;
+
+    private IEnumerable<SensorRegistration> Candidates =>
+        Catalog.Sensors.Where(sensor => sensor.Category != SensorCategory.Actuator);
+
+    private string Comparison
+    {
+        get
+        {
+            var advantage = PipelineRates.Advantage(_lanes);
+            var last = Alerts.Current.RecentPriority.LastOrDefault();
+
+            if (advantage is null)
+            {
+                return last is null
+                    ? "No critical reading yet. Simulate one to watch it overtake the standard queue."
+                    : $"Last critical: {Describe(last.MacAddress)}, {last.Reason}, {last.Value:0.##} {last.Unit}. It took the critical lane.";
+            }
+
+            var critical = _lanes.First(lane => lane.Lane == "critical");
+            var standard = _lanes.First(lane => lane.Lane == "standard");
+
+            var prefix = last is null
+                ? string.Empty
+                : $"Last critical: {Describe(last.MacAddress)}, {last.Reason}, {last.Value:0.##} {last.Unit}, took the critical lane. ";
+
+            return $"{prefix}Critical lane average wait {Wait(critical.AverageWaitMilliseconds)}; standard lane average wait {Wait(standard.AverageWaitMilliseconds)}: {advantage.Value:0}× sooner.";
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Pipeline.Updated += OnPipeline;
+        Alerts.Updated += OnAlerts;
+
+        if (Pipeline.Current.Stats is { } known)
+        {
+            _lanes = Sample(known);
+        }
+
+        _lastPriority = Alerts.Current.RecentPriority.LastOrDefault()?.Sequence ?? 0;
+
+        await Pipeline.StartAsync();
+        await Alerts.StartAsync();
+    }
+
+    // Standard first, then critical: the order the strip shows them, whatever order the API lists them in.
+    private IReadOnlyList<LaneView> Sample(PipelineStats stats) =>
+        [.. _rates.Update(stats).OrderBy(lane => lane.Lane == "critical")];
+
+    private void OnPipeline()
+    {
+        if (Pipeline.Current.Stats is { } stats)
+        {
+            _lanes = Sample(stats);
+        }
+
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void OnAlerts()
+    {
+        // A critical reading has arrived: the critical lane lights up for a few seconds, which is what "entering the
+        // lane" looks like. The numbers beside it are the pipeline's own.
+        if (Alerts.Current.RecentPriority.LastOrDefault() is { } last && last.Sequence != _lastPriority)
+        {
+            _lastPriority = last.Sequence;
+            _flashUntil = Time.GetUtcNow() + FlashFor;
+            _ = ClearFlashAsync();
+        }
+
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ClearFlashAsync()
+    {
+        await Task.Delay(FlashFor, Time);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SimulateAsync(SimulationScenario scenario)
+    {
+        if (string.IsNullOrEmpty(_device))
+        {
+            return;
+        }
+
+        _busy = true;
+        _message = null;
+
+        var result = await Api.SetScenarioAsync(_device, scenario);
+
+        _busy = false;
+        _failed = !result.IsSuccess;
+        _message = result.IsSuccess
+            ? scenario == SimulationScenario.Critical
+                ? $"{Describe(_device)} will report critical readings from its next poll, within a few seconds."
+                : $"{Describe(_device)} will go back to normal readings from its next poll."
+            : result.Problem.Message;
+    }
+
+    private string Describe(string? mac)
+    {
+        var sensor = Catalog.Sensors.FirstOrDefault(candidate => string.Equals(candidate.MacAddress, mac, StringComparison.OrdinalIgnoreCase));
+
+        return sensor is null ? mac ?? string.Empty : $"{sensor.Location.Room} ({sensor.MacAddress[^5..]})";
+    }
+
+    private static string Rate(double? perSecond) => perSecond is { } value ? $"{value:0.#}/s" : "—";
+
+    private static string Wait(double milliseconds) => milliseconds < 10 ? $"{milliseconds:0.#} ms" : $"{milliseconds:0} ms";
+
+    public async ValueTask DisposeAsync()
+    {
+        Pipeline.Updated -= OnPipeline;
+        Alerts.Updated -= OnAlerts;
+
+        await Pipeline.StopAsync();
+        await Alerts.StopAsync();
+    }
+}

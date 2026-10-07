@@ -410,3 +410,125 @@ h1:focus {
         margin: 0;
         overflow-wrap: anywhere;
     }
+
+/* ---- Command Stream page ------------------------------------------------------------------------------------- */
+
+/* Columns follow the width the content actually has, not the window. See CommandStream.razor. */
+.smartx-cs-host {
+    container-type: inline-size;
+    container-name: cs;
+}
+
+.smartx-cs {
+    display: grid;
+    gap: 16px;
+    align-items: start;
+    grid-template-columns: minmax(0, 1fr);
+    /* Stacked order: alerts, pipeline, device search, stream, then undo and recent activity. */
+    grid-template-areas:
+        "alerts"
+        "pipeline"
+        "device"
+        "stream"
+        "undo"
+        "activity";
+}
+
+.smartx-cs__area { min-width: 0; }
+.smartx-cs__area--alerts { grid-area: alerts; }
+.smartx-cs__area--pipeline { grid-area: pipeline; }
+.smartx-cs__area--device { grid-area: device; }
+.smartx-cs__area--stream { grid-area: stream; }
+.smartx-cs__area--undo { grid-area: undo; }
+.smartx-cs__area--activity { grid-area: activity; }
+
+@container cs (min-width: 560px) {
+    .smartx-cs {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        grid-template-areas:
+            "pipeline pipeline"
+            "stream device"
+            "alerts undo"
+            "activity activity";
+    }
+}
+
+@container cs (min-width: 900px) {
+    .smartx-cs {
+        grid-template-columns: minmax(0, 1.15fr) minmax(0, 1.15fr) minmax(0, 1fr);
+        grid-template-areas:
+            "pipeline pipeline pipeline"
+            "stream device alerts"
+            "stream device undo"
+            "activity activity activity";
+    }
+}
+
+/* Pipeline strip */
+.smartx-pipeline__lanes {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.smartx-lane {
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 8px;
+    padding: 10px 12px;
+}
+
+.smartx-lane--critical { border-width: 2px; border-color: #d03b3b; }
+
+.smartx-lane--flash { animation: smartx-lane-flash 1.2s ease-out 3; }
+
+@keyframes smartx-lane-flash {
+    0% { box-shadow: 0 0 0 0 rgba(208, 59, 59, 0.55); }
+    100% { box-shadow: 0 0 0 10px rgba(208, 59, 59, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .smartx-lane--flash { animation: none; }
+}
+
+.smartx-lane__title { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+
+.smartx-lane__figures {
+    display: grid;
+    gap: 4px 12px;
+    grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+    margin: 0;
+}
+
+.smartx-lane__figures dt { font-size: 0.72rem; color: var(--mud-palette-text-secondary); }
+.smartx-lane__figures dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.smartx-pipeline__footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+    margin-top: 10px;
+}
+
+.smartx-pipeline__comparison { flex: 1 1 260px; }
+
+.smartx-pipeline__simulate {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.smartx-pipeline__device { min-width: 220px; flex: 1 1 220px; max-width: 360px; }
+
+/* Landing page: the three pillars */
+.smartx-pillars {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    margin-bottom: 16px;
+}
+
+.smartx-pillar { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.smartx-pillar--future { opacity: 0.8; border-style: dashed; }
