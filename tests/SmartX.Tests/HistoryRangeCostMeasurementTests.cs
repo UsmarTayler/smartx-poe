@@ -13,6 +13,10 @@ namespace SmartX.Tests;
 /// entry. A query for an old window stops early and is cheap; a query for the newest window walks everything.
 /// That asymmetry is the stated reason the next part of the project builds a balanced tree, and this test
 /// prints it. It asserts the asymmetry exists, with a wide margin, rather than any absolute speed.
+/// <para>
+/// A benchmark, so it is excluded from the default run. The ratio is a timing, and a timing can fail on a slow or
+/// busy machine for no fault of the code. Run it explicitly; see the README.
+/// </para>
 /// </remarks>
 public class HistoryRangeCostMeasurementTests(ITestOutputHelper output)
 {
@@ -37,6 +41,7 @@ public class HistoryRangeCostMeasurementTests(ITestOutputHelper output)
     }
 
     [Fact]
+    [Trait("Category", "Benchmark")]
     public void A_range_query_costs_what_it_takes_to_reach_the_start_of_the_range()
     {
         var store = new SortedDictionaryHistoryStore();

@@ -116,6 +116,20 @@ dotnet test
 The build should finish with `0 Warning(s)` and `0 Error(s)`, and every test should pass. The suite
 takes a few seconds.
 
+**Benchmarks are left out of that run.** A few tests measure speed and assert a threshold on a wall clock
+(a critical reading overtaking a backlog, a range query on the history store, a search over 20,000 devices).
+A threshold can be missed on a cold or busy machine for no fault of the code, so those tests carry
+`[Trait("Category", "Benchmark")]` and `tests/SmartX.Tests/default.runsettings` excludes them from a bare
+`dotnet test`. The behaviour they measure is still proved in the default run by *order*, which does not depend on
+how fast the machine is (`CriticalLaneOrderTests`). To run the benchmarks on purpose and see their numbers:
+
+```bash
+dotnet test --settings tests/SmartX.Tests/benchmark.runsettings --filter "Category=Benchmark" --logger "console;verbosity=detailed"
+```
+
+Some other tests wait for a real timer or a background service, and those poll for the result against a
+generous deadline instead of asserting how long it took.
+
 ### 3. Set the development encryption key (once per machine)
 
 ```bash
