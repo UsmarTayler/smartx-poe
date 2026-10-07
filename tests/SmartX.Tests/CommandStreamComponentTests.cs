@@ -94,6 +94,43 @@ public class DeviceSearchComponentTests : StreamComponentTests
     }
 
     [Fact]
+    public async Task Opening_a_device_tells_the_gateway_once_and_closing_it_or_coming_back_to_it_does_not()
+    {
+        const string mac = StreamKit.Pump;
+
+        Api.Search = filters => new DeviceSearchResponse(filters, 1, [Hit(mac, "Coolant Pump")]);
+        await PreloadFeedsAsync();
+        RenderPopoverHost();
+
+        var cut = Render<DevicePanel>();
+        var row = cut.WaitForElement(".smartx-device-row");
+        await SettledAsync(cut);
+        row = cut.Find(".smartx-device-row");
+
+        row.Click();
+
+        // The click is the operator choosing to look at it, so the gateway is told, once.
+        await ClientRig.UntilAsync(() => Api.Selections.Count == 1, "the selection to be reported");
+        Assert.Equal(mac, Api.Selections[0]);
+        Assert.Equal(mac, State.StreamDevice);
+
+        // Clicking it again closes it. That is not interest, and is not reported.
+        await SettledAsync(cut);
+        cut.Find(".smartx-device-row").Click();
+        Assert.Null(State.StreamDevice);
+
+        // A device that is already open when the page is drawn is a return and not a click, so nothing is reported.
+        State.SelectStreamDevice(mac);
+        await SettledAsync(cut);
+        await DisposeComponentsAsync();
+        var back = Render<DevicePanel>();
+        await SettledAsync(back);
+        await Task.Delay(100);
+
+        Assert.Single(Api.Selections);
+    }
+
+    [Fact]
     public async Task Leaving_the_page_and_coming_back_restores_the_filters_the_result_and_the_open_device()
     {
         const string mac = StreamKit.Pump;

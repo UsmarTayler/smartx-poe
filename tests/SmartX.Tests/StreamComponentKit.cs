@@ -25,6 +25,7 @@ public sealed class FakeOperatorApi : IOperatorApi
     private readonly ConcurrentQueue<(string Mac, CommandAction Action, double? Level)> _commands = new();
     private readonly ConcurrentQueue<(string Zone, CommandAction Action)> _zonePreviews = new();
     private readonly ConcurrentQueue<(string Zone, CommandAction Action)> _zoneIssues = new();
+    private readonly ConcurrentQueue<string> _selections = new();
     private int _undoCalls;
     private int _timelineCalls;
 
@@ -52,6 +53,8 @@ public sealed class FakeOperatorApi : IOperatorApi
     public IReadOnlyList<(string Zone, CommandAction Action)> ZonePreviews => [.. _zonePreviews];
 
     public IReadOnlyList<(string Zone, CommandAction Action)> ZoneIssues => [.. _zoneIssues];
+
+    public IReadOnlyList<string> Selections => [.. _selections];
 
     public int UndoCalls => Volatile.Read(ref _undoCalls);
 
@@ -115,6 +118,13 @@ public sealed class FakeOperatorApi : IOperatorApi
 
     public Task<ApiResult<IReadOnlyList<ActivityEntry>>> GetActivityAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult(ApiResult<IReadOnlyList<ActivityEntry>>.Success([]));
+
+    public Task<ApiProblem?> RecordSelectionAsync(string macAddress, CancellationToken cancellationToken = default)
+    {
+        _selections.Enqueue(macAddress);
+
+        return Task.FromResult<ApiProblem?>(null);
+    }
 }
 
 /// <summary>A chart width that does not depend on a browser.</summary>

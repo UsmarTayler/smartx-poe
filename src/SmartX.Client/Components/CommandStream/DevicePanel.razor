@@ -4,6 +4,7 @@
 @inject IAlertFeed Alerts
 @inject AppState State
 @inject SensorService Catalog
+@inject IOperatorApi Api
 
 @* The device region: search and filter, the matching devices, the chosen device in detail, and zone-wide actions. The
    chosen device and the filters are held in AppState, so they are still there after visiting another page. *@
@@ -96,7 +97,21 @@
         _ = InvokeAsync(StateHasChanged);
     }
 
-    private void Select(string mac) => State.SelectStreamDevice(State.StreamDevice == mac ? null : mac);
+    private void Select(string mac)
+    {
+        var opening = State.StreamDevice != mac;
+
+        State.SelectStreamDevice(opening ? mac : null);
+
+        // Reported when the operator opens a device, and only then. Closing one is not interest in it, and a device that is
+        // already open when the page is drawn again is not a click. The pattern analysis learns from what operators choose
+        // to look at, and it can only learn from clicks that are told to it. Not awaited: the page must not wait for the
+        // gateway to note a click, and the client never throws for an unreachable API, it answers with a problem.
+        if (opening)
+        {
+            _ = Api.RecordSelectionAsync(mac);
+        }
+    }
 
     /// <summary>The device's band as it is now, from the live feed, falling back to the band at the time of the search.</summary>
     private TrustBand BandOf(DeviceSearchHit hit) =>
