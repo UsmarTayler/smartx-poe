@@ -544,9 +544,9 @@ internal sealed class CommandService(
 
                 case CommandState.Delivered:
                 case CommandState.Acknowledged:
-                    if (!command.PreviousObserved)
+                    if (CommandRules.WhyNotUndoable(command) is { } unobserved)
                     {
-                        return Refused(command, "The state this command replaced was never observed, so there is nothing recorded to return to. Restoring a guess could do harm.");
+                        return Refused(command, unobserved);
                     }
 
                     // A delivered command cannot be recalled from the device. The restore is queued behind it
@@ -564,13 +564,11 @@ internal sealed class CommandService(
                             : "A restore command was issued to return it to its recorded previous state.");
 
                 case CommandState.TimedOut:
-                    return Refused(command, "The command timed out, so the gateway does not know whether the device applied it. The actuator's real state is unknown, and restoring an unknown state could do harm.");
-
                 case CommandState.Failed:
-                    return Refused(command, "The device reported that it could not apply the command, so the state it is in is unknown. Restoring an unknown state could do harm.");
+                    return Refused(command, CommandRules.WhyNotUndoable(command)!);
 
                 default:
-                    return new UndoItem(id, command.MacAddress, UndoItemResult.AlreadyCancelled, null, "It had already been cancelled, so there was nothing to undo.");
+                    return new UndoItem(id, command.MacAddress, UndoItemResult.AlreadyCancelled, null, CommandRules.WhyNotUndoable(command));
             }
         }
 
@@ -631,19 +629,7 @@ internal sealed class CommandService(
     // ---- status and description --------------------------------------------------------------------------
 
     /// <summary>How a group of commands is going, from the states of its members.</summary>
-    public static CompositeStatus StatusOf(IReadOnlyCollection<Command> commands)
-    {
-        if (commands.Any(command => !command.IsFinal))
-        {
-            return CompositeStatus.InProgress;
-        }
-
-        var acknowledged = commands.Count(command => command.State == CommandState.Acknowledged);
-
-        return acknowledged == commands.Count ? CompositeStatus.Applied
-            : acknowledged == 0 ? CompositeStatus.NotApplied
-            : CompositeStatus.PartiallyApplied;
-    }
+    public static CompositeStatus StatusOf(IReadOnlyCollection<Command> commands) => CommandRules.StatusOf(commands);
 
     /// <summary>The commands of one zone-wide action, in issue order.</summary>
     public IReadOnlyList<Command> Composite(Guid compositeId) => store.ForComposite(compositeId);
