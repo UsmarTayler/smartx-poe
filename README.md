@@ -31,6 +31,7 @@ The brief has three pillars. Parts 1 and 2 deliver the first and lay the ground 
 - [History, timelines, alerts and search](#history-timelines-alerts-and-search)
 - [Real-time push](#real-time-push)
 - [The Command Stream page](#the-command-stream-page)
+- [Pattern analysis and investigations](#pattern-analysis-and-investigations)
 - [Feature walkthrough](#feature-walkthrough)
 - [Where the assessed concepts live](#where-the-assessed-concepts-live)
 - [Configuration reference](#configuration-reference)
@@ -758,7 +759,8 @@ rebuilt from scratch and a handful of random searches against a brute-force scan
 ### What the operator did
 
 Every search is recorded as a history event: the filters, the result count and the **alerts active at that
-moment**. Command entries carry the same snapshot. The pattern analysis later in the project learns from what
+moment**. Command entries carry the same snapshot, and so does opening a device in the Command Stream (`POST
+/api/activity/selection`). The [pattern analysis](#pattern-analysis-and-investigations) learns from what
 operators do in what situations, and neither the search nor the alerts that were active can be reconstructed
 afterwards, so recording starts now. `GET /api/activity?from=&to=` returns searches and the commands an operator
 caused (issued, cancelled, undone) in time order. The server records the searches it receives, and assumes the
@@ -1059,6 +1061,234 @@ refusal reasons and partial results; the zone confirmation lists its devices bef
 line and the markers; and leaving the page and coming back restores the filters, the result and the open device.
 `CommandStreamModelTests.cs` covers the lane rates, alert order, which commands a device is offered, chart sizing and the chart model.
 
+## Pattern analysis and investigations
+
+The gateway learns which operator actions tend to follow which system events, and uses it two ways: it can say what operators
+usually do after something, and when a node falls into fault it opens an investigation that the operator's verdict feeds back
+into. This is the analysis. Ranking what it learned, showing it in the interface as "Suggested Actions" and delivering it in real time come after it, and are not part of what is described here.
+
+Everything lives in [`src/SmartX.Api/Patterns/`](src/SmartX.Api/Patterns). The engine sits behind `IPatternEngine` and has no
+reference to SignalR; one bridge class tells it what the rest of the system is doing and the endpoints ask it.
+
+### Triggers: what happened
+
+A trigger is a system event an operator might respond to. It has a kind, a detail, a device and a time.
+
+| Trigger | Fires when | Detail |
+| --- | --- | --- |
+| Threshold crossing | a reading crosses a watch level | `Low` or `High` |
+| Alert raised | an alert is raised (a Fault alert is not forwarded: the band change that raised it already is the trigger) | the alert kind |
+| Trust band | a node's trust moves into Degrading or Fault | the band |
+| Critical reading | a device's first critical reading of an episode | the critical rule's reason |
+
+**Watch levels come from the registration.** "Moisture sensor B drops below 20%" needs a 20%, and the sensor's registered range
+already says what it reports in, so the low level sits 20% of the way up that range and the high level 80% of the way
+(`Patterns:WatchLowFraction`, `WatchHighFraction`). A sensor registered for 0 to 100 has a low level of 20; one registered for
+30 to 70, like the demo humidity sensors, has one of 38. Nothing has to be configured per sensor.
+
+**Hysteresis.** A reading hovering around 20 would cross it on every packet. A level fires once, and is not armed again until
+the reading is back past it by a margin (`RearmMargin`, 5% of the range): below 20 fires, and the level is not armed again until
+the reading is above 25. A reading that wobbles between 19 and 22 is one trigger. A critical episode is one trigger in the same
+way: a set of the devices currently critical makes the first reading count and `Add` returning false stops the rest.
+
+### Actions: what the operator did
+
+| Action | Counted as | Weight |
+| --- | --- | --- |
+| Opened a device in the Command Stream | `Viewed` | 1 |
+| Issued a command (action and target) | `Command` | 1 |
+| Searched, and the search narrowed to at most three devices | `Searched` | 0.4 |
+| Gave a verdict on an investigation | `Verdict` | 1 |
+
+Opening a device is a deliberate click, and the client reports it as it happens (`POST /api/activity/selection`) so it is in
+the activity record. A search with no device opened is half an intention, so it is kept as its own kind at a lower weight. A
+search that matches many devices is not read as being about any of them. A restore command made by an undo is not counted: it
+is the system carrying out the operator's undo, not a new decision.
+
+### How the brief's example is learned
+
+"If a user frequently searches for Pump A right after Moisture Sensor B drops below 20%", step by step:
+
+1. The sensor's reading crosses its low watch level. The detector makes a trigger, `ThresholdCrossing / Low` on that sensor, and
+   the engine puts it in a `Queue<T>` of recent triggers in time order. It counts the trigger at two levels: the specific key
+   (this sensor) and the general key (a `%RH` sensor in this zone).
+2. The operator opens Pump A within the window (`Patterns:Window`, ten minutes). The engine first removes everything older than the
+   window from the front of the queue, which is one comparison per entry removed because the oldest is always first. It then
+   pairs the action with every trigger still in the queue.
+3. Each pairing is counted once. A `HashSet<(trigger instance, action)>` of pairings already counted means opening Pump A four
+   times after one drop is one response: `Add` returns false for the rest.
+4. The counts are `Dictionary<TriggerKey, Dictionary<ActionKey, DecayedCount>>` (how often each action followed each trigger),
+   a count per trigger and a count per action. They are doubles because they fade.
+5. A query turns them into three numbers for a trigger T and an action A:
+   - **support**: how many times A followed T, weighted and faded;
+   - **confidence**: of the times T happened, the share that were followed by A;
+   - **lift**: confidence divided by how likely A is in any window of the same length anyway.
+
+Measured in the Docker stack with a 30-second window and five rounds 90 seconds apart (`scripts/demo-patterns.sh`). Rack Row 1's
+temperature sensor stands in for the moisture sensor and the CRAC Water Pump for Pump A:
+
+| | Specific | General |
+| --- | --- | --- |
+| Trigger | Rack Row 1 drops below its low level | a °C sensor in Zone 1 drops below its low level |
+| Action | opened the CRAC Water Pump | opened a pump in Zone 1 |
+| Support | 8 | 8 |
+| Confidence | 1.00 | 1.00 |
+| Baseline (how likely anyway) | 0.31 | 0.31 |
+| Lift | **3.2** | **3.2** |
+| Qualified | yes | yes |
+
+The trigger count is 8 and not 5: five crossings were driven by hand, and the others came from the simulator's own readings for
+that sensor, each of which also had a pump opening inside its window. The pump was opened three times in every round, which is
+one response each time.
+
+**An action that is always there does not qualify.** The Dock Leveller Pump was opened every ten seconds throughout. It followed
+the same trigger just as reliably (support 8, confidence 1.00) and its lift is **1.05**, because it is within a window of an
+open 95% of the time anyway, so it is not offered. Across all 25 trigger and action pairs it appears in, none qualified, and the
+whole mesh had exactly the two qualified patterns above.
+
+**The general level answers for a sensor with no history.** `GET /api/patterns/for/B8:27:EB:10:00:03` (another °C sensor in the
+same zone, which has never crossed a level) answered at the general level: after a low crossing, operators open "a pump in
+Zone 1", lift 3.2.
+
+### Support, confidence and lift
+
+**Lift is what separates a habit from a coincidence.** If an operator has Pump A's page open all day, it follows nearly every
+trigger and its confidence is near 1, and confidence alone would recommend it everywhere. Lift divides by how likely the action is
+anyway, estimated as `1 - exp(-rate x window)` with the rate the action's faded count over the faded time the engine has been
+watching, and above 1 means the trigger made a difference. A pattern needs both:
+
+| Threshold | Default | Why |
+| --- | --- | --- |
+| `MinimumSupport` | 3 | One is an anecdote and two is a coincidence that happens by chance more often than people expect. Three separate occasions is the smallest number that starts to look like a habit. It is weighted and faded, so three views count and nine searches do not, and a habit seen three times last week is worth about two now. A two percent allowance stops three pairings failing the test the minute after they are made. |
+| `MinimumLift` | 1.5 | At 1 the trigger tells you nothing. At 1.5 it makes the action half again as likely as it would otherwise be, a clear effect that a handful of observations can still show. Lower admits noise. Much higher needs more history than a shift produces. |
+
+Associations that miss either are not offered by default; `?includeWeak=true` returns them, marked `qualified: false`, for seeing
+why something did not make it.
+
+### Decay
+
+Operators change how they work, so pairings fade with a half-life (`Patterns:HalfLife`, seven days): a new habit overtakes an
+old one and a pattern that is no longer true stops being offered. It is the same exponential decay as the trust engine, on a longer
+clock. It is applied lazily: each count stores when it last changed and is scaled by how long it has been when somebody reads
+it, so a count nobody reads costs nothing and no timer walks the table. Counts are structs held in the dictionaries and changed in
+place, so adding to one allocates nothing. The table of pairs is bounded (`MaxLearnedPairs`), and when it is over, the most
+faded go first.
+
+### Two levels, and which one answers
+
+Every event updates a specific key (this device) and a general one (this kind of device in this zone). A specific pattern knows
+only about devices that have already had incidents. A general one learns from every device of that kind in the zone and answers
+for one that has never had an incident of its own.
+
+- Specific: `Moisture B below 20%` followed by `opening Pump A`.
+- General: `any %RH sensor in Zone 1 below 20%` followed by `a pump in the same zone`.
+
+**Which answers.** A question about a trigger on a device is answered by the specific pattern when it has a qualified association
+(enough support and lift), and only then. Otherwise it falls back to the general pattern for the device's kind and zone, and the
+answer says which level spoke (`answeredBy`). A device with one coincidental pairing of its own therefore gets what is known about
+its kind, and not the coincidence. A general pairing is counted only when the action was on a device in the same group as the
+trigger, so "a pump in the same zone" means that.
+
+**Same zone is the Part 1 zone tree.** A device is grouped at the general level under its zone's ancestor at a configured depth
+(`GeneralZoneDepth`, 1), found by walking up the parent links the Part 1 validator walks. In the demo hierarchy a sensor in Sub-Zone B
+and one directly in Zone 1 are both "in Zone 1", and a sensor in Zone 4 is not.
+
+### Investigations and verdicts
+
+The Part 1 research chose trust-weighted event escalation with an operator feedback loop. The trust engine has raised
+`FaultEntered` since Part 1 and only the alert set listened. `InvestigationService` is the subscriber the seam was built for.
+
+When a node enters fault, an investigation opens. It holds:
+
+- the node, its room, the score and the trust engine's reason;
+- the kind of failure that weighs most in the score (`causedBy`);
+- the **decay window**: from the last moment the node was nominal to the moment it crossed into fault, which is what an
+  operator correlates with a power cut or a firmware push;
+- the alerts active on the node, its trust samples in the window, and its readings in the window (the count, and the latest few);
+- the **precedent**: what operators did the last time this node, or a node like it, faulted, from the pattern engine, saying
+  which level answered.
+
+When the fault clears the investigation is resolved automatically, unless the operator already gave a verdict, in which case the
+moment they gave it stands.
+
+| Verdict | What it changes |
+| --- | --- |
+| Confirm | A real fault. Recorded. Detection is unchanged. |
+| Dismiss | A false alarm. That node's weight for the kind of failure that caused the fault is multiplied by `DismissFactor` (0.85), never below `SensitivityFloor` (0.5). Per node and per kind of failure; every other node and kind is untouched. |
+| Relabel | A real problem with a different cause: Hardware, Network, Power or Environmental. Stored as a label. Detection is unchanged. |
+
+**The bounds.** Dismissing can dull detection and cannot turn it off: at the floor a node that keeps failing still reaches fault, a
+little later. The adjustment is reversible: a later verdict replaces an earlier one and gives back what it took, so Dismiss then
+Confirm leaves the node as it was. A node nobody has dismissed scores exactly as it did before this feature existed.
+
+Every verdict is also recorded as an operator action, so the pattern engine learns what operators do about faults.
+
+### Trying it
+
+The example, by hand. Start the stack with a short window so that it takes minutes and not a shift (the default is ten minutes):
+
+```bash
+SMARTX_PATTERN_WINDOW=00:00:30 docker compose up -d --build
+scripts/demo-patterns.sh        # five rounds, about eight minutes; ROUNDS=4 for fewer
+```
+
+Or one round with `curl`, five or more times, at least a minute and a half apart:
+
+```bash
+# 1. The sensor (registered 18 to 32, low level 20.8) drops below its low level. A second low reading is the same dip.
+curl -X POST http://localhost:5266/api/telemetry -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:01","value":19.5}'
+# 2. The operator opens the pump: click it in the Command Stream, or tell the gateway.
+curl -X POST http://localhost:5266/api/activity/selection -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:06"}'
+# 3. The sensor recovers past its re-arm level (21.5), so the next drop is a new crossing.
+curl -X POST http://localhost:5266/api/telemetry -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:01","value":26}'
+```
+
+Then look at what it learned. The second command shows the associations that did not qualify too, with the reason visible in the
+numbers:
+
+```bash
+curl "http://localhost:5266/api/patterns?mac=B8:27:EB:10:00:01"
+curl "http://localhost:5266/api/patterns?mac=B8:27:EB:10:00:01&includeWeak=true"
+curl "http://localhost:5266/api/patterns/for/B8:27:EB:10:00:03"
+```
+
+Expect the first to be empty for the first two rounds (support is below three), and to show the pattern from the third or fourth.
+An engine that has only just started has watched for too short a time to tell what is ordinary, so give it a few rounds.
+
+**A fault and its investigation.** `scripts/demo-fault.sh` sends enough refused readings to Rack Row 3's temperature sensor to push
+it into fault (it keeps its last 256 outcomes, so it takes a few hundred), shows the investigation that opens, and then gives it
+verdicts. In the Docker stack the investigation had the window from 21:13:01.657 to 21:13:08.887, the alerts `OutOfRange` and
+`Fault`, the cause `RangeViolation` and its trust samples and readings. **Dismiss** moved that node's range-violation scale from 1 to
+0.85 and nothing else; changing the verdict to **Confirm** put it back to 1; a **Relabel** without a cause was refused with a 400,
+and with `Power` was stored.
+
+### Measured
+
+`PatternBenchmarkTests` measured the cost per event in the worst case the engine allows: the window full to its bound of 5,000
+triggers, spread over a fleet of 5,000 sensors and 100 actuators in 50 zones, on a developer laptop.
+
+| What | Cost |
+| --- | --- |
+| Recording a trigger | 1.4 µs |
+| An action, the first time it is seen, paired with all 5,000 triggers at both levels (the worst case) | 16.9 ms, about 59 per second |
+| An action already counted against the window (every pairing is in the set already) | 0.59 ms, about 1,700 per second |
+| Predicting for a sensor | 39 µs |
+| An action with 500 triggers in the window, on a fresh engine and after twenty days of learning | 0.28 ms and 0.37 ms |
+
+An action costs the triggers in the window and never the history behind it, which is why the window is bounded in time
+(`Window`) and in count (`MaxTriggersInWindow`). The ingestion worker only ever records triggers, at 1.4 µs each; an action is
+an operator's click, and even the worst case is far faster than anyone can click. Run it with:
+
+```bash
+dotnet test tests/SmartX.Tests --settings tests/SmartX.Tests/benchmark.runsettings --filter "FullyQualifiedName~PatternBenchmarkTests" --logger "console;verbosity=detailed"
+```
+
+### Tests
+
+`PatternEngineTests`, `PatternTriggerTests`, `TrustSensitivityTests`, `InvestigationTests` and `PatternEndpointTests` cover the
+brief's example, the window, counting once, lift, minimum support, decay, both levels and which answers, hysteresis, the investigation's
+window, each verdict and its bounds, and the endpoints. `PatternBenchmarkTests` is the benchmark, behind the Benchmark trait.
+
 ## Feature walkthrough
 
 These steps assume the API and the device simulator are both running, so there is a fleet to look at. Each one also works on an empty API once
@@ -1160,6 +1390,14 @@ Restart the API, or the Docker stack, and the attachments are still there.
 | Rules shared by server and client | [`CommandRules.cs`](src/SmartX.Shared/Commands/CommandRules.cs) | `WhyNotUndoable` and `StatusOf`: the server refuses with these words and the client explains with the same ones |
 | Redraw only on change | [`LiveStreamPanel.razor`](src/SmartX.Client/Components/CommandStream/LiveStreamPanel.razor) | `ShouldRender` returns a dirty flag that only the stream, the search and the catalogue set |
 | Component tests | [`CommandStreamComponentTests.cs`](tests/SmartX.Tests/CommandStreamComponentTests.cs), [`StreamComponentKit.cs`](tests/SmartX.Tests/StreamComponentKit.cs) | bUnit against the real feeds on a fake hub, a fake API and a fake clock |
+| Queue for a sliding window | [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `Queue<TriggerInstance> _window`: triggers in time order, expired from the front, so an action is paired with the triggers in the window and nothing is searched; the same FIFO structure as the ingestion lane, doing a different job |
+| HashSet to count once | [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `HashSet<(long Instance, ActionKey Action)> _paired`: `Add` returning false is why four opens of one pump after one moisture drop are one response |
+| Dictionaries of dictionaries | [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `Dictionary<TriggerKey, Dictionary<ActionKey, DecayedCount>>`: how often each action followed each trigger, with support, confidence and lift worked out from it |
+| Value-type keys, no boxing | [`PatternKeys.cs`](src/SmartX.Api/Patterns/PatternKeys.cs) | `TriggerKey` and `ActionKey` as `readonly record struct`s, so a lookup on every event allocates nothing |
+| Lazy decay in a struct | [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `DecayedCount`: a count that remembers when it last changed and is faded only when read, changed in place through `CollectionsMarshal` |
+| Hysteresis | [`ReadingTriggerDetector.cs`](src/SmartX.Api/Patterns/ReadingTriggerDetector.cs) | a watch level fires once and is re-armed only past a margin, so a hovering reading is one trigger |
+| Recursion over the zone tree, reused | [`DeviceDirectory.cs`](src/SmartX.Api/Patterns/DeviceDirectory.cs) | walks up `ParentId` to the depth the general level groups at, so "the same zone" is the Part 1 hierarchy |
+| The escalation seam, used | [`InvestigationService.cs`](src/SmartX.Api/Patterns/InvestigationService.cs) | subscribes to `FaultEntered` and `FaultCleared`; a verdict adjusts a node's sensitivity through `ITrustEngine.AdjustSensitivity`, bounded by a floor |
 | Dictionary and HashSet | [`TrustEngine.cs`](src/SmartX.Api/Trust/TrustEngine.cs) | `_nodes`, keyed by MAC for O(1) lookup per packet, and `_degraded`, where each failing node appears once |
 | The ingestion pipeline, stage by stage | [`TelemetryEndpoints.cs`](src/SmartX.Api/Endpoints/TelemetryEndpoints.cs) | `IngestBatchAsync`, with each stage numbered in comments, and `TryCreatePacket` |
 | Polymorphic JSON | [`ITelemetryPacket.cs`](src/SmartX.Shared/Packets/ITelemetryPacket.cs) | `[JsonDerivedType]` over the packet types |
@@ -1218,6 +1456,32 @@ setting.
 | --- | --- | --- |
 | `Alerts:DisconnectedAfterIntervals` | `3` | How many of a node's own heartbeat intervals it may stay silent before it is called disconnected. |
 | `Alerts:ClearAfterValidReadings` | `3` | How many valid readings in a row end an out-of-range or wrong-type alert. |
+
+### API: `Patterns`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Patterns:Window` | `00:10:00` | How soon after a trigger an action counts as following it. Also the bound on what an action costs. |
+| `Patterns:MinimumSupport` | `3` | How many times, weighted and faded, an action must have followed a trigger before it counts as a pattern. |
+| `Patterns:SupportTolerance` | `0.98` | The share of the minimum that a faded count must reach, so three pairings do not fail the test a minute after they are made. |
+| `Patterns:MinimumLift` | `1.5` | How many times more often than chance it must follow. At 1 the trigger tells you nothing. |
+| `Patterns:HalfLife` | `7.00:00:00` | How long until a pairing counts half as much. |
+| `Patterns:SearchWeight` | `0.4` | What a search that narrowed to a few devices counts for, against 1 for opening a device or sending a command. |
+| `Patterns:MaxSearchResultsForAction` | `3` | The most devices a search can return and still be read as being about them. |
+| `Patterns:MaxTriggersInWindow` | `5000` | The most triggers held in the window. The oldest are dropped past it. |
+| `Patterns:MaxLearnedPairs` | `250000` | The most (trigger, action) pairs remembered. Past it, the most faded are forgotten first. |
+| `Patterns:WatchLowFraction` / `WatchHighFraction` | `0.20` / `0.80` | Where a sensor's low and high watch levels sit, as a fraction of its registered range. |
+| `Patterns:RearmMargin` | `0.05` | How far back past a level a reading must come before it can fire again (hysteresis). |
+| `Patterns:GeneralZoneDepth` | `1` | The depth in the zone tree that devices are grouped under at the general level. |
+
+### API: `Investigations`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Investigations:MaxRetained` | `200` | How many are kept. The oldest closed ones go first; an open one is never dropped to make room. |
+| `Investigations:MaxReadings` | `60` | The most readings kept in one, the latest in its window. |
+| `Investigations:DismissFactor` | `0.85` | What a node's weight for a failure is multiplied by each time a fault caused by it is dismissed. |
+| `Investigations:SensitivityFloor` | `0.5` | The lowest the scale can reach. Detection can be dulled and never switched off. |
 
 ### API: `Realtime`
 
@@ -1332,6 +1596,8 @@ These go in `.env`:
 | `SMARTX_RATE` | `1` | Becomes `Simulator__ReportingRateMultiplier`: how many times faster than normal the fleet reports. |
 | `SMARTX_TICK` | `00:00:00.500` | Becomes `Simulator__TickInterval`: how often the simulator wakes to send what is due. Lower it as the rate rises. |
 | `SMARTX_PROCESS_DELAY` | `00:00:00` | Becomes `Ingestion__SimulatedGatewayCost`: the simulated per-reading cost of a constrained gateway; see [the Command Stream page](#seeing-a-critical-reading-overtake-the-standard-queue). |
+| `SMARTX_PATTERN_WINDOW` | `00:10:00` | Becomes `Patterns__Window`. A short one, such as `00:01:00`, lets the pattern example be shown in minutes. |
+| `SMARTX_PATTERN_HALFLIFE` | `7.00:00:00` | Becomes `Patterns__HalfLife`. |
 | `SMARTX_CLIENT_PORT` | `8080` | Host port for the client. Open this one in the browser. |
 | `SMARTX_API_PORT` | `5266` | Host port for the API, for `curl` and the scenario endpoint. |
 
@@ -1438,6 +1704,12 @@ This demonstrates the *encryption mechanism*, not production key management.
 | `GET` | `/api/alerts/stats` | Raised, suppressed and cleared totals, and how many are active and acknowledged |
 | `GET` | `/api/devices/search` | Devices matching every filter given: `?q=`, `?category=`, `?actuatorKind=`, `?zone=` (includes every sub-zone), `?band=`, `?alert=`. `404` for an unknown zone, `400` for an unknown value |
 | `GET` | `/api/activity` | What operators did, searches and commands, with the alerts active at the time. `?from=`, `?to=` |
+| `POST` | `/api/activity/selection` | `{ "macAddress" }`: the operator opened a device. `204`, or `404` for a device that is not registered |
+| `GET` | `/api/patterns` | Learned associations, best first, with support, confidence, lift and the level. `?trigger=`, `?mac=`, `?level=Specific|General`, `?includeWeak=true`, `?limit=`. The thresholds in force come back with them |
+| `GET` | `/api/patterns/for/{mac}` | What tends to follow each kind of trigger seen on this device, from the device's own history where it has enough and from its kind in its zone where not, saying which. `404` |
+| `GET` | `/api/investigations` | Investigations, newest first. `?status=Open|Resolved`, `?limit=` |
+| `GET` | `/api/investigations/{id}` | One, with its window, alerts, trust samples, readings, precedent and sensitivity. `404` |
+| `POST` | `/api/investigations/{id}/verdict` | `{ "verdict": "Confirm|Dismiss|Relabel", "cause"? }`. A relabel needs a cause. A later verdict replaces an earlier one and undoes what it changed. `200`, `400`, `404` |
 | `GET` | `/api/realtime/trust` | Every node's trust and the mesh summary, with the sequence number they are as of: the snapshot a trust feed starts from |
 | `GET` | `/api/realtime/alerts` | Active alerts, totals and recent critical readings, as of a sequence number |
 | `GET` | `/api/realtime/commands` | Recent commands, as of a sequence number |

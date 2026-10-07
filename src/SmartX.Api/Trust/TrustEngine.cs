@@ -354,6 +354,137 @@ internal sealed class TrustEngine : ITrustEngine
         }
     }
 
+    /// <inheritdoc />
+    public TrustOutcome? DominantFailure(string macAddress)
+    {
+        if (!MacAddressValidator.TryNormalise(macAddress, out var mac))
+        {
+            return null;
+        }
+
+        lock (_gate)
+        {
+            if (!_nodes.TryGetValue(mac, out var node))
+            {
+                return null;
+            }
+
+            var now = _time.GetUtcNow();
+            Span<double> weights = stackalloc double[OutcomeKinds];
+
+            foreach (var record in node.Outcomes)
+            {
+                if (record.Outcome == TrustOutcome.Success)
+                {
+                    continue;
+                }
+
+                var kind = (int)record.Outcome;
+                weights[kind] += WeightOf(record.Outcome) * node.FailureScale[kind] * TrustFormula.DecayWeight(now - record.ObservedAt, _options.HalfLife);
+            }
+
+            var best = -1;
+
+            for (var kind = (int)TrustOutcome.RangeViolation; kind < OutcomeKinds; kind++)
+            {
+                if (weights[kind] > 0 && (best < 0 || weights[kind] > weights[best]))
+                {
+                    best = kind;
+                }
+            }
+
+            return best < 0 ? null : (TrustOutcome)best;
+        }
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<SensitivityState> Sensitivity(string macAddress, double floor)
+    {
+        if (!MacAddressValidator.TryNormalise(macAddress, out var mac))
+        {
+            return [];
+        }
+
+        lock (_gate)
+        {
+            var scales = _nodes.TryGetValue(mac, out var node) ? node.FailureScale : null;
+
+            return
+            [
+                .. FailureKinds.Select(outcome => new SensitivityState(outcome, scales?[(int)outcome] ?? 1, floor)),
+            ];
+        }
+    }
+
+    /// <inheritdoc />
+    public SensitivityChange? AdjustSensitivity(string macAddress, TrustOutcome outcome, double factor, double floor)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(factor, 0);
+
+        if (outcome == TrustOutcome.Success)
+        {
+            throw new ArgumentException("Sensitivity to success cannot be adjusted: only failures can be dulled.", nameof(outcome));
+        }
+
+        // Clamped to the untouched scale as well as to the floor, so a factor above one can never make a node more
+        // sensitive than it started and a floor above one cannot do so either.
+        return Rescale(macAddress, outcome, current => Math.Clamp(current * factor, Math.Min(floor, 1), 1));
+    }
+
+    /// <inheritdoc />
+    public SensitivityChange? RestoreSensitivity(string macAddress, TrustOutcome outcome, double amount)
+    {
+        if (outcome == TrustOutcome.Success)
+        {
+            throw new ArgumentException("Sensitivity to success cannot be adjusted.", nameof(outcome));
+        }
+
+        return Rescale(macAddress, outcome, current => Math.Min(1, current + Math.Max(0, amount)));
+    }
+
+    private SensitivityChange? Rescale(string macAddress, TrustOutcome outcome, Func<double, double> next)
+    {
+        if (!MacAddressValidator.TryNormalise(macAddress, out var mac))
+        {
+            return null;
+        }
+
+        SensitivityChange change;
+        Crossings crossings;
+
+        lock (_gate)
+        {
+            if (!_nodes.TryGetValue(mac, out var node))
+            {
+                return null;
+            }
+
+            var before = node.FailureScale[(int)outcome];
+            var after = next(before);
+
+            if (after == before)
+            {
+                return null;
+            }
+
+            node.FailureScale[(int)outcome] = after;
+            change = new SensitivityChange(outcome, before, after);
+
+            // Re-scored at once, at the moment of the last evaluation or now, whichever is later, so the sparkline's
+            // points stay in order. A change big enough to cross a band is announced like any other crossing.
+            var now = _time.GetUtcNow();
+            crossings = Evaluate(node, now > node.EvaluatedAt ? now : node.EvaluatedAt);
+        }
+
+        Raise(crossings);
+        RaiseEvaluated(mac);
+
+        return change;
+    }
+
+    private static readonly TrustOutcome[] FailureKinds =
+        [TrustOutcome.RangeViolation, TrustOutcome.SchemaFailure, TrustOutcome.MissedHeartbeat];
+
     /// <summary>Finds a node, tracking it as unproven if it has not been seen before.</summary>
     private NodeTrust GetOrTrack(string mac, DateTimeOffset now)
     {
@@ -462,7 +593,7 @@ internal sealed class TrustEngine : ITrustEngine
             }
             else
             {
-                var weight = WeightOf(record.Outcome) * decay;
+                var weight = WeightOf(record.Outcome) * node.FailureScale[kind] * decay;
                 failures += weight;
                 failureWeights[kind] += weight;
             }

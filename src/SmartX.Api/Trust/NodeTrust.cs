@@ -75,6 +75,12 @@ internal sealed class NodeTrust
 
     internal int RecentFailures { get; set; }
 
+    /// <summary>
+    /// What each kind of failure's weight is multiplied by for this node, indexed by <see cref="TrustOutcome"/>. All one
+    /// until an operator dismisses a false alarm. The slot for success is never used.
+    /// </summary>
+    internal double[] FailureScale { get; } = [1, 1, 1, 1];
+
     /// <summary>The last evaluation at which the node was nominal. The start of a decay window.</summary>
     internal DateTimeOffset? LastNominalAt { get; set; }
 

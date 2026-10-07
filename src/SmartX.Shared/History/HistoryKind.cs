@@ -29,5 +29,8 @@ public enum HistoryKind
     TrustTransition,
 
     /// <summary>An operator searched for devices.</summary>
-    Search
+    Search,
+
+    /// <summary>An operator opened a device in the Command Stream.</summary>
+    Selection
 }

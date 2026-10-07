@@ -70,7 +70,7 @@ internal static class SearchEndpoints
 
         var devices = index.Search(filters, catalogue);
 
-        activity.RecordSearch(filters, devices.Count);
+        activity.RecordSearch(filters, devices);
 
         return Results.Ok(new DeviceSearchResponse(filters, devices.Count, devices));
     }

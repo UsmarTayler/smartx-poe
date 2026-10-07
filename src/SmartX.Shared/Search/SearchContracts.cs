@@ -64,7 +64,10 @@ public enum ActivityKind
     Search,
 
     /// <summary>An action on a command: issuing it, cancelling it or undoing it.</summary>
-    Command
+    Command,
+
+    /// <summary>Opening a device in the Command Stream.</summary>
+    Selection
 }
 
 /// <summary>

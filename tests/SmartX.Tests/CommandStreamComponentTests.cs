@@ -29,6 +29,10 @@ public class DeviceSearchComponentTests : StreamComponentTests
         box.Input("pum");
         box.Input("pump");
 
+        // The input handler finishes on its own schedule. The clock must not move until the debounce timer exists, or the
+        // test would be advancing time past a timer that has not been started yet.
+        await SettledAsync(cut);
+
         Assert.Empty(Api.Searched);
 
         // Just short of the pause: still nothing sent.
@@ -65,6 +69,7 @@ public class DeviceSearchComponentTests : StreamComponentTests
         var cut = Render<DeviceSearchBar>();
 
         cut.Find(".smartx-search input").Input("pump");
+        await SettledAsync(cut);
         Time.Advance(Options.SearchDebounce);
         await ClientRig.UntilAsync(() => Search.Result is not null, "the result");
 
@@ -78,12 +83,51 @@ public class DeviceSearchComponentTests : StreamComponentTests
         RenderPopoverHost();
         var cut = Render<DeviceSearchBar>();
 
+        await SettledAsync(cut);
         cut.Find("[aria-label='Clear filter Text: pump'] .mud-chip-close-button").Click();
+        await SettledAsync(cut);
         Time.Advance(Options.SearchDebounce);
         await ClientRig.UntilAsync(() => Api.Searched.Count > 0, "the search");
 
         Assert.Null(State.StreamFilters.Q);
         Assert.Equal(SensorCategory.Actuator, State.StreamFilters.Category);
+    }
+
+    [Fact]
+    public async Task Opening_a_device_tells_the_gateway_once_and_closing_it_or_coming_back_to_it_does_not()
+    {
+        const string mac = StreamKit.Pump;
+
+        Api.Search = filters => new DeviceSearchResponse(filters, 1, [Hit(mac, "Coolant Pump")]);
+        await PreloadFeedsAsync();
+        RenderPopoverHost();
+
+        var cut = Render<DevicePanel>();
+        var row = cut.WaitForElement(".smartx-device-row");
+        await SettledAsync(cut);
+        row = cut.Find(".smartx-device-row");
+
+        row.Click();
+
+        // The click is the operator choosing to look at it, so the gateway is told, once.
+        await ClientRig.UntilAsync(() => Api.Selections.Count == 1, "the selection to be reported");
+        Assert.Equal(mac, Api.Selections[0]);
+        Assert.Equal(mac, State.StreamDevice);
+
+        // Clicking it again closes it. That is not interest, and is not reported.
+        await SettledAsync(cut);
+        cut.Find(".smartx-device-row").Click();
+        Assert.Null(State.StreamDevice);
+
+        // A device that is already open when the page is drawn is a return and not a click, so nothing is reported.
+        State.SelectStreamDevice(mac);
+        await SettledAsync(cut);
+        await DisposeComponentsAsync();
+        var back = Render<DevicePanel>();
+        await SettledAsync(back);
+        await Task.Delay(100);
+
+        Assert.Single(Api.Selections);
     }
 
     [Fact]
@@ -95,7 +139,9 @@ public class DeviceSearchComponentTests : StreamComponentTests
         RenderPopoverHost();
 
         var first = Render<DevicePanel>();
+        await SettledAsync(first);
         first.Find(".smartx-search input").Input("pump");
+        await SettledAsync(first);
         Time.Advance(Options.SearchDebounce);
         await ClientRig.UntilAsync(() => Search.Result?.Filters.Q == "pump", "the settled search");
 
@@ -105,7 +151,9 @@ public class DeviceSearchComponentTests : StreamComponentTests
 
         var requestsBefore = Search.RequestsSent;
 
-        // Away: the page's components are destroyed, as navigation does. What lives in the scoped services stays.
+        // Away: the page's components are destroyed, as navigation does. What lives in the scoped services stays. Disposed
+        // once nothing is mid-render, because disposing a tree that is being drawn can leave a component undisposed.
+        await SettledAsync(first);
         await DisposeComponentsAsync();
         await ClientRig.UntilAsync(() => !Rig.Hub.Subscribed.Contains($"device:{mac}"), "the device topic to be left");
 
@@ -815,11 +863,12 @@ public class TimelineChartComponentTests : StreamComponentTests
 /// <summary>The device detail asks for a timeline sized to its width, and chooses a range that survives navigation.</summary>
 public class DeviceDetailComponentTests : StreamComponentTests
 {
+    // No popover host here, on purpose. Nothing in the detail opens a popover for a power meter, and a host that is drawn
+    // is a host that is disposed, and when its disposal races a component that has to let go of a topic, the topic stays held.
     [Fact]
     public async Task Opening_a_device_loads_its_timeline_and_joins_its_topic_and_closing_leaves_it()
     {
         Api.Timeline = _ => StreamKit.Spike();
-        RenderPopoverHost();
 
         var cut = Render<DeviceDetail>(parameters => parameters.Add(detail => detail.Mac, StreamKit.Meter));
 
@@ -827,9 +876,15 @@ public class DeviceDetailComponentTests : StreamComponentTests
         cut.WaitForElement("g.smartx-chart__marker");
         Assert.Equal(1, Api.TimelineCalls);
 
+        await SettledAsync(cut);
         await DisposeComponentsAsync();
 
-        await ClientRig.UntilAsync(() => !Rig.Hub.Subscribed.Contains($"device:{StreamKit.Meter}"), "the device topic to be left");
+        var topic = $"device:{StreamKit.Meter}";
+
+        await ClientRig.UntilAsync(
+            () => !Rig.Hub.Subscribed.Contains(topic),
+            $"the device topic to be left (subscribe calls {Rig.Hub.CallsTo(RealtimeMethods.Subscribe, topic)}, unsubscribe calls {Rig.Hub.CallsTo(RealtimeMethods.Unsubscribe, topic)}, connection {Rig.Connection.State}; calls: {Rig.Hub.CallLog})",
+            seconds: 3);
     }
 
     [Fact]
@@ -837,7 +892,6 @@ public class DeviceDetailComponentTests : StreamComponentTests
     {
         Api.Timeline = _ => StreamKit.Spike();
         await PreloadFeedsAsync();
-        RenderPopoverHost();
         var cut = Render<DeviceDetail>(parameters => parameters.Add(detail => detail.Mac, StreamKit.Meter));
         cut.WaitForElement("g.smartx-chart__marker");
         await ClientRig.UntilAsync(() => Rig.Snapshots.DeviceCalls > 0, "the device snapshot");

@@ -5,6 +5,7 @@ using SmartX.Api.Commands;
 using SmartX.Api.Endpoints;
 using SmartX.Api.History;
 using SmartX.Api.Ingestion;
+using SmartX.Api.Patterns;
 using SmartX.Api.Realtime;
 using SmartX.Api.Search;
 using SmartX.Api.Storage;
@@ -126,6 +127,28 @@ builder.Services.AddSingleton<AlertTracker>();
 builder.Services.AddSingleton<ActivityRecorder>();
 builder.Services.AddHostedService<TrustEventBridge>();
 
+// Pattern analysis. The engine learns which operator actions follow which system events; it is told what happened by one
+// bridge and asked by the endpoints, and has no reference to SignalR. Investigations are the subscriber the trust engine's
+// FaultEntered seam was built for.
+builder.Services
+    .AddOptions<PatternOptions>()
+    .Bind(builder.Configuration.GetSection(PatternOptions.SectionName))
+    .Validate(options => !PatternOptionsValidation.Problems(options).Any(), "The Patterns section is not valid.")
+    .ValidateOnStart();
+builder.Services
+    .AddOptions<InvestigationOptions>()
+    .Bind(builder.Configuration.GetSection(InvestigationOptions.SectionName))
+    .Validate(options => !InvestigationOptionsValidation.Problems(options).Any(), "The Investigations section is not valid.")
+    .ValidateOnStart();
+
+builder.Services.AddSingleton<DeviceDirectory>();
+builder.Services.AddSingleton<IDeviceDirectory>(services => services.GetRequiredService<DeviceDirectory>());
+builder.Services.AddSingleton<IPatternEngine, PatternEngine>();
+builder.Services.AddSingleton<ReadingTriggerDetector>();
+builder.Services.AddHostedService<PatternEventBridge>();
+builder.Services.AddSingleton<InvestigationService>();
+builder.Services.AddHostedService(services => services.GetRequiredService<InvestigationService>());
+
 // Real-time push. The domain raises events and knows nothing of SignalR; the broadcaster is the one subscriber
 // that forwards them to the hub. See RealtimeBroadcaster for what is batched, coalesced and immediate.
 builder.Services
@@ -198,6 +221,7 @@ api.MapCommandEndpoints();
 api.MapHistoryEndpoints();
 api.MapAlertEndpoints();
 api.MapSearchEndpoints();
+api.MapPatternEndpoints();
 api.MapRealtimeEndpoints();
 
 // The hub is mapped on the app and not on the /api group: it is a different kind of endpoint, with its own path,

@@ -1,5 +1,7 @@
 using SmartX.Api.Alerts;
+using Microsoft.Extensions.Options;
 using SmartX.Api.History;
+using SmartX.Api.Patterns;
 using SmartX.Shared;
 
 namespace SmartX.Api.Search;
@@ -29,22 +31,63 @@ internal sealed class ActivityRecorder(
     IHistoryStore history,
     ArrivalSequence arrival,
     AlertTracker alerts,
-    TimeProvider time)
+    TimeProvider time,
+    IPatternEngine patterns,
+    IOptions<PatternOptions> patternOptions)
 {
-    /// <summary>Records a search that ran.</summary>
+    /// <summary>Records a search that ran, and tells the pattern engine when it was narrow enough to be about particular devices.</summary>
     /// <param name="filters">What was asked for.</param>
-    /// <param name="resultCount">How many devices matched.</param>
-    public void RecordSearch(DeviceSearchFilters filters, int resultCount) =>
+    /// <param name="matches">The devices that matched.</param>
+    /// <remarks>
+    /// A search that finds a few devices is read as interest in them, at a lower weight than opening one: the operator
+    /// looked for it and did not open it. A search that finds many is not, since crediting all of them would teach the
+    /// engine that the operator wants everything.
+    /// </remarks>
+    public void RecordSearch(DeviceSearchFilters filters, IReadOnlyList<DeviceSearchHit> matches)
+    {
+        var now = time.GetUtcNow();
+
         history.Append(HistoryEntry.FromEvent(
             arrival.Next(),
-            time.GetUtcNow(),
+            now,
             HistoryEntry.MeshScope,
             HistoryKind.Search,
             new HistoryEventDetails(
-                Describe(filters, resultCount),
+                Describe(filters, matches.Count),
                 Filters: filters,
-                ResultCount: resultCount,
+                ResultCount: matches.Count,
                 ActiveAlerts: alerts.ActiveKeys())));
+
+        if (!filters.IsEmpty && matches.Count >= 1 && matches.Count <= patternOptions.Value.MaxSearchResultsForAction)
+        {
+            foreach (var match in matches)
+            {
+                patterns.RecordAction(new OperatorAction(OperatorActionKind.Searched, match.MacAddress, string.Empty, now));
+            }
+        }
+    }
+
+    /// <summary>Records an operator opening a device, which is the strongest sign of what they were interested in.</summary>
+    /// <param name="macAddress">The device.</param>
+    /// <param name="room">Where it is, for the summary.</param>
+    /// <remarks>
+    /// Stored under the device's own address so the activity record says which device, but kept out of its timeline
+    /// markers and the mesh event stream, like a search: it is what the operator did and not something that happened to
+    /// the device.
+    /// </remarks>
+    public void RecordSelection(string macAddress, string room)
+    {
+        var now = time.GetUtcNow();
+
+        history.Append(HistoryEntry.FromEvent(
+            arrival.Next(),
+            now,
+            macAddress,
+            HistoryKind.Selection,
+            new HistoryEventDetails($"Opened {room}", ActiveAlerts: alerts.ActiveKeys())));
+
+        patterns.RecordAction(new OperatorAction(OperatorActionKind.Viewed, macAddress, string.Empty, now));
+    }
 
     private static string Describe(DeviceSearchFilters filters, int resultCount)
     {

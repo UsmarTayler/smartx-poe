@@ -273,6 +273,22 @@ public sealed class SmartXApiClient(HttpClient http)
         CancellationToken cancellationToken = default) =>
         GetAsync<IReadOnlyList<AttachmentMetadata>>($"api/sensors/{Uri.EscapeDataString(macAddress)}/attachments", cancellationToken);
 
+    /// <summary>Tells the gateway an operator opened a device, which is what the pattern analysis learns from.</summary>
+    /// <returns>Null on success, otherwise why it failed.</returns>
+    public async Task<ApiProblem?> RecordSelectionAsync(string macAddress, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var response = await http.PostAsJsonAsync("api/activity/selection", new SelectionRequest(macAddress), cancellationToken);
+
+            return response.IsSuccessStatusCode ? null : await ReadProblemAsync(response, cancellationToken);
+        }
+        catch (HttpRequestException)
+        {
+            return ApiProblem.Unreachable();
+        }
+    }
+
     /// <summary>Deletes an attachment.</summary>
     /// <returns>Null on success, otherwise why it failed.</returns>
     public async Task<ApiProblem?> DeleteAttachmentAsync(Guid id, CancellationToken cancellationToken = default)

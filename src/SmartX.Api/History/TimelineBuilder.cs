@@ -63,7 +63,7 @@ internal static class TimelineBuilder
         {
             if (entry.Kind != HistoryKind.Reading)
             {
-                if (entry.Kind != HistoryKind.Search && entry.Event is { } details)
+                if (entry.Kind is not (HistoryKind.Search or HistoryKind.Selection) && entry.Event is { } details)
                 {
                     markers.Add(new TimelineMarker(entry.Timestamp, entry.Kind, details.Summary, details.Detail));
                 }

@@ -209,15 +209,28 @@
         Trust.Updated -= OnFeedChanged;
         Alerts.Updated -= OnFeedChanged;
 
-        await Trust.StopAsync();
-        await Alerts.StopAsync();
-
-        if (_feed is not null)
+        // The device's own topic first, and whatever else fails afterwards cannot stop it: it is the one that costs the
+        // server something for as long as it is held, so a device nobody is looking at must always let go.
+        try
         {
-            _feed.Updated -= OnDeviceFeed;
+            if (_feed is not null)
+            {
+                _feed.Updated -= OnDeviceFeed;
 
-            // Leaves the device's topic, so a device nobody is looking at costs the server nothing.
-            await _feed.DisposeAsync();
+                // Leaves the device's topic, so a device nobody is looking at costs the server nothing.
+                await _feed.DisposeAsync();
+            }
+        }
+        finally
+        {
+            try
+            {
+                await Trust.StopAsync();
+            }
+            finally
+            {
+                await Alerts.StopAsync();
+            }
         }
     }
 }

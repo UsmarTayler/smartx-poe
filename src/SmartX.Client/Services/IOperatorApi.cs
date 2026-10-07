@@ -36,6 +36,9 @@ public interface IOperatorApi
     Task<ApiResult<DeviceDesiredState>> SetScenarioAsync(string macAddress, SimulationScenario scenario, CancellationToken cancellationToken = default);
 
     Task<ApiResult<IReadOnlyList<ActivityEntry>>> GetActivityAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Reports that the operator opened a device. Null on success, otherwise why it failed.</summary>
+    Task<ApiProblem?> RecordSelectionAsync(string macAddress, CancellationToken cancellationToken = default);
 }
 
 /// <summary><see cref="IOperatorApi"/> over <see cref="SmartXApiClient"/>.</summary>
@@ -75,6 +78,15 @@ public sealed class OperatorApi(SmartXApiClient api, ApiConnection connection) :
 
     public Task<ApiResult<IReadOnlyList<ActivityEntry>>> GetActivityAsync(CancellationToken cancellationToken = default) =>
         Reported(api.GetActivityAsync(cancellationToken: cancellationToken));
+
+    public async Task<ApiProblem?> RecordSelectionAsync(string macAddress, CancellationToken cancellationToken = default)
+    {
+        var problem = await api.RecordSelectionAsync(macAddress, cancellationToken);
+
+        connection.Report(problem is not { IsUnreachable: true });
+
+        return problem;
+    }
 
     /// <summary>Passes a result through, telling the connection indicator whether the API answered.</summary>
     private async Task<ApiResult<T>> Reported<T>(Task<ApiResult<T>> call)

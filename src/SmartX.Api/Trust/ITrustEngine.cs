@@ -102,4 +102,36 @@ public interface ITrustEngine
 
     /// <summary>Aggregate confidence across the mesh.</summary>
     TrustSummary Summary();
+
+    /// <summary>The kind of failure that weighs most in a node's score now, or null when there is none.</summary>
+    /// <remarks>
+    /// Read when an investigation opens, to say what the engine is blaming. Weights are the decayed ones the score is
+    /// computed from, with the node's own sensitivity applied, so it names the failure that actually pushed the score down.
+    /// </remarks>
+    TrustOutcome? DominantFailure(string macAddress);
+
+    /// <summary>A node's sensitivity to each kind of failure.</summary>
+    IReadOnlyList<SensitivityState> Sensitivity(string macAddress, double floor);
+
+    /// <summary>
+    /// Makes one node less sensitive to one kind of failure, never below a floor, and re-scores it.
+    /// </summary>
+    /// <param name="macAddress">The node.</param>
+    /// <param name="outcome">The kind of failure. Success cannot be adjusted.</param>
+    /// <param name="factor">What the node's scale is multiplied by: below one to dull it.</param>
+    /// <param name="floor">The lowest the scale may go. A node can be made quieter but never deaf.</param>
+    /// <returns>What changed, or null when the node is not tracked or nothing changed.</returns>
+    /// <remarks>
+    /// An operator's "this was a false alarm". It scales the weight of that failure for that node alone: the thresholds,
+    /// the half-life and every other node are untouched. The node is re-scored at once, so an adjustment that is enough to
+    /// bring it out of fault is announced as a recovery like any other.
+    /// </remarks>
+    SensitivityChange? AdjustSensitivity(string macAddress, TrustOutcome outcome, double factor, double floor);
+
+    /// <summary>Gives back sensitivity that an earlier adjustment took, up to the untouched scale of one.</summary>
+    /// <param name="macAddress">The node.</param>
+    /// <param name="outcome">The kind of failure.</param>
+    /// <param name="amount">How much to add to the scale: the difference an adjustment made.</param>
+    /// <returns>What changed, or null when the node is not tracked or nothing changed.</returns>
+    SensitivityChange? RestoreSensitivity(string macAddress, TrustOutcome outcome, double amount);
 }
