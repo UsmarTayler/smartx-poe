@@ -269,7 +269,7 @@ public sealed class TelemetryStream(
             };
 
             _pendingBatches.Enqueue(batch);
-        });
+        }, accept: batch => batch.Topic == RealtimeTopics.Stream);
 
     protected override void OnFetchFailed(ApiProblem problem) => Current = Current with { Problem = problem };
 

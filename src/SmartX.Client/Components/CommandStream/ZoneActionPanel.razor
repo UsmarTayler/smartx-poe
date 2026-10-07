@@ -1,0 +1,181 @@
+@implements IAsyncDisposable
+@inject IOperatorApi Api
+@inject ICommandFeed Commands
+@inject SensorService Catalog
+
+@* One action for every matching device in a zone and beneath it, as a single step that undo reverses as a single step.
+   Nothing is sent until the operator has seen exactly which devices will be affected: "Apply to zone" asks the server
+   for a preview, which is the same recursive walk the real action uses, and shows it in a confirmation. After sending,
+   the children appear with their own states, live, and the whole action is summed up as Applied, Partly applied or Not
+   applied. *@
+<section class="smartx-zone-action" aria-label="Apply an action to a zone">
+    <MudText Typo="Typo.subtitle2" HtmlTag="h3">Apply to zone</MudText>
+
+    <div class="smartx-zone-action__form">
+        <ZonePicker Zones="Catalog.Zones" Value="@_zone" ValueChanged="value => { _zone = value; }" Label="Zone" Placeholder="Choose a zone" ShowRules="false" />
+
+        <MudSelect T="CommandAction" Label="Action" @bind-Value="_action" ToStringFunc="ActionLabel" Variant="Variant.Outlined" Margin="Margin.Dense" AnchorOrigin="Origin.BottomCenter">
+            @foreach (var choice in CommandChoices.ForZone)
+            {
+                <MudSelectItem T="CommandAction" Value="choice.Action">@choice.Label</MudSelectItem>
+            }
+        </MudSelect>
+
+        @if (_action == CommandAction.SetLevel)
+        {
+            <MudNumericField T="double" Label="Level" @bind-Value="_level" Min="0" Max="100" Variant="Variant.Outlined" Margin="Margin.Dense" />
+        }
+
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.AccountTree"
+                   Disabled="@(string.IsNullOrEmpty(_zone) || _busy)" OnClick="PreviewAsync">
+            Apply to zone&hellip;
+        </MudButton>
+    </div>
+
+    @if (_problem is not null)
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="mt-2" role="alert">@_problem</MudAlert>
+    }
+
+    @if (_preview is not null)
+    {
+        <ZoneConfirmation Preview="_preview" Zones="Catalog.Zones" OnConfirm="ConfirmAsync" OnCancel="Cancel" />
+    }
+
+    @if (_result is { } result)
+    {
+        var children = Children(result);
+        var status = CommandRules.StatusOf(children);
+        var (colour, icon, label) = Overall(status);
+
+        <div class="smartx-zone-action__result" role="status" aria-live="polite">
+            <span class="smartx-status" style="--smartx-status: @colour">
+                <MudIcon Icon="@icon" Size="Size.Small" aria-hidden="true" />
+                <span>@label</span>
+            </span>
+            <MudText Typo="Typo.body2">@Describe(result, children)</MudText>
+
+            <ul class="smartx-zone-action__children" aria-label="Each device's state">
+                @foreach (var child in children)
+                {
+                    <li @key="child.Id">
+                        <strong>@Name(child.MacAddress)</strong>
+                        <CommandStateChip State="child.State" />
+                        @if (child.FailureReason is { } reason && child.State is CommandState.Failed or CommandState.TimedOut)
+                        {
+                            <span class="mud-text-secondary">@reason</span>
+                        }
+                    </li>
+                }
+            </ul>
+        </div>
+    }
+</section>
+
+@code {
+    private string? _zone;
+    private CommandAction _action = CommandAction.ValveClose;
+    private double _level = 50;
+    private ZonePreview? _preview;
+    private CompositeCommandResult? _result;
+    private string? _problem;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Commands.Updated += OnCommandsChanged;
+
+        await Commands.StartAsync();
+    }
+
+    // The select would otherwise show the enum's name ("ValveClose") instead of the label the menu items use.
+    private static string ActionLabel(CommandAction action) =>
+        CommandChoices.ForZone.FirstOrDefault(choice => choice.Action == action)?.Label ?? action.ToString();
+
+    private double? Level =>_action == CommandAction.SetLevel ? _level : null;
+
+    private async Task PreviewAsync()
+    {
+        _busy = true;
+        _problem = null;
+        _preview = null;
+
+        var result = await Api.PreviewZoneAsync(_zone!, _action, Level);
+
+        _busy = false;
+
+        // The preview is refused for the reasons the action would be: no such device in the zone, a level one device
+        // cannot take. The reason is shown as the server gave it.
+        if (result.IsSuccess)
+        {
+            _preview = result.Value;
+        }
+        else
+        {
+            _problem = result.Problem.Message;
+        }
+    }
+
+    private async Task ConfirmAsync()
+    {
+        var preview = _preview;
+        _preview = null;
+
+        if (preview is null)
+        {
+            return;
+        }
+
+        _busy = true;
+
+        var result = await Api.IssueZoneCommandAsync(preview.ZoneId, preview.Action, preview.Level);
+
+        _busy = false;
+
+        if (result.IsSuccess)
+        {
+            _result = result.Value;
+        }
+        else
+        {
+            _problem = result.Problem.Message;
+        }
+    }
+
+    private void Cancel() => _preview = null;
+
+    /// <summary>The action's children, each in the state the live feed says it is in now.</summary>
+    private IReadOnlyList<Command> Children(CompositeCommandResult result)
+    {
+        var live = Commands.Current.Commands.Where(command => command.CompositeId == result.CompositeId).ToDictionary(command => command.Id);
+
+        return [.. result.Commands.Select(command => live.GetValueOrDefault(command.Id) ?? command)];
+    }
+
+    private string Describe(CompositeCommandResult result, IReadOnlyList<Command> children)
+    {
+        var action = CommandChoices.Describe(children.Count > 0 ? children[0] : result.Commands[0]);
+
+        return $"{action} on {children.Count} {(children.Count == 1 ? "device" : "devices")}.";
+    }
+
+    private string Name(string mac) =>
+        Catalog.Sensors.FirstOrDefault(sensor => string.Equals(sensor.MacAddress, mac, StringComparison.OrdinalIgnoreCase))?.Location.Room ?? mac;
+
+    private static (string Colour, string Icon, string Label) Overall(CompositeStatus status) => status switch
+    {
+        CompositeStatus.Applied => ("#0ca30c", Icons.Material.Filled.CheckCircle, "Applied"),
+        CompositeStatus.PartiallyApplied => ("#fab219", Icons.Material.Filled.Warning, "Partly applied"),
+        CompositeStatus.NotApplied => ("#d03b3b", Icons.Material.Filled.Error, "Not applied"),
+        _ => ("#6b6a66", Icons.Material.Filled.HourglassEmpty, "In progress"),
+    };
+
+    private void OnCommandsChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public async ValueTask DisposeAsync()
+    {
+        Commands.Updated -= OnCommandsChanged;
+
+        await Commands.StopAsync();
+    }
+}

@@ -1,0 +1,158 @@
+@implements IAsyncDisposable
+@inject LiveStream Stream
+@inject DeviceSearchService Search
+@inject SensorService Catalog
+@inject AppState State
+
+@* The live stream. Incoming readings, newest first, from the one real-time connection, in a bounded buffer. Critical
+   readings are pinned above the list with their lane, and stay until acknowledged or their time runs out.
+
+   Only the rows on screen are rendered: the list is virtualised, so five hundred rows cost about as much as twenty.
+   The panel redraws only when the stream, the filters or the pause state changed, and it asks nothing of its parent. *@
+<MudPaper Outlined="true" Class="smartx-stream pa-3" role="region" aria-label="Live stream">
+    <div class="smartx-stream__header">
+        <MudText Typo="Typo.h6" HtmlTag="h2">Live stream</MudText>
+
+        <div class="smartx-stream__controls">
+            @if (Stream.Paused)
+            {
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning" Icon="@Icons.Material.Filled.Pause"
+                         aria-label="@($"{Stream.PendingCount} readings waiting")" role="status">
+                    @Stream.PendingCount.ToString("N0") waiting@(Stream.PendingDropped > 0 ? $" ({Stream.PendingDropped:N0} dropped)" : "")
+                </MudChip>
+            }
+
+            <MudButton Variant="@(Stream.Paused ? Variant.Filled : Variant.Outlined)" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@(Stream.Paused ? Icons.Material.Filled.PlayArrow : Icons.Material.Filled.Pause)"
+                       OnClick="TogglePause" aria-pressed="@(Stream.Paused ? "true" : "false")">
+                @(Stream.Paused ? "Resume" : "Pause")
+            </MudButton>
+        </div>
+    </div>
+
+    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+        @_rows.Count.ToString("N0") shown@(Filtered ? " for the devices that match the search" : string.Empty) of the last @Stream.RowCount.ToString("N0") kept.
+        @if (Stream.Paused)
+        {
+            <span> Paused: new readings are held and will appear in order when you resume.</span>
+        }
+    </MudText>
+
+    @if (_pinned.Count > 0)
+    {
+        <ul class="smartx-pinned" aria-label="Critical readings">
+            @foreach (var pinned in _pinned)
+            {
+                <li class="smartx-pinned__item" @key="pinned.Alert.Sequence">
+                    <span class="smartx-status" style="--smartx-status: #d03b3b">
+                        <MudIcon Icon="@Icons.Material.Filled.PriorityHigh" Size="Size.Small" aria-hidden="true" />
+                        <span>Critical</span>
+                    </span>
+                    <span class="smartx-pinned__what">
+                        <strong>@Name(pinned.Alert.MacAddress)</strong>: @pinned.Alert.Reason,
+                        @pinned.Alert.Value.ToString("0.##") @pinned.Alert.Unit
+                    </span>
+                    <span class="smartx-pinned__lane mud-text-secondary">took the critical lane</span>
+                    <MudButton Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Check"
+                               OnClick="() => Stream.Acknowledge(pinned.Alert.Sequence)"
+                               aria-label="@($"Acknowledge the critical reading from {Name(pinned.Alert.MacAddress)}")">
+                        Acknowledge
+                    </MudButton>
+                </li>
+            }
+        </ul>
+    }
+
+    @if (_rows.Count == 0)
+    {
+        <EmptyState Icon="@Icons.Material.Outlined.Podcasts"
+                    Title="@(Filtered ? "No readings for these devices yet" : "Waiting for readings")"
+                    Text="@(Filtered ? "Clear a filter to see the rest of the mesh." : "Readings appear here as the gateway accepts them.")" />
+    }
+    else
+    {
+        <div class="smartx-stream__list" role="log" aria-live="off" aria-label="Readings, newest first" tabindex="0">
+            <Virtualize Items="_rows" Context="row" ItemSize="40" OverscanCount="6">
+                <div class="smartx-stream__row @(row.Critical ? "smartx-stream__row--critical" : "")" @key="row.Id">
+                    <span class="smartx-stream__time smartx-mono">@ReadingFormatter.Time(row.Reading.Timestamp)</span>
+                    <span class="smartx-stream__device">@Name(row.Reading.MacAddress)</span>
+                    <span class="smartx-stream__value smartx-mono">@ValueOf(row.Reading)</span>
+                    @if (row.Critical)
+                    {
+                        <span class="smartx-status" style="--smartx-status: #d03b3b">
+                            <MudIcon Icon="@Icons.Material.Filled.PriorityHigh" Size="Size.Small" aria-hidden="true" />
+                            <span>Critical</span>
+                        </span>
+                    }
+                </div>
+            </Virtualize>
+        </div>
+    }
+</MudPaper>
+
+@code {
+    private List<StreamRow> _rows = [];
+    private IReadOnlyList<PinnedCritical> _pinned = [];
+    private IReadOnlyDictionary<string, SensorRegistration> _byMac = new Dictionary<string, SensorRegistration>();
+    private IReadOnlyList<SensorRegistration>? _indexed;
+    private bool _dirty = true;
+
+    private bool Filtered => Search.AllowedDevices is not null;
+
+    // Redraws only for a reason. A parent rendering does not pass through here, and the events below set the flag.
+    protected override bool ShouldRender() => _dirty;
+
+    protected override void OnAfterRender(bool firstRender) => _dirty = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Stream.Changed += OnChanged;
+        Search.Changed += OnChanged;
+        Catalog.Changed += OnChanged;
+
+        Refresh();
+
+        await Stream.StartAsync();
+    }
+
+    private void Refresh()
+    {
+        if (!ReferenceEquals(_indexed, Catalog.Sensors))
+        {
+            _byMac = Catalog.Sensors.ToDictionary(sensor => sensor.MacAddress, StringComparer.OrdinalIgnoreCase);
+            _indexed = Catalog.Sensors;
+        }
+
+        _rows = Stream.Rows(Search.AllowedDevices);
+        _pinned = Stream.Pinned;
+    }
+
+    private void OnChanged()
+    {
+        _ = InvokeAsync(() =>
+        {
+            Refresh();
+            _dirty = true;
+            StateHasChanged();
+        });
+    }
+
+    private void TogglePause()
+    {
+        Stream.SetPaused(!Stream.Paused);
+    }
+
+    private string Name(string mac) => _byMac.TryGetValue(mac, out var sensor) ? sensor.Location.Room : mac;
+
+    private static string ValueOf(ReadingPush reading) =>
+        reading.IsState ? (reading.Value != 0 ? "engaged" : "released") : $"{ReadingFormatter.Number(reading.Value)} {reading.Unit}";
+
+    public async ValueTask DisposeAsync()
+    {
+        Stream.Changed -= OnChanged;
+        Search.Changed -= OnChanged;
+        Catalog.Changed -= OnChanged;
+
+        await Stream.StopAsync();
+    }
+}

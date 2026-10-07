@@ -30,6 +30,7 @@ The brief has three pillars. Parts 1 and 2 deliver the first and lay the ground 
 - [Commands and undo](#commands-and-undo)
 - [History, timelines, alerts and search](#history-timelines-alerts-and-search)
 - [Real-time push](#real-time-push)
+- [The Command Stream page](#the-command-stream-page)
 - [Feature walkthrough](#feature-walkthrough)
 - [Where the assessed concepts live](#where-the-assessed-concepts-live)
 - [Configuration reference](#configuration-reference)
@@ -952,6 +953,112 @@ The critical alert is announced about forty times faster than an ordinary readin
 through to the client. The latency of an ordinary reading is mostly the 250 ms flush window by design; shorten
 `Realtime:FlushInterval` to trade messages for latency.
 
+## The Command Stream page
+
+`/command-stream` ("Real-Time Command Stream and History" in the menu) is where Part 2 is visible. It is one page on the
+one real-time connection; it adds no connection of its own and its components never call `HttpClient`, only services do.
+Everything on it survives leaving and coming back: the search text and filters, the open device, whether the stream is
+paused and the timeline range live in `AppState`, and the stream's buffer, the search result and the pinned critical
+readings live in scoped services.
+
+| Region | What it shows | Where it comes from |
+| --- | --- | --- |
+| Ingestion pipeline | Depth, processed per second and average and longest wait for each lane, the 503 count, and the critical lane's advantage over the standard one | `IPipelineFeed`, the lane figures the API measures; the rate is the difference between two samples |
+| Live stream | Readings, newest first, in a bounded buffer; critical readings pinned above it until acknowledged or 30 s pass; Pause with a count of held readings and an ordered resume | `ITelemetryStream` into `LiveStream`, which holds two `TelemetryRingBuffer<T>`s |
+| Devices | Search (300 ms debounce) and filters (text, category, actuator kind, zone including sub-zones, band, alert kind); a device in detail with its current reading, band, alerts, timeline and controls; zone-wide actions | `/api/devices/search`, `/api/sensors/{mac}/timeline`, the `device:{mac}` topic |
+| Undo stack | Actions, top first, with the stack depth; Undo last; the result exactly as the API reports it | `/api/commands/undo-stack`, `/api/commands/undo`, `/api/commands/limits` |
+| Alerts | Kind, device, raised-at, "suppressed ×N", acknowledged flag and an Acknowledge button; most severe first, then newest | `IAlertFeed` |
+| Recent activity | What the operator did, collapsed by default | `/api/activity` |
+
+The layout is three columns on a desktop, two at 768 px and one at 400 px, where the order is alerts, pipeline, device search, stream.
+It is decided by container queries on the page, not by the window, so the drawer opening does not break it.
+
+### What each data structure looks like on this page
+
+| Structure | What a marker sees |
+| --- | --- |
+| `Queue<T>` (the standard lane) | "Standard queue, FIFO": its depth against the 10,000 bound, readings processed per second and the average and longest wait. The "rejected (503)" chip is the bound being hit. |
+| `PriorityQueue` (the critical lane) | "Critical lane, priority queue, taken first": the same figures for the lane that jumps the backlog, and the strip's sentence comparing the two waits. |
+| `Stack<T>` (undo) | The undo panel: the most recent action on top, "Undo last" pops exactly that one, and "n of up to 20 actions" is the bound. |
+| `SortedDictionary` (history) | The timeline chart: a time-ordered range query returned as min, max and average buckets, with the commands, alerts and trust changes that happened in the range as markers. |
+| `HashSet` | "suppressed ×N" on an alert: `Add` returned `false` N times, so the repeat was counted and not shown again. The search filters are the same idea, one set per filter, intersected. |
+| `TelemetryRingBuffer<T>` | "500 shown of the last 500 kept": the stream is a fixed number of slots and the newest overwrite the oldest, so a stream left open for a day is the same size as one opened a minute ago. |
+
+### Seeing a critical reading overtake the standard queue
+
+With the defaults the worker drains the queue faster than the simulated fleet fills it, so both lanes are empty and the strip says
+they take about the same time. That is correct, and it shows nothing. To build a backlog on purpose, give the worker a
+per-reading cost (`Ingestion:DemoProcessingDelay`, off by default) and speed the fleet up:
+
+```bash
+SMARTX_PROCESS_DELAY=00:00:00.004 SMARTX_RATE=50 SMARTX_TICK=00:00:00.050 docker compose up -d
+```
+
+1. Open `/command-stream`. The standard queue's depth climbs; the critical lane stays at 0.
+2. In the strip choose a device under "Simulate on" (Feeder 1, say) and press **Simulate critical event**. This sets the
+   device's scenario through the shadow endpoint; it reports a critical reading from its next poll.
+3. Within a few seconds a critical reading is pinned at the top of the live stream, and the strip's wording names it.
+   The lane figures are the pipeline's own, not estimates.
+
+Measured this way (4 ms per reading, the fleet at 50×): critical lane average wait **47 ms**, standard lane **19,183 ms**, which the strip
+reported as "408.7× sooner", with the standard lane at 9,986 of 10,000 and 430 readings refused with 503. Press **Back to normal**
+and run `docker compose up -d` without the variables to return to the defaults.
+
+### A zone-wide command, and undoing it
+
+1. Under "Apply to zone" choose **Zone 3 - Cold Store** and the action **Close valve**, then **Apply to zone...**.
+2. The confirmation lists the four valves it will reach (Freezer Glycol Valve, Chiller Valve A, Chiller Valve B, Freezer Valve)
+   and says nothing has been sent. The list comes from the server's own recursive walk (`/api/commands/zone/preview`), so what
+   is shown is what is sent to. **Cancel** sends nothing.
+3. **Send to 4 devices**. Each child appears with its own state, Pending then Acknowledged, and the whole reads **Applied**, or
+   **Partly applied** or **Not applied** if some or all did not answer.
+4. In the undo stack choose **Undo last**. Each device gets a restore command to its previous state, and the panel shows what happened per device.
+
+To see a refusal: send `RelayOn` to the silent relay `B8:27:EB:10:00:20` (from its detail panel, or with `curl`). After the 30 s
+pending timeout it is **Timed out**, and the undo panel already says "Cannot be undone" with the server's reason, and the
+button reads "Clear last". Pressing it shows **Refused** with the reason, exactly as the API words it. The reason comes from
+`CommandRules`, shared by the API and the client, so the page cannot promise an undo the server refuses.
+
+### The timeline chart
+
+Plain Blazor and SVG, no library and no script. Each bucket is a light min-to-max band, drawn first, with the average as a 2 px
+line over it, so a spike that the average hides is still the top of the band. There is one y-axis, gridlines are recessive and
+the axis labels are in the secondary text colour. Silence is a gap and is not joined across. Events sit on the time axis as
+markers 16 px across, each with its own shape and icon (command: diamond, alert raised: triangle, alert cleared: circle, trust change:
+square), so they are told apart without colour. Hovering a bucket, or using the arrow keys, shows a crosshair and a tooltip with
+the bucket's time, minimum, maximum, average, count and events. A state sensor is a step line. **Show as table** gives the same data as a table.
+The request asks for at most `width / 3` buckets, so a phone gets a few dozen and a wide screen a couple of hundred.
+
+### Responsiveness under load
+
+The simulator's `SMARTX_RATE` multiplies every device's reporting rate (`SMARTX_TICK` is how often it wakes; lower it as the rate goes
+up). The page was run against the Docker stack at each rate and the main thread was watched with a `longtask` observer (anything
+over 50 ms) for 13 seconds. The API's queue was empty and nothing was refused at any of these rates (no demo delay).
+
+| Rate | Readings processed per second | Long tasks in 13 s | What it means |
+| --- | --- | --- | --- |
+| 10× | 78 | 0 | Comfortable |
+| 50× | 412 | 0 | Comfortable |
+| 100× | 826 | 0 | Comfortable |
+| 150× | 1,213 | 0 | Comfortable |
+| 250× | 1,650 | 133 (24 s in total, longest 380 ms) | The browser's main thread is saturated |
+
+So the page stays comfortable to about 1,200 readings per second, which is 150 times the 48-device fleet's normal rate, and it stops
+being comfortable between that and about 1,650. The API was not the limit: it kept up at 250× with an empty queue
+(about 16% CPU in its container). What keeps the page cheap until then: readings arrive in batches every 250 ms and not one message
+each; the stream list is virtualised (about 25 rows in the page for 500 kept); the buffers are bounded; and the panels override
+`ShouldRender`, so a parent rendering or an unrelated change does not redraw them. One caveat: the browser pane was not on screen
+during these runs, so they measure the script and WebAssembly work and not painting.
+
+### Tests
+
+`CommandStreamComponentTests.cs` renders the real components in bUnit on a fake hub, a fake API and a fake clock: rapid typing is one
+request after 300 ms; pausing holds readings and resuming applies them in order; the stream and the held queue are bounded; a critical
+reading pins, is acknowledged or times out; a command's state chip follows Pending, Delivered, Acknowledged; the undo panel shows
+refusal reasons and partial results; the zone confirmation lists its devices before anything is sent; the chart draws the band, the
+line and the markers; and leaving the page and coming back restores the filters, the result and the open device.
+`CommandStreamModelTests.cs` covers the lane rates, alert order, which commands a device is offered, chart sizing and the chart model.
+
 ## Feature walkthrough
 
 These steps assume the API and the device simulator are both running, so there is a fleet to look at. Each one also works on an empty API once
@@ -1047,6 +1154,12 @@ Restart the API, or the Docker stack, and the attachments are still there.
 | Batching, coalescing and immediate sends | [`RealtimeBroadcaster.cs`](src/SmartX.Api/Realtime/RealtimeBroadcaster.cs) | the class comment explains which messages are which and why; one loop sends, so messages leave in numbered order |
 | Snapshot plus stream | [`RealtimeFeed.cs`](src/SmartX.Client/Realtime/RealtimeFeed.cs) | join, snapshot, then apply only pushes newer than the snapshot; reference-counted start and stop |
 | One connection, reconnect and fallback | [`RealtimeConnection.cs`](src/SmartX.Client/Realtime/RealtimeConnection.cs) | the state machine: Live, Reconnecting, Polling, and the upgrade back |
+| Bounded buffers on the client | [`LiveStream.cs`](src/SmartX.Client/CommandStream/LiveStream.cs) | two `TelemetryRingBuffer<StreamRow>`: one for the stream and one for readings held while paused; resume moves the held ones in arrival order, and the class comment explains why a critical reading pins even while paused |
+| Debounce with out-of-order answers | [`DeviceSearchService.cs`](src/SmartX.Client/CommandStream/DeviceSearchService.cs) | `Request` cancels the wait of the one before it; `SearchAsync` numbers each request and only the newest may set the result |
+| Chart as data, then markup | [`TimelineChartModel.cs`](src/SmartX.Client/CommandStream/TimelineChartModel.cs), [`TimelineChart.razor`](src/SmartX.Client/Components/CommandStream/TimelineChart.razor) | the model works out the band, line, ticks and markers as numbers and strings, away from the component that draws them; gaps stay gaps |
+| Rules shared by server and client | [`CommandRules.cs`](src/SmartX.Shared/Commands/CommandRules.cs) | `WhyNotUndoable` and `StatusOf`: the server refuses with these words and the client explains with the same ones |
+| Redraw only on change | [`LiveStreamPanel.razor`](src/SmartX.Client/Components/CommandStream/LiveStreamPanel.razor) | `ShouldRender` returns a dirty flag that only the stream, the search and the catalogue set |
+| Component tests | [`CommandStreamComponentTests.cs`](tests/SmartX.Tests/CommandStreamComponentTests.cs), [`StreamComponentKit.cs`](tests/SmartX.Tests/StreamComponentKit.cs) | bUnit against the real feeds on a fake hub, a fake API and a fake clock |
 | Dictionary and HashSet | [`TrustEngine.cs`](src/SmartX.Api/Trust/TrustEngine.cs) | `_nodes`, keyed by MAC for O(1) lookup per packet, and `_degraded`, where each failing node appears once |
 | The ingestion pipeline, stage by stage | [`TelemetryEndpoints.cs`](src/SmartX.Api/Endpoints/TelemetryEndpoints.cs) | `IngestBatchAsync`, with each stage numbered in comments, and `TryCreatePacket` |
 | Polymorphic JSON | [`ITelemetryPacket.cs`](src/SmartX.Shared/Packets/ITelemetryPacket.cs) | `[JsonDerivedType]` over the packet types |
@@ -1137,6 +1250,7 @@ In `src/SmartX.Client/wwwroot/appsettings.json`. Every value is optional.
 | `Ingestion:MaxCriticalQueueDepth` | `1000` | The most readings the critical lane holds, bounded separately so a full standard lane never blocks an alert. |
 | `Ingestion:RetryAfterSeconds` | `5` | The value of the `Retry-After` header on a `503`. |
 | `Ingestion:MaxConsecutiveCritical` | `20` | After this many critical readings in a row, the worker takes one normal reading if one is waiting. The starvation valve. |
+| `Ingestion:DemoProcessingDelay` | `00:00:00` | How long the worker pauses after each reading. Zero, and for demonstrations only: it builds a backlog so the critical lane can be seen overtaking it. |
 | `Ingestion:CriticalRules` | see [Ingestion queues](#ingestion-queues) | The thresholds that make a reading critical: category, unit, an upper and/or lower limit, a severity (lower is more urgent) and a reason. Set as a list in `appsettings.json`. |
 
 ### Simulator: `Simulator`
@@ -1194,6 +1308,10 @@ Bound by `SmartX.DeviceSimulator`, from `src/SmartX.DeviceSimulator/appsettings.
 | --- | --- | --- |
 | `ApiBaseAddress` | `http://localhost:5266/` | Where the client sends API requests. It can be absolute, or relative to the page (Docker uses `/`). |
 | `TrustFeed:PollIntervalSeconds` | `3` | How often the trust panel refreshes. Each refresh is two requests, however many nodes there are. |
+| `CommandStream:SearchDebounce` | `00:00:00.300` | How long typing must pause before a device search is sent. |
+| `CommandStream:StreamCapacity` | `500` | The most readings the live stream keeps, and the most it holds while paused. |
+| `CommandStream:PinDuration` | `00:00:30` | How long a critical reading stays pinned if nobody acknowledges it. |
+| `CommandStream:MaxPinned` | `20` | The most critical readings pinned at once. |
 
 In Docker these two come from the client container's `API_BASE_ADDRESS` and
 `TRUST_POLL_INTERVAL_SECONDS` environment variables. They are written into `appsettings.json` when the
@@ -1211,6 +1329,9 @@ These go in `.env`:
 | `SMARTX_DEVICE_COUNT` | `48` | Becomes `Simulator__DeviceCount`. |
 | `SMARTX_SCENARIO_MIX` | `Demo` | Becomes `Simulator__Mix`: `Demo` or `Nominal`. |
 | `SMARTX_BACKFILL` | `00:10:00` | Becomes `Simulator__BackfillDuration`. |
+| `SMARTX_RATE` | `1` | Becomes `Simulator__ReportingRateMultiplier`: how many times faster than normal the fleet reports. |
+| `SMARTX_TICK` | `00:00:00.500` | Becomes `Simulator__TickInterval`: how often the simulator wakes to send what is due. Lower it as the rate rises. |
+| `SMARTX_PROCESS_DELAY` | `00:00:00` | Becomes `Ingestion__DemoProcessingDelay`. Demo only; see [the Command Stream page](#seeing-a-critical-reading-overtake-the-standard-queue). |
 | `SMARTX_CLIENT_PORT` | `8080` | Host port for the client. Open this one in the browser. |
 | `SMARTX_API_PORT` | `5266` | Host port for the API, for `curl` and the scenario endpoint. |
 
@@ -1287,6 +1408,7 @@ This demonstrates the *encryption mechanism*, not production key management.
 | `POST` | `/api/telemetry/batch` | A jagged batch of readings, queued in order: `202` with per-reading errors, or `503` |
 | `GET` | `/api/pipeline/stats` | Depth, throughput and wait time per lane, and the count of `503` refusals |
 | `GET` | `/api/sensors/{mac}/telemetry` | Retained readings, oldest first |
+| `GET` | `/api/telemetry/recent` | Retained readings for every registered sensor, keyed by MAC, in one response. A sensor with none has an empty list. The telemetry page loads with this single request |
 | `GET` | `/api/zones` | The zone hierarchy, nested |
 | `GET` | `/api/trust` | Every node worst first, each with recent history |
 | `GET` | `/api/trust/summary` | Mesh confidence and per-band counts |
@@ -1300,6 +1422,8 @@ This demonstrates the *encryption mechanism*, not production key management.
 | `DELETE` | `/api/attachments/{id}` | `204`, or `404` |
 | `POST` | `/api/commands` | `{ "macAddress", "action", "level"? }` issues a command to one actuator: `202`, `400` (action doesn't match the device), `404` |
 | `POST` | `/api/commands/zone` | `{ "zoneId", "action", "level"? }` fans out to every matching actuator beneath a zone as one undoable step: `202`, `400`, `404` |
+| `GET` | `/api/commands/zone/preview` | `?zoneId=&action=&level=`: the devices a zone-wide action would reach, from the same recursive walk the real action uses, without sending anything. `200`, `400`, `404` |
+| `GET` | `/api/commands/limits` | The undo depth and the command timeouts, so a client can show them and not guess |
 | `GET` | `/api/commands` | Commands, newest first. Filter with `?mac=`, `?state=` and `?limit=` |
 | `GET` | `/api/commands/{id}` | One command with its history, or `404` |
 | `POST` | `/api/commands/{id}/ack` | The device's acknowledgement: `200` (also for an exact repeat), `409` (not delivered, or already in another final state), `404` |
@@ -1319,6 +1443,7 @@ This demonstrates the *encryption mechanism*, not production key management.
 | `GET` | `/api/realtime/commands` | Recent commands, as of a sequence number |
 | `GET` | `/api/realtime/pipeline` | Pipeline statistics, as of a sequence number |
 | `GET` | `/api/realtime/stream` | The latest reading from each node, as of a sequence number |
+| `GET` | `/api/realtime/device/{mac}` | One device's recent readings, as of a sequence number: the snapshot behind its `device:{mac}` topic. `404` |
 | `WS` | `/hubs/telemetry` | The SignalR hub. `Subscribe(topic)`, `Unsubscribe(topic)` and `GetTransport()`; topics are `trust`, `alerts`, `commands`, `pipeline`, `stream` and `device:{mac}` |
 | `GET` | `/api/simulation` | The desired state recorded for each device |
 | `POST` | `/api/simulation/{mac}/scenario` | `{ "scenario": "Drift" }` records the desired state: `202`, `400` (not a scenario), `404` |

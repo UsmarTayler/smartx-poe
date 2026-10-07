@@ -99,6 +99,33 @@ public enum UndoOutcome
     NothingToUndo
 }
 
+/// <summary>The limits the command system runs with, so a client can show them and not guess.</summary>
+/// <param name="MaxUndoDepth">How many operator actions the undo stack remembers.</param>
+/// <param name="PendingTimeoutSeconds">How long a command may wait for its device to collect it.</param>
+/// <param name="DeliveredTimeoutSeconds">How long a delivered command may wait for confirmation.</param>
+public sealed record CommandLimits(int MaxUndoDepth, double PendingTimeoutSeconds, double DeliveredTimeoutSeconds);
+
+/// <summary>One device a zone-wide action would reach.</summary>
+/// <param name="MacAddress">The actuator.</param>
+/// <param name="Room">The room it was registered in, which in the demo fleet is the device's own label.</param>
+/// <param name="ZoneId">The zone it is deployed in, which may be beneath the zone that was named.</param>
+/// <param name="Kind">What sort of actuator it is.</param>
+/// <param name="CurrentValue">Its state as the gateway last observed it, or null if never observed.</param>
+public sealed record ZoneTarget(string MacAddress, string Room, string ZoneId, ActuatorKind Kind, double? CurrentValue);
+
+/// <summary>What a zone-wide action would do, without doing it.</summary>
+/// <param name="ZoneId">The zone named.</param>
+/// <param name="ZoneName">Its name.</param>
+/// <param name="Action">The action asked for.</param>
+/// <param name="Level">The level, for a dimmer action.</param>
+/// <param name="Devices">Every device the action would reach, found by the same walk the real action uses.</param>
+/// <remarks>
+/// A confirmation dialog shows this before anything is sent, so a zone-wide action never fans out to devices the
+/// operator did not see. It comes from the server's own recursive walk, not a copy of it on the client, so what is
+/// shown and what happens cannot disagree.
+/// </remarks>
+public sealed record ZonePreview(string ZoneId, string ZoneName, CommandAction Action, double? Level, IReadOnlyList<ZoneTarget> Devices);
+
 /// <summary>What an undo did, exactly.</summary>
 /// <param name="Outcome">The overall result.</param>
 /// <param name="Message">A sentence saying what happened, for an operator.</param>

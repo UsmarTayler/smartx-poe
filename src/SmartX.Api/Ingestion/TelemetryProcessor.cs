@@ -31,8 +31,12 @@ internal sealed class TelemetryProcessor(
     IHistoryStore history,
     AlertTracker alerts,
     ProcessedReadings processed,
-    ILogger<TelemetryProcessor> logger) : BackgroundService
+    ILogger<TelemetryProcessor> logger,
+    Microsoft.Extensions.Options.IOptions<IngestionOptions>? options = null) : BackgroundService
 {
+    // Optional so the worker can still be built directly in a test. Zero in every normal run; see DemoProcessingDelay.
+    private readonly TimeSpan _demoDelay = options?.Value.DemoProcessingDelay ?? TimeSpan.Zero;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -61,6 +65,18 @@ internal sealed class TelemetryProcessor(
                     "Failed to process reading {Receipt} from {Node}. The worker continues with the next.",
                     reading.ReceiptId,
                     reading.Packet.NodeId);
+            }
+
+            if (_demoDelay > TimeSpan.Zero)
+            {
+                try
+                {
+                    await Task.Delay(_demoDelay, stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    return;
+                }
             }
         }
     }

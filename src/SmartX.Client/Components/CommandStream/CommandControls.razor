@@ -1,0 +1,136 @@
+@implements IAsyncDisposable
+@inject IOperatorApi Api
+@inject ICommandFeed Commands
+
+@* Manual override for one actuator. The controls are made from the device's kind and offer nothing else: a pump gets on and
+   off, a relay gets on and off, a valve gets open and close, a dimmer gets a level. So a command that does not match the
+   device cannot be sent from here. After sending, the command's state follows it live, Pending to Delivered to
+   Acknowledged, or Timed out or Failed, each with an icon and a word. *@
+<section class="smartx-commands" aria-label="@($"Commands for {Sensor.Location.Room}")">
+    <MudText Typo="Typo.subtitle2" HtmlTag="h3">Override</MudText>
+
+    @if (Sensor.ActuatorKind is { } kind)
+    {
+        @if (kind == ActuatorKind.Dimmer)
+        {
+            <div class="smartx-commands__level">
+                <MudSlider T="double" Min="Sensor.ExpectedRange.Minimum" Max="Sensor.ExpectedRange.Maximum" Step="1"
+                           @bind-Value="_level" Color="Color.Primary" aria-label="Level">
+                    Level: @_level.ToString("0") @Sensor.Unit
+                </MudSlider>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" StartIcon="@Icons.Material.Filled.Tune"
+                           Disabled="_busy" OnClick="() => SendAsync(CommandAction.SetLevel, _level)">
+                    Set level to @_level.ToString("0")
+                </MudButton>
+            </div>
+        }
+        else
+        {
+            <div class="smartx-commands__buttons">
+                @foreach (var choice in CommandChoices.For(kind))
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" StartIcon="@choice.Icon"
+                               Disabled="_busy" OnClick="() => SendAsync(choice.Action, null)">
+                        @choice.Label
+                    </MudButton>
+                }
+            </div>
+        }
+    }
+
+    @if (_problem is not null)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Variant="Variant.Outlined" Class="mt-2" role="alert">@_problem</MudAlert>
+    }
+
+    @if (_recent.Count > 0)
+    {
+        <ul class="smartx-commands__recent" aria-label="Recent commands for this device, newest first">
+            @foreach (var command in _recent)
+            {
+                <li @key="command.Id">
+                    <span>@CommandChoices.Describe(command)</span>
+                    <CommandStateChip State="command.State" />
+                    <span class="mud-text-secondary">@ReadingFormatter.Time(command.IssuedAt)</span>
+                    @if (command.FailureReason is { } reason && command.State is CommandState.Failed or CommandState.TimedOut)
+                    {
+                        <span class="mud-text-secondary smartx-commands__reason">@reason</span>
+                    }
+                </li>
+            }
+        </ul>
+    }
+</section>
+
+@code {
+    private const int Shown = 4;
+
+    private double _level;
+    private bool _busy;
+    private string? _problem;
+    private List<Command> _issued = [];
+    private IReadOnlyList<Command> _recent = [];
+
+    [Parameter, EditorRequired]
+    public SensorRegistration Sensor { get; set; } = default!;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _level = Sensor.ExpectedRange.Minimum;
+
+        Commands.Updated += OnCommandsChanged;
+        Recompute();
+
+        await Commands.StartAsync();
+    }
+
+    private async Task SendAsync(CommandAction action, double? level)
+    {
+        _busy = true;
+        _problem = null;
+
+        var result = await Api.IssueCommandAsync(Sensor.MacAddress, action, level);
+
+        _busy = false;
+
+        if (result.IsSuccess)
+        {
+            // Kept so the command shows at once, in Pending, before the feed has told us about it.
+            _issued.Add(result.Value);
+            Recompute();
+        }
+        else
+        {
+            _problem = result.Problem.Message;
+        }
+    }
+
+    /// <summary>The device's latest commands, taking each one's state from the live feed when the feed has it.</summary>
+    private void Recompute()
+    {
+        var live = Commands.Current.Commands.Where(command => string.Equals(command.MacAddress, Sensor.MacAddress, StringComparison.OrdinalIgnoreCase));
+        var fromFeed = live.ToDictionary(command => command.Id);
+
+        _recent =
+        [
+            .. _issued
+                .Select(command => fromFeed.GetValueOrDefault(command.Id) ?? command)
+                .Concat(fromFeed.Values.Where(command => _issued.All(issued => issued.Id != command.Id)))
+                .OrderByDescending(command => command.IssuedAt)
+                .Take(Shown),
+        ];
+    }
+
+    private void OnCommandsChanged()
+    {
+        Recompute();
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Commands.Updated -= OnCommandsChanged;
+
+        await Commands.StopAsync();
+    }
+}

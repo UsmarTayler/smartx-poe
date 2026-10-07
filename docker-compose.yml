@@ -19,6 +19,8 @@ services:
       # devices in them come from the simulator over HTTP.
       Zones__Hierarchy: ${SMARTX_ZONE_HIERARCHY:-Demo}
       Ingestion__MaxQueueDepth: ${SMARTX_QUEUE_DEPTH:-10000}
+      # Zero normally. Set above zero to give the worker a per-reading cost and build a backlog on purpose.
+      Ingestion__DemoProcessingDelay: ${SMARTX_PROCESS_DELAY:-00:00:00}
     volumes:
       # Encrypted files and their index, kept across container restarts and rebuilds.
       - attachments:/data/attachments
@@ -55,6 +57,8 @@ services:
       Simulator__DeviceCount: ${SMARTX_DEVICE_COUNT:-48}
       Simulator__Mix: ${SMARTX_SCENARIO_MIX:-Demo}
       Simulator__BackfillDuration: ${SMARTX_BACKFILL:-00:10:00}
+      Simulator__ReportingRateMultiplier: ${SMARTX_RATE:-1}
+      Simulator__TickInterval: ${SMARTX_TICK:-00:00:00.500}
     depends_on:
       api:
         # Health checks narrow the start-up race, they do not remove it: the API can still restart later,

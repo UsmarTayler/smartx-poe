@@ -339,6 +339,19 @@ public sealed class FakeSnapshots : IRealtimeSnapshots
 
         return Task.FromResult(ApiResult<StreamSnapshot>.Success(Stream()));
     }
+
+    public Func<string, DeviceSnapshot> Device { get; set; } = mac => new DeviceSnapshot(0, mac, []);
+
+    public int DeviceCalls => Volatile.Read(ref _deviceCalls);
+
+    private int _deviceCalls;
+
+    public Task<ApiResult<DeviceSnapshot>> GetDeviceAsync(string macAddress, CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _deviceCalls);
+
+        return Task.FromResult(ApiResult<DeviceSnapshot>.Success(Device(macAddress)));
+    }
 }
 
 /// <summary>An HTTP handler that answers the polling feed's two trust requests and counts them.</summary>

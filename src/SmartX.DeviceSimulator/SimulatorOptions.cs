@@ -49,6 +49,16 @@ public sealed class SimulatorOptions
     /// <summary>How often the fleet checks which devices are due to report.</summary>
     public TimeSpan TickInterval { get; set; } = TimeSpan.FromMilliseconds(500);
 
+    /// <summary>How many times faster than normal the fleet reports. 1 is the demo's pace.</summary>
+    /// <remarks>
+    /// For load testing the dashboard. Each device's reporting interval is divided by this, so 10 makes every device
+    /// report ten times as often. A device reports at most once per <see cref="TickInterval"/>, so to go beyond two
+    /// readings a second per device, lower the tick as well. Only the live readings speed up: the backfill on start
+    /// and each device's registered heartbeat do not, so trust scoring still expects the interval it was registered
+    /// with.
+    /// </remarks>
+    public double ReportingRateMultiplier { get; set; } = 1;
+
     /// <summary>The chance that an actuator fails to apply a command it was given, from 0 to 1.</summary>
     /// <remarks>Zero by default, so commands succeed and demos are predictable. Raise it to see Failed commands.</remarks>
     public double CommandFailureRate { get; set; }

@@ -1,0 +1,14 @@
+@* A command's state as icon, word and colour together: Pending, Delivered, Acknowledged, Failed, Timed out or Cancelled.
+   The word is in the body colour so it is legible whatever the status colour's contrast; the colour sits on the icon and
+   the outline. See CommandStateStyle. *@
+<span class="smartx-status" style="--smartx-status: @Style.Colour" role="status" aria-label="@($"Command {Style.Label}")">
+    <MudIcon Icon="@Style.Icon" Size="Size.Small" aria-hidden="true" />
+    <span>@Style.Label</span>
+</span>
+
+@code {
+    [Parameter, EditorRequired]
+    public CommandState State { get; set; }
+
+    private CommandStateStyle Style => CommandStateStyle.For(State);
+}

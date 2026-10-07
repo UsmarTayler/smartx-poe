@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components.Web;
 using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
 using MudBlazor.Services;
 using SmartX.Client;
+using SmartX.Client.CommandStream;
 using SmartX.Client.Realtime;
 using SmartX.Client.Services;
 using SmartX.Client.State;
@@ -64,6 +65,18 @@ builder.Services.AddScoped<IAlertFeed, AlertFeed>();
 builder.Services.AddScoped<ICommandFeed, CommandFeed>();
 builder.Services.AddScoped<ITelemetryStream, TelemetryStream>();
 builder.Services.AddScoped<IPipelineFeed, PipelineFeed>();
+
+// The Command Stream page. Its services are scoped for the same reason as the feeds: the stream's buffer, the search
+// result and the pinned critical readings outlive the page, so leaving and coming back finds them where they were.
+var streamOptions = builder.Configuration.GetSection(CommandStreamOptions.SectionName).Get<CommandStreamOptions>()
+    ?? new CommandStreamOptions();
+
+builder.Services.AddSingleton(streamOptions);
+builder.Services.AddScoped<IOperatorApi, OperatorApi>();
+builder.Services.AddScoped<IDeviceFeedFactory, DeviceFeedFactory>();
+builder.Services.AddScoped<DeviceSearchService>();
+builder.Services.AddScoped<LiveStream>();
+builder.Services.AddScoped<IChartSizing, BrowserChartSizing>();
 
 // Injected rather than read from DateTimeOffset.UtcNow, matching the API, so anything that stamps
 // or ages client-side state can be driven by a controlled clock in a test.
