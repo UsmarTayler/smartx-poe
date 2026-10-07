@@ -71,16 +71,21 @@ public sealed class IngestionOptions
     public int MaxConsecutiveCritical { get; set; } = 20;
 
     /// <summary>
-    /// How long the worker pauses after each reading it processes. Zero, and meant to stay zero outside a demonstration.
+    /// The simulated per-reading processing cost of a resource-constrained gateway: how long the worker pauses after each
+    /// reading it processes. Zero by default, which is a gateway with all the headroom it needs.
     /// </summary>
     /// <remarks>
-    /// The real worker drains the queue faster than the simulated fleet can fill it, so the standard lane is empty and the
-    /// critical lane has nothing to overtake. That is the right behaviour and a poor demonstration. This gives the worker a
-    /// per-reading cost, as a slower store or a busier machine would, so a backlog can be built on purpose and the priority
-    /// lane can be watched jumping it. It is configuration and not a code path of its own: the worker is otherwise
-    /// unchanged, and nothing is slowed unless this is set.
+    /// The brief asks for a design that performs on "resource-constrained gateway devices". A gateway on an ESP32-class board
+    /// or a small ARM computer does not retain, score and index a reading in microseconds, and this models that: every
+    /// reading costs the worker this much, so a burst builds a backlog exactly as it would on the slower hardware. It is
+    /// configuration and not a code path of its own, since the worker is otherwise unchanged, and nothing is slowed unless
+    /// it is set.
+    /// <para>
+    /// It is also what makes the priority lane visible. On a fast host the standard lane is always empty, so the critical
+    /// lane has nothing to overtake; with a realistic cost set, a backlog forms and a critical reading can be watched jumping it.
+    /// </para>
     /// </remarks>
-    public TimeSpan DemoProcessingDelay { get; set; } = TimeSpan.Zero;
+    public TimeSpan SimulatedGatewayCost { get; set; } = TimeSpan.Zero;
 
     /// <summary>The rules that classify a reading as critical.</summary>
     public IList<CriticalRule> CriticalRules { get; set; } =

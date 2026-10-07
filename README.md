@@ -988,7 +988,7 @@ It is decided by container queries on the page, not by the window, so the drawer
 
 With the defaults the worker drains the queue faster than the simulated fleet fills it, so both lanes are empty and the strip says
 they take about the same time. That is correct, and it shows nothing. To build a backlog on purpose, give the worker a
-per-reading cost (`Ingestion:DemoProcessingDelay`, off by default) and speed the fleet up:
+per-reading cost, which is also how a resource-constrained gateway behaves (`Ingestion:SimulatedGatewayCost`, zero by default), and speed the fleet up:
 
 ```bash
 SMARTX_PROCESS_DELAY=00:00:00.004 SMARTX_RATE=50 SMARTX_TICK=00:00:00.050 docker compose up -d
@@ -1033,7 +1033,7 @@ The request asks for at most `width / 3` buckets, so a phone gets a few dozen an
 
 The simulator's `SMARTX_RATE` multiplies every device's reporting rate (`SMARTX_TICK` is how often it wakes; lower it as the rate goes
 up). The page was run against the Docker stack at each rate and the main thread was watched with a `longtask` observer (anything
-over 50 ms) for 13 seconds. The API's queue was empty and nothing was refused at any of these rates (no demo delay).
+over 50 ms) for 13 seconds. The API's queue was empty and nothing was refused at any of these rates (no simulated gateway cost).
 
 | Rate | Readings processed per second | Long tasks in 13 s | What it means |
 | --- | --- | --- | --- |
@@ -1250,7 +1250,7 @@ In `src/SmartX.Client/wwwroot/appsettings.json`. Every value is optional.
 | `Ingestion:MaxCriticalQueueDepth` | `1000` | The most readings the critical lane holds, bounded separately so a full standard lane never blocks an alert. |
 | `Ingestion:RetryAfterSeconds` | `5` | The value of the `Retry-After` header on a `503`. |
 | `Ingestion:MaxConsecutiveCritical` | `20` | After this many critical readings in a row, the worker takes one normal reading if one is waiting. The starvation valve. |
-| `Ingestion:DemoProcessingDelay` | `00:00:00` | How long the worker pauses after each reading. Zero, and for demonstrations only: it builds a backlog so the critical lane can be seen overtaking it. |
+| `Ingestion:SimulatedGatewayCost` | `00:00:00` | Simulates the per-reading processing cost of a resource-constrained gateway: how long the worker pauses after each reading. Zero is an unconstrained gateway. A few milliseconds builds a backlog, as a small board would, so the critical lane can be seen overtaking it. |
 | `Ingestion:CriticalRules` | see [Ingestion queues](#ingestion-queues) | The thresholds that make a reading critical: category, unit, an upper and/or lower limit, a severity (lower is more urgent) and a reason. Set as a list in `appsettings.json`. |
 
 ### Simulator: `Simulator`
@@ -1331,7 +1331,7 @@ These go in `.env`:
 | `SMARTX_BACKFILL` | `00:10:00` | Becomes `Simulator__BackfillDuration`. |
 | `SMARTX_RATE` | `1` | Becomes `Simulator__ReportingRateMultiplier`: how many times faster than normal the fleet reports. |
 | `SMARTX_TICK` | `00:00:00.500` | Becomes `Simulator__TickInterval`: how often the simulator wakes to send what is due. Lower it as the rate rises. |
-| `SMARTX_PROCESS_DELAY` | `00:00:00` | Becomes `Ingestion__DemoProcessingDelay`. Demo only; see [the Command Stream page](#seeing-a-critical-reading-overtake-the-standard-queue). |
+| `SMARTX_PROCESS_DELAY` | `00:00:00` | Becomes `Ingestion__SimulatedGatewayCost`: the simulated per-reading cost of a constrained gateway; see [the Command Stream page](#seeing-a-critical-reading-overtake-the-standard-queue). |
 | `SMARTX_CLIENT_PORT` | `8080` | Host port for the client. Open this one in the browser. |
 | `SMARTX_API_PORT` | `5266` | Host port for the API, for `curl` and the scenario endpoint. |
 

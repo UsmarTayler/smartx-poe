@@ -9,26 +9,26 @@ using SmartX.Shared;
 namespace SmartX.Tests;
 
 /// <summary>
-/// The demonstration setting that gives the ingestion worker a cost per reading, so a backlog can be built on purpose.
+/// The simulated per-reading cost of a constrained gateway, which gives the ingestion worker a cost per reading.
 /// </summary>
 /// <remarks>
 /// Only a lower bound is asserted. A slow machine makes the pauses longer and never shorter, so "took at least this long"
 /// cannot fail for reasons that are not the code's.
 /// </remarks>
-public class DemoProcessingDelayTests
+public class SimulatedGatewayCostTests
 {
     private static readonly TimeSpan Delay = TimeSpan.FromMilliseconds(50);
 
     [Fact]
-    public void The_delay_is_off_unless_it_is_configured()
+    public void The_cost_is_zero_unless_it_is_configured()
     {
-        Assert.Equal(TimeSpan.Zero, new IngestionOptions().DemoProcessingDelay);
+        Assert.Equal(TimeSpan.Zero, new IngestionOptions().SimulatedGatewayCost);
     }
 
     [Fact]
     public async Task The_worker_pauses_after_each_reading_it_processes()
     {
-        var options = Options.Create(new IngestionOptions { DemoProcessingDelay = Delay });
+        var options = Options.Create(new IngestionOptions { SimulatedGatewayCost = Delay });
         var queue = new TelemetryIngestionQueue(options, TimeProvider.System, new SmartX.Api.History.ArrivalSequence());
         var trust = new TrustEngine(Options.Create(new TrustOptions()), TimeProvider.System, NullLogger<TrustEngine>.Instance);
         var mesh = MeshTestHost.Create(TimeProvider.System);

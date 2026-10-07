@@ -19,8 +19,8 @@ services:
       # devices in them come from the simulator over HTTP.
       Zones__Hierarchy: ${SMARTX_ZONE_HIERARCHY:-Demo}
       Ingestion__MaxQueueDepth: ${SMARTX_QUEUE_DEPTH:-10000}
-      # Zero normally. Set above zero to give the worker a per-reading cost and build a backlog on purpose.
-      Ingestion__DemoProcessingDelay: ${SMARTX_PROCESS_DELAY:-00:00:00}
+      # Simulates the per-reading processing cost of a constrained gateway. Zero is an unconstrained one.
+      Ingestion__SimulatedGatewayCost: ${SMARTX_PROCESS_DELAY:-00:00:00}
     volumes:
       # Encrypted files and their index, kept across container restarts and rebuilds.
       - attachments:/data/attachments

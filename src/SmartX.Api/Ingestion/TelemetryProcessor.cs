@@ -34,8 +34,9 @@ internal sealed class TelemetryProcessor(
     ILogger<TelemetryProcessor> logger,
     Microsoft.Extensions.Options.IOptions<IngestionOptions>? options = null) : BackgroundService
 {
-    // Optional so the worker can still be built directly in a test. Zero in every normal run; see DemoProcessingDelay.
-    private readonly TimeSpan _demoDelay = options?.Value.DemoProcessingDelay ?? TimeSpan.Zero;
+    // Optional so the worker can still be built directly in a test. Zero by default; see SimulatedGatewayCost, which models the
+    // per-reading cost of a constrained gateway.
+    private readonly TimeSpan _gatewayCost = options?.Value.SimulatedGatewayCost ?? TimeSpan.Zero;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -67,11 +68,11 @@ internal sealed class TelemetryProcessor(
                     reading.Packet.NodeId);
             }
 
-            if (_demoDelay > TimeSpan.Zero)
+            if (_gatewayCost > TimeSpan.Zero)
             {
                 try
                 {
-                    await Task.Delay(_demoDelay, stoppingToken);
+                    await Task.Delay(_gatewayCost, stoppingToken);
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                 {
