@@ -85,6 +85,18 @@ public sealed class FakeRealtimeHub : IRealtimeHub
         }
     }
 
+    /// <summary>Every call the client made to the hub, in order, as text. For a failure message.</summary>
+    public string CallLog
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return string.Join(", ", _calls.Select(call => $"{call.Method}({call.Argument})"));
+            }
+        }
+    }
+
     public int CallsTo(string method, string? argument = null)
     {
         lock (_gate)
