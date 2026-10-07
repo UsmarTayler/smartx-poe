@@ -1,0 +1,80 @@
+@* The confirmation before a zone-wide action: exactly which devices will be affected, from the same recursive walk the
+   server uses to do it. There are no surprise fan-outs: what is listed here is what is sent to, because the list comes
+   from the server's own selection and not from a copy of it. A modal dialog, written out in plain elements so it is
+   keyboard and screen-reader friendly: it takes focus, Escape cancels, and the safe choice is the one with focus. *@
+<div class="smartx-modal" role="presentation" @onkeydown="OnKey">
+    <div class="smartx-modal__backdrop" @onclick="Cancel" aria-hidden="true"></div>
+    <div class="smartx-modal__dialog" role="alertdialog" aria-modal="true" aria-labelledby="zone-confirm-title" aria-describedby="zone-confirm-list" tabindex="-1" @ref="_dialog">
+        <MudText Typo="Typo.h6" HtmlTag="h2" id="zone-confirm-title">
+            Send @ActionLabel to @Preview.Devices.Count @(Preview.Devices.Count == 1 ? "device" : "devices")?
+        </MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            In @Preview.ZoneName and every zone beneath it. Nothing has been sent yet.
+        </MudText>
+
+        <ul id="zone-confirm-list" class="smartx-modal__devices" aria-label="Devices that will be affected">
+            @foreach (var device in Preview.Devices)
+            {
+                <li @key="device.MacAddress">
+                    <strong>@device.Room</strong>
+                    <span class="smartx-mono mud-text-secondary">@device.MacAddress</span>
+                    <span class="mud-text-secondary">@Zone(device.ZoneId)</span>
+                    <span class="mud-text-secondary">now @State(device)</span>
+                </li>
+            }
+        </ul>
+
+        <div class="smartx-modal__actions">
+            <MudButton Variant="Variant.Outlined" OnClick="Cancel" id="zone-confirm-cancel">Cancel</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Confirm" StartIcon="@Icons.Material.Filled.Send">
+                Send to @Preview.Devices.Count @(Preview.Devices.Count == 1 ? "device" : "devices")
+            </MudButton>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public ZonePreview Preview { get; set; } = default!;
+
+    /// <summary>The zones, to name the one each device is in.</summary>
+    [Parameter]
+    public IReadOnlyList<ZoneOption> Zones { get; set; } = [];
+
+    [Parameter]
+    public EventCallback OnConfirm { get; set; }
+
+    [Parameter]
+    public EventCallback OnCancel { get; set; }
+
+    private string ActionLabel =>
+        Preview.Action == CommandAction.SetLevel
+            ? $"level {Preview.Level:0.##}"
+            : CommandChoices.ForZone.FirstOrDefault(choice => choice.Action == Preview.Action)?.Label.ToLowerInvariant() ?? Preview.Action.ToString();
+
+    private ElementReference _dialog;
+
+    // Focus moves into the dialog when it opens, so Escape and Tab work at once and a keyboard user is not left behind it.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await _dialog.FocusAsync();
+        }
+    }
+
+    private string Zone(string zoneId) => Zones.FirstOrDefault(zone => string.Equals(zone.Id, zoneId, StringComparison.OrdinalIgnoreCase))?.Name ?? zoneId;
+
+    private static string State(ZoneTarget device) => device.CurrentValue switch
+    {
+        null => "unknown",
+        var value when device.Kind == ActuatorKind.Dimmer => $"{value:0.##}",
+        var value => value != 0 ? "on or open" : "off or closed",
+    };
+
+    private Task Confirm() => OnConfirm.InvokeAsync();
+
+    private Task Cancel() => OnCancel.InvokeAsync();
+
+    private Task OnKey(KeyboardEventArgs args) => args.Key == "Escape" ? Cancel() : Task.CompletedTask;
+}

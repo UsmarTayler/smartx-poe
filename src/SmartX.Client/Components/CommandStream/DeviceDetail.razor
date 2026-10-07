@@ -1,0 +1,223 @@
+@implements IAsyncDisposable
+@inject SensorService Catalog
+@inject ITrustFeed Trust
+@inject IAlertFeed Alerts
+@inject IOperatorApi Api
+@inject IDeviceFeedFactory Devices
+@inject IChartSizing Sizing
+@inject AppState State
+@inject TimeProvider Time
+
+@* One device, in detail: its current reading, its trust band and alerts, a timeline, and (for an actuator) its controls.
+   It joins the device's own topic while it is open, so the chart extends as readings arrive without asking again, and it
+   leaves the topic when it is disposed. The page keys this component by MAC address, so choosing another device is a
+   fresh component with a fresh subscription and the old one has already let go. *@
+<section class="smartx-detail" aria-label="@($"Detail for {Title}")">
+    <div class="smartx-detail__head">
+        <div>
+            <MudText Typo="Typo.h6" HtmlTag="h3">@Title</MudText>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                <span class="smartx-mono">@Mac</span>@(_sensor is null ? string.Empty : $" · {Catalog.ZonePath(_sensor.Location.ZoneId)}")
+            </MudText>
+        </div>
+        <MudButton Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Close" OnClick="Close">Close</MudButton>
+    </div>
+
+    <div class="smartx-detail__facts">
+        <span><span class="mud-text-secondary">Current reading</span> <strong class="smartx-mono">@CurrentReading</strong></span>
+
+        @if (Node is { } node)
+        {
+            <TrustStatusChip Band="node.Band" />
+            <span class="mud-text-secondary">@node.Reason</span>
+        }
+    </div>
+
+    @if (MyAlerts.Count > 0)
+    {
+        <ul class="smartx-detail__alerts" aria-label="Active alerts on this device">
+            @foreach (var alert in MyAlerts)
+            {
+                var style = AlertKindStyle.For(alert.Key.Kind);
+
+                <li class="smartx-alerts__item" @key="alert.Key">
+                    <span class="smartx-status" style="--smartx-status: @style.Colour">
+                        <MudIcon Icon="@style.Icon" Size="Size.Small" aria-hidden="true" />
+                        <span>@style.Label</span>
+                    </span>
+                    @if (alert.SuppressedCount > 0)
+                    {
+                        <span class="smartx-alerts__repeats">suppressed &times;@alert.SuppressedCount.ToString("N0")</span>
+                    }
+                    @if (alert.Acknowledged)
+                    {
+                        <span class="mud-text-secondary">acknowledged</span>
+                    }
+                </li>
+            }
+        </ul>
+    }
+
+    <div class="smartx-detail__range" role="group" aria-label="Timeline range">
+        @foreach (var range in Enum.GetValues<TimelineRange>())
+        {
+            <MudButton Size="Size.Small" Variant="@(State.TimelineRange == range ? Variant.Filled : Variant.Outlined)" Color="Color.Primary"
+                       OnClick="() => State.SetTimelineRange(range)" aria-pressed="@(State.TimelineRange == range ? "true" : "false")">
+                @TimelineRanges.Label(range)
+            </MudButton>
+        }
+    </div>
+
+    @if (_problem is not null)
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" role="status">@_problem</MudAlert>
+    }
+
+    @if (_loading && _timeline is null)
+    {
+        <div aria-hidden="true"><MudSkeleton Height="160px" /></div>
+    }
+    else
+    {
+        <TimelineChart Timeline="_timeline" Live="Live" Width="_width" Title="@($"{Title} readings")" />
+    }
+
+    @if (_sensor is { Category: SensorCategory.Actuator })
+    {
+        <CommandControls Sensor="_sensor" />
+    }
+</section>
+
+@code {
+    private SensorRegistration? _sensor;
+    private DeviceFeed? _feed;
+    private SensorTimeline? _timeline;
+    private TimelineRange _loadedRange;
+    private int _width = 480;
+    private bool _loading;
+    private bool _reloading;
+    private string? _problem;
+
+    [Parameter, EditorRequired]
+    public string Mac { get; set; } = string.Empty;
+
+    private string Title => _sensor?.Location.Room ?? Mac;
+
+    private NodeTrustSnapshot? Node => Trust.Current.Nodes.FirstOrDefault(node => string.Equals(node.MacAddress, Mac, StringComparison.OrdinalIgnoreCase));
+
+    private IReadOnlyList<ActiveAlert> MyAlerts =>
+        [.. AlertOrdering.Order(Alerts.Current.Alerts.Where(alert => string.Equals(alert.Key.Mac, Mac, StringComparison.OrdinalIgnoreCase)))];
+
+    /// <summary>Readings pushed since the timeline was fetched.</summary>
+    private IReadOnlyList<ReadingPush> Live => _feed?.Current.Recent ?? [];
+
+    private string CurrentReading =>
+        Live.Count > 0 ? Format(Live[^1]) : "none yet";
+
+    private string Format(ReadingPush reading) =>
+        reading.IsState ? (reading.Value != 0 ? "engaged" : "released") : $"{ReadingFormatter.Number(reading.Value)} {reading.Unit}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _sensor = Catalog.Sensors.FirstOrDefault(sensor => string.Equals(sensor.MacAddress, Mac, StringComparison.OrdinalIgnoreCase));
+        _loadedRange = State.TimelineRange;
+
+        State.Changed += OnStateChanged;
+        Trust.Updated += OnFeedChanged;
+        Alerts.Updated += OnFeedChanged;
+
+        _feed = Devices.Create(Mac);
+        _feed.Updated += OnDeviceFeed;
+
+        await Trust.StartAsync();
+        await Alerts.StartAsync();
+        await _feed.StartAsync();
+
+        await LoadTimelineAsync();
+    }
+
+    private async Task LoadTimelineAsync()
+    {
+        _loading = true;
+
+        _width = await Sizing.WidthAsync();
+        _loadedRange = State.TimelineRange;
+
+        var to = Time.GetUtcNow();
+        var result = await Api.GetTimelineAsync(Mac, to - TimelineRanges.Length(_loadedRange), to, ChartSizes.MaxPointsFor(_width));
+
+        _loading = false;
+
+        if (result.IsSuccess)
+        {
+            _timeline = result.Value;
+            _problem = null;
+        }
+        else
+        {
+            // What is drawn stays, and the reason is said.
+            _problem = result.Problem.Message;
+        }
+    }
+
+    private void OnStateChanged()
+    {
+        // A different range is a different request. Anything else on the page changing is not this component's business.
+        if (State.TimelineRange != _loadedRange)
+        {
+            _ = InvokeAsync(async () =>
+            {
+                await LoadTimelineAsync();
+                StateHasChanged();
+            });
+        }
+        else
+        {
+            _ = InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void OnFeedChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private void OnDeviceFeed()
+    {
+        // The chart grows to the right as readings arrive. Once it has grown by a quarter of the range, the server's
+        // buckets are asked for afresh so that the left edge moves and the extension does not stretch for ever.
+        if (_timeline is { } timeline && !_reloading && _feed is { Current.Recent.Count: > 0 } feed
+            && feed.Current.Recent[^1].Timestamp - timeline.To > TimelineRanges.Length(_loadedRange) / 4)
+        {
+            _reloading = true;
+
+            _ = InvokeAsync(async () =>
+            {
+                await LoadTimelineAsync();
+                _reloading = false;
+                StateHasChanged();
+            });
+
+            return;
+        }
+
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void Close() => State.SelectStreamDevice(null);
+
+    public async ValueTask DisposeAsync()
+    {
+        State.Changed -= OnStateChanged;
+        Trust.Updated -= OnFeedChanged;
+        Alerts.Updated -= OnFeedChanged;
+
+        await Trust.StopAsync();
+        await Alerts.StopAsync();
+
+        if (_feed is not null)
+        {
+            _feed.Updated -= OnDeviceFeed;
+
+            // Leaves the device's topic, so a device nobody is looking at costs the server nothing.
+            await _feed.DisposeAsync();
+        }
+    }
+}

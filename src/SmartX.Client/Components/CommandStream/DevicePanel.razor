@@ -1,0 +1,120 @@
+@implements IAsyncDisposable
+@inject DeviceSearchService Search
+@inject ITrustFeed Trust
+@inject IAlertFeed Alerts
+@inject AppState State
+@inject SensorService Catalog
+
+@* The device region: search and filter, the matching devices, the chosen device in detail, and zone-wide actions. The
+   chosen device and the filters are held in AppState, so they are still there after visiting another page. *@
+<MudPaper Outlined="true" Class="pa-3" role="region" aria-label="Devices">
+    <MudText Typo="Typo.h6" HtmlTag="h2" Class="mb-2">Devices</MudText>
+
+    <DeviceSearchBar />
+
+    @if (Search.Problem is not null)
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="mt-2" role="status">
+            @(Search.Result is null ? "The search failed" : "Showing the last result"): @Search.Problem.Message
+        </MudAlert>
+    }
+
+    @if (Search.Result is { } result)
+    {
+        if (result.Devices.Count == 0)
+        {
+            <EmptyState Icon="@Icons.Material.Outlined.SearchOff" Title="No devices match" Text="Clear a filter to widen the search." />
+        }
+        else
+        {
+            <div class="smartx-devices" role="list" aria-label="Matching devices">
+                <Virtualize Items="_hits" Context="hit" ItemSize="56" OverscanCount="4">
+                    <button type="button" class="smartx-device-row" role="listitem" @key="hit.MacAddress"
+                            aria-pressed="@(State.StreamDevice == hit.MacAddress ? "true" : "false")"
+                            @onclick="() => Select(hit.MacAddress)">
+                        <span class="smartx-device-row__name">@hit.Room</span>
+                        <TrustStatusChip Band="BandOf(hit)" />
+                        <span class="smartx-device-row__meta">
+                            @(hit.ActuatorKind is { } kind ? $"{kind}" : $"{hit.Category}") · <span class="smartx-mono">@hit.MacAddress[^5..]</span>
+                        </span>
+                        @foreach (var alertKind in AlertsOf(hit))
+                        {
+                            var style = AlertKindStyle.For(alertKind);
+
+                            <span class="smartx-status" style="--smartx-status: @style.Colour">
+                                <MudIcon Icon="@style.Icon" Size="Size.Small" aria-hidden="true" />
+                                <span>@style.Label</span>
+                            </span>
+                        }
+                    </button>
+                </Virtualize>
+            </div>
+        }
+    }
+    else
+    {
+        <div aria-hidden="true"><MudSkeleton Height="56px" Class="mt-2" /><MudSkeleton Height="56px" Class="mt-2" /></div>
+    }
+
+    @if (State.StreamDevice is { } selected)
+    {
+        <DeviceDetail @key="selected" Mac="@selected" />
+    }
+    else if (Search.Result is { Devices.Count: > 0 })
+    {
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mt-2">Choose a device to see its timeline and send it commands.</MudText>
+    }
+
+    <ZoneActionPanel />
+</MudPaper>
+
+@code {
+    private List<DeviceSearchHit> _hits = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Search.Changed += OnChanged;
+        Trust.Updated += OnChanged;
+        Alerts.Updated += OnChanged;
+        State.Changed += OnChanged;
+
+        _hits = [.. Search.Result?.Devices ?? []];
+
+        // The band and alert chips on each row are live, from the feeds the rest of the page uses.
+        await Trust.StartAsync();
+        await Alerts.StartAsync();
+
+        if (Search.Result is null)
+        {
+            await Search.RefreshNowAsync();
+        }
+    }
+
+    private void OnChanged()
+    {
+        _hits = [.. Search.Result?.Devices ?? []];
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void Select(string mac) => State.SelectStreamDevice(State.StreamDevice == mac ? null : mac);
+
+    /// <summary>The device's band as it is now, from the live feed, falling back to the band at the time of the search.</summary>
+    private TrustBand BandOf(DeviceSearchHit hit) =>
+        Trust.Current.Nodes.FirstOrDefault(node => node.MacAddress == hit.MacAddress)?.Band ?? hit.Band;
+
+    private IEnumerable<AlertKind> AlertsOf(DeviceSearchHit hit) =>
+        Alerts.Current.IsLoaded
+            ? Alerts.Current.Alerts.Where(alert => alert.Key.Mac == hit.MacAddress).Select(alert => alert.Key.Kind).Distinct().Order()
+            : hit.ActiveAlerts;
+
+    public async ValueTask DisposeAsync()
+    {
+        Search.Changed -= OnChanged;
+        Trust.Updated -= OnChanged;
+        Alerts.Updated -= OnChanged;
+        State.Changed -= OnChanged;
+
+        await Trust.StopAsync();
+        await Alerts.StopAsync();
+    }
+}

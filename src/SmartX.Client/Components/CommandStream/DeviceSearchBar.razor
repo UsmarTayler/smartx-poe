@@ -1,0 +1,139 @@
+@implements IDisposable
+@inject DeviceSearchService Search
+@inject AppState State
+@inject SensorService Catalog
+
+@* Search and filter, backed by /api/devices/search. Every filter is optional, they combine, each clears on its own, and
+   the result count says what they add up to. Typing is debounced for 300 ms before a request is sent: the server records
+   every search it receives as what the operator did, so only a settled search should reach it. The filters live in
+   AppState, so leaving the page and coming back finds them as they were. *@
+<div class="smartx-search" role="search" aria-label="Find devices">
+    <MudTextField T="string" Label="Search MAC, room or node" Value="Filters.Q" ValueChanged="OnText" Immediate="true"
+                  Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true"
+                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" AdornmentAriaLabel="Search" />
+
+    <div class="smartx-search__filters">
+        <MudSelect T="SensorCategory?" Label="Category" Value="Filters.Category" ValueChanged="value => Change(Filters with { Category = value })"
+                   Clearable="true" Variant="Variant.Outlined" Margin="Margin.Dense" AnchorOrigin="Origin.BottomCenter">
+            @foreach (var category in Enum.GetValues<SensorCategory>())
+            {
+                <MudSelectItem T="SensorCategory?" Value="@((SensorCategory?)category)">@category</MudSelectItem>
+            }
+        </MudSelect>
+
+        <MudSelect T="ActuatorKind?" Label="Actuator kind" Value="Filters.ActuatorKind" ValueChanged="value => Change(Filters with { ActuatorKind = value })"
+                   Clearable="true" Variant="Variant.Outlined" Margin="Margin.Dense" AnchorOrigin="Origin.BottomCenter">
+            @foreach (var kind in Enum.GetValues<ActuatorKind>())
+            {
+                <MudSelectItem T="ActuatorKind?" Value="@((ActuatorKind?)kind)">@kind</MudSelectItem>
+            }
+        </MudSelect>
+
+        <ZonePicker Zones="Catalog.Zones" Value="Filters.Zone" ValueChanged="value => Change(Filters with { Zone = value })"
+                    Label="Zone (includes sub-zones)" Clearable="true" />
+
+        <MudSelect T="TrustBand?" Label="Trust band" Value="Filters.Band" ValueChanged="value => Change(Filters with { Band = value })"
+                   Clearable="true" Variant="Variant.Outlined" Margin="Margin.Dense" AnchorOrigin="Origin.BottomCenter">
+            @foreach (var band in TrustBandStyle.InSeverityOrder)
+            {
+                <MudSelectItem T="TrustBand?" Value="@((TrustBand?)band)">@TrustBandStyle.For(band).Label</MudSelectItem>
+            }
+        </MudSelect>
+
+        <MudSelect T="AlertKind?" Label="Active alert" Value="Filters.Alert" ValueChanged="value => Change(Filters with { Alert = value })"
+                   Clearable="true" Variant="Variant.Outlined" Margin="Margin.Dense" AnchorOrigin="Origin.BottomCenter">
+            @foreach (var kind in Enum.GetValues<AlertKind>())
+            {
+                <MudSelectItem T="AlertKind?" Value="@((AlertKind?)kind)">@AlertKindStyle.For(kind).Label</MudSelectItem>
+            }
+        </MudSelect>
+    </div>
+
+    <div class="smartx-search__summary">
+        <MudText Typo="Typo.body2" role="status" aria-live="polite">
+            @if (Search.IsSearching)
+            {
+                <span>Searching&hellip;</span>
+            }
+            else if (Search.Result is { } result)
+            {
+                <span><strong>@result.Count.ToString("N0")</strong> @(result.Count == 1 ? "device" : "devices")@(Filters.IsEmpty ? string.Empty : " match")</span>
+            }
+        </MudText>
+
+        @foreach (var (name, cleared) in ActiveFilters)
+        {
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" OnClose="@(_ => Change(cleared))" aria-label="@($"Clear filter {name}")">@name</MudChip>
+        }
+
+        @if (!Filters.IsEmpty)
+        {
+            <MudButton Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.FilterAltOff" OnClick="() => Change(new DeviceSearchFilters())">
+                Clear all
+            </MudButton>
+        }
+    </div>
+</div>
+
+@code {
+    private DeviceSearchFilters Filters => State.StreamFilters;
+
+    // Each active filter as a chip, with the filters as they would be once that one is cleared.
+    private IEnumerable<(string Name, DeviceSearchFilters Cleared)> ActiveFilters
+    {
+        get
+        {
+            var f = Filters;
+
+            if (!string.IsNullOrWhiteSpace(f.Q))
+            {
+                yield return ($"Text: {f.Q}", f with { Q = null });
+            }
+
+            if (f.Category is { } category)
+            {
+                yield return ($"Category: {category}", f with { Category = null });
+            }
+
+            if (f.ActuatorKind is { } kind)
+            {
+                yield return ($"Kind: {kind}", f with { ActuatorKind = null });
+            }
+
+            if (!string.IsNullOrWhiteSpace(f.Zone))
+            {
+                var zone = Catalog.Zones.FirstOrDefault(option => string.Equals(option.Id, f.Zone, StringComparison.OrdinalIgnoreCase))?.Name ?? f.Zone;
+
+                yield return ($"Zone: {zone}", f with { Zone = null });
+            }
+
+            if (f.Band is { } band)
+            {
+                yield return ($"Band: {TrustBandStyle.For(band).Label}", f with { Band = null });
+            }
+
+            if (f.Alert is { } alert)
+            {
+                yield return ($"Alert: {AlertKindStyle.For(alert).Label}", f with { Alert = null });
+            }
+        }
+    }
+
+    private void OnText(string? text) => Change(Filters with { Q = string.IsNullOrWhiteSpace(text) ? null : text });
+
+    private void Change(DeviceSearchFilters filters) => Search.Request(filters);
+
+    protected override void OnInitialized()
+    {
+        State.Changed += OnChanged;
+        Search.Changed += OnChanged;
+    }
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        State.Changed -= OnChanged;
+        Search.Changed -= OnChanged;
+    }
+}

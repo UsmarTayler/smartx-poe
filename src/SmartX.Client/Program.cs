@@ -76,6 +76,7 @@ builder.Services.AddScoped<IOperatorApi, OperatorApi>();
 builder.Services.AddScoped<IDeviceFeedFactory, DeviceFeedFactory>();
 builder.Services.AddScoped<DeviceSearchService>();
 builder.Services.AddScoped<LiveStream>();
+builder.Services.AddScoped<IChartSizing, BrowserChartSizing>();
 
 // Injected rather than read from DateTimeOffset.UtcNow, matching the API, so anything that stamps
 // or ages client-side state can be driven by a controlled clock in a test.
