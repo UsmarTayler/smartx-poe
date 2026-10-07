@@ -34,6 +34,15 @@ public sealed class PatternOptions
     /// </remarks>
     public double MinimumSupport { get; set; } = 3;
 
+    /// <summary>The share of <see cref="MinimumSupport"/> that a pattern's support must reach, to allow for a count that has only just faded.</summary>
+    /// <remarks>
+    /// Support is a faded count, so three pairings a minute ago add up to 2.9998 and not 3. Without a little give, "three"
+    /// would mean "three, all of them brand new", and a pattern that had earned its place would drop out in the time it takes
+    /// to make a cup of tea. Two percent is about three hours of fading at a week's half-life: a count that has faded by less
+    /// than that is still the count it was.
+    /// </remarks>
+    public double SupportTolerance { get; set; } = 0.98;
+
     /// <summary>How many times more often than chance an action must follow a trigger to count as a pattern.</summary>
     /// <remarks>
     /// <b>1.5.</b> Lift is how likely the action is after the trigger divided by how likely it is in any window of the same
@@ -126,6 +135,11 @@ internal static class PatternOptionsValidation
         if (options.MinimumSupport <= 0)
         {
             yield return "Patterns:MinimumSupport must be positive.";
+        }
+
+        if (options.SupportTolerance is <= 0 or > 1)
+        {
+            yield return "Patterns:SupportTolerance must be above 0 and at most 1.";
         }
 
         if (options.MinimumLift < 1)

@@ -124,12 +124,6 @@ internal sealed class PatternEngine : IPatternEngine
     // no "anyway" rate; it is capped so the number stays finite and sortable, not because 100 means anything exact.
     private const double MaximumLift = 100;
 
-    // Support is a faded count, so three pairings a minute ago add up to 2.9998 and not 3. Without a little give, "three" would
-    // mean "three, all of them brand new", and a pattern that had earned its place would drop out in the time it takes to
-    // make a cup of tea. Two percent is about three hours of fading at a week's half-life: a count that has faded by less than
-    // that is still the count it was.
-    private const double SupportTolerance = 0.98;
-
     private readonly Lock _gate = new();
     private readonly PatternOptions _options;
     private readonly IDeviceDirectory _devices;
@@ -236,9 +230,14 @@ internal sealed class PatternEngine : IPatternEngine
 
             if (known)
             {
-                general = new ActionKey(PatternLevel.General, action.Kind, profile.Class, action.Command);
+                // A kind of device in a zone, so "a pump in Zone 1" has its own baseline: how often a pump in that zone is
+                // opened, and not how often any pump anywhere is. Otherwise a pump opened all day in another zone would make
+                // every pump look as if it follows everything.
+                var target = GeneralScope(profile);
+
+                general = new ActionKey(PatternLevel.General, action.Kind, target, action.Command);
                 Cover(_actions, general.Value, now);
-                _targetLabels.TryAdd(profile.Class, profile.ClassLabel);
+                _targetLabels.TryAdd(target, $"{profile.ClassLabel} in {profile.GeneralZoneName}");
             }
 
             // Every trigger still in the window is a candidate cause. foreach on a Queue<T> uses its struct enumerator,
@@ -533,7 +532,7 @@ internal sealed class PatternEngine : IPatternEngine
         var baseline = BaselineOf(action, now);
         var lift = baseline > 0 ? Math.Min(MaximumLift, confidence / baseline) : confidence > 0 ? MaximumLift : 0;
 
-        var qualified = support >= _options.MinimumSupport * SupportTolerance && lift >= _options.MinimumLift;
+        var qualified = support >= _options.MinimumSupport * _options.SupportTolerance && lift >= _options.MinimumLift;
 
         return new PatternAssociation(
             Describe(trigger),

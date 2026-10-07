@@ -1235,6 +1235,7 @@ setting.
 | --- | --- | --- |
 | `Patterns:Window` | `00:10:00` | How soon after a trigger an action counts as following it. Also the bound on what an action costs. |
 | `Patterns:MinimumSupport` | `3` | How many times, weighted and faded, an action must have followed a trigger before it counts as a pattern. |
+| `Patterns:SupportTolerance` | `0.98` | The share of the minimum that a faded count must reach, so three pairings do not fail the test a minute after they are made. |
 | `Patterns:MinimumLift` | `1.5` | How many times more often than chance it must follow. At 1 the trigger tells you nothing. |
 | `Patterns:HalfLife` | `7.00:00:00` | How long until a pairing counts half as much. |
 | `Patterns:SearchWeight` | `0.4` | What a search that narrowed to a few devices counts for, against 1 for opening a device or sending a command. |

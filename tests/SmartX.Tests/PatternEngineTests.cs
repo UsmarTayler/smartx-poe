@@ -270,8 +270,8 @@ public class PatternEngineTests
 
         Assert.Equal(PatternLevel.General, sameZone.AnsweredBy);
         var suggestion = Assert.Single(sameZone.Associations);
-        Assert.Equal("Actuator/Pump", suggestion.Action.Target);
-        Assert.Equal("pump", suggestion.Action.TargetLabel);
+        Assert.Equal("Actuator/Pump@zone-1", suggestion.Action.Target);
+        Assert.Equal("pump in Zone 1", suggestion.Action.TargetLabel);
         Assert.Equal("%RH sensor in Zone 1", sameZone.Trigger.ScopeLabel);
 
         // MoistD is in Zone 4, which has no such history.
@@ -309,13 +309,46 @@ public class PatternEngineTests
         var none = engine.Predict(TriggerKind.ThresholdCrossing, "Low", MoistE, now);
 
         Assert.Equal(PatternLevel.General, none.AnsweredBy);
-        Assert.Equal("Actuator/Pump", none.Associations[0].Action.Target);
+        Assert.Equal("Actuator/Pump@zone-1", none.Associations[0].Action.Target);
 
         // MoistD has one coincidence of its own with Pump X, which is not enough, and Zone 4 has nothing general either.
         Respond(engine, MoistD, PumpX, T0 + TimeSpan.FromHours(5));
         var thin = engine.Predict(TriggerKind.ThresholdCrossing, "Low", MoistD, T0 + TimeSpan.FromHours(5) + TimeSpan.FromMinutes(2));
 
         Assert.Null(thin.AnsweredBy);
+    }
+
+    [Fact]
+    public void A_pump_opened_all_day_in_another_zone_does_not_hide_a_pattern_in_this_one()
+    {
+        var engine = Engine();
+        List<(DateTimeOffset At, Action Do)> events = [];
+
+        // Pump X, in Zone 4, is opened every two minutes for three hours.
+        for (var minute = 0; minute <= 180; minute += 2)
+        {
+            var at = T0 + TimeSpan.FromMinutes(minute);
+            events.Add((at, () => engine.RecordAction(View(PumpX, at))));
+        }
+
+        // And in Zone 1, a moisture drop is followed by Pump A, six times.
+        for (var minute = 10; minute <= 160; minute += 30)
+        {
+            var at = T0 + TimeSpan.FromMinutes(minute);
+            events.Add((at, () => engine.RecordTrigger(Low(MoistB, at))));
+            events.Add((at + TimeSpan.FromMinutes(1), () => engine.RecordAction(View(PumpA, at + TimeSpan.FromMinutes(1)))));
+        }
+
+        Replay(engine, events);
+
+        var general = All(engine, T0 + TimeSpan.FromMinutes(181), new PatternQuery(Level: PatternLevel.General))
+            .Single(item => item.Trigger.Kind == TriggerKind.ThresholdCrossing);
+
+        // "A pump in Zone 1" is measured against how often a pump in Zone 1 is opened, not against Zone 4's constant one.
+        Assert.Equal("Actuator/Pump@zone-1", general.Action.Target);
+        Assert.True(general.Qualified);
+        Assert.True(general.Lift > 2.5, $"Lift was {general.Lift:N2}.");
+        Assert.True(general.Baseline < 0.4, $"Baseline was {general.Baseline:N2}.");
     }
 
     [Fact]

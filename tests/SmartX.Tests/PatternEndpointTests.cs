@@ -135,9 +135,9 @@ public class PatternEndpointTests
 
         // The same example at the general level: a humidity sensor in Sub-Zone B, then a pump in it.
         var general = await PatternsAsync(http, $"?mac={Humidity}&trigger=ThresholdCrossing&level=General&includeWeak=true");
-        var kind = Assert.Single(general.Associations, item => item.Action.Target == "Actuator/Pump");
+        var kind = Assert.Single(general.Associations, item => item.Action.Target.StartsWith("Actuator/Pump@", StringComparison.Ordinal));
 
-        Assert.Equal("pump", kind.Action.TargetLabel);
+        Assert.StartsWith("pump in Zone 1", kind.Action.TargetLabel, StringComparison.Ordinal);
         Assert.Contains("%RH sensor", kind.Trigger.ScopeLabel, StringComparison.Ordinal);
         Assert.InRange(kind.Support, 3.9, 4.0);
     }
