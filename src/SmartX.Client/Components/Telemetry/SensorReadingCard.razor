@@ -20,7 +20,7 @@
         }
         else if (Telemetry.Latest is { } latest)
         {
-            <MudText Typo="Typo.h5" Class="smartx-mono">
+            <MudText Typo="Typo.h5" HtmlTag="p" Class="smartx-mono">
                 @ReadingFormatter.Value(latest) <span class="mud-text-secondary" style="font-size: 1rem">@UnitSuffix</span>
             </MudText>
             <MudText Typo="Typo.caption" Class="mud-text-secondary">at @ReadingFormatter.Time(latest.Timestamp)</MudText>
