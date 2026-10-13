@@ -58,7 +58,7 @@ services:
     image: smartx-simulator
     environment:
       Simulator__ApiBaseUrl: http://api:8080
-      Simulator__DeviceCount: ${SMARTX_DEVICE_COUNT:-48}
+      Simulator__DeviceCount: ${SMARTX_DEVICE_COUNT:-55}
       Simulator__Mix: ${SMARTX_SCENARIO_MIX:-Demo}
       Simulator__BackfillDuration: ${SMARTX_BACKFILL:-00:10:00}
       Simulator__ReportingRateMultiplier: ${SMARTX_RATE:-1}

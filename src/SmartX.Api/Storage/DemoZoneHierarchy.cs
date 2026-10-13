@@ -24,6 +24,7 @@ internal static class DemoZoneHierarchy
     private const string Watts = "W";
     private const string Kilowatts = "kW";
     private const string Percent = "%";
+    private const string Conductivity = "mS/cm";
 
     private static readonly SensorCategory[] EnvironmentalAndActuators = [SensorCategory.Environmental, SensorCategory.Actuator];
 
@@ -60,6 +61,11 @@ internal static class DemoZoneHierarchy
             EnvironmentalAndActuators),
         Zone("sub-zone-h", "Sub-Zone H – Dock Doors", "zone-4", 2,
             [SensorCategory.Actuator]),
+
+        // The hydroponics bay. Moisture is registered 0 to 100 % so the pattern engine's low watch level, a fifth of the
+        // way up the range, is literally 20 %, which is the figure the brief's example uses.
+        Zone("zone-6", "Zone 6 – Hydroponics Bay", "facility-b", 1,
+            EnvironmentalAndActuators, [(Percent, 0, 100), (Conductivity, 0, 5)]),
 
         Zone("zone-5", "Zone 5 – Offices", "facility-b", 1,
             ranges: [(Celsius, 10, 35), (Co2, 0, 3000)]),

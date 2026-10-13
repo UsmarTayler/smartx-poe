@@ -180,7 +180,7 @@ The API must be running with `--Zones:Hierarchy=Demo`, as in step 4.
 dotnet run --project src/SmartX.DeviceSimulator
 ```
 
-It registers 48 devices, posts about ten minutes of history so the dashboard is not empty, and keeps them
+It registers 55 devices, posts about ten minutes of history so the dashboard is not empty, and keeps them
 reporting. Start it before the API if you like: it waits and retries until the API answers.
 
 ### Ports
@@ -294,7 +294,7 @@ has to hit the API like a device would.
    simulator runs empties the list. A device that gets a `404` on a report registers itself again and resends,
    so the fleet recovers within a few seconds without being restarted.
 
-The 48 devices and their zones live in the demo deployment: two facilities, 16 zones, three levels deep
+The 55 devices and their zones live in the demo deployment: two facilities, 17 zones, three levels deep
 (Facility → Zone → Sub-Zone), with constraints at every level. The zones stay in the API, selected with
 `Zones:Hierarchy=Demo`, because a deployment hierarchy is gateway configuration and not something a device
 carries. The devices come only from the simulator.
@@ -303,18 +303,19 @@ carries. The devices come only from the simulator.
 
 | Scenario | Behaviour | What it exercises | Demo fleet |
 | --- | --- | --- | --- |
-| `Nominal` | In-range readings at the registered interval | Successes | 30 devices |
+| `Nominal` | In-range readings at the registered interval | Successes | 36 devices |
 | `Drift` | Readings walk toward the top of the range, then hover across it | Range violations, gradually | 4 |
 | `Spike` | Mostly normal, with occasional values well outside the range | Range violations, intermittently | 4 |
 | `TypeViolation` | Mostly normal, with occasional wrong-typed payloads (`"ERR"`, `21.5` to an integer meter, `1` instead of `true`) | Schema failures | 4 |
 | `Critical` | Occasional extreme but valid readings: a power spike or a moisture crash | The priority queue | 2 |
 | `Disconnect` | Stops reporting entirely | Missed heartbeats | 4 |
+| `DryOut` | A cycle of falling slowly through the sensor's low watch level and recovering, every reading in range | The pattern engine's trigger, with no trust cost | 1 |
 
-`Drift`, `Spike` and `Critical` are about a measurement leaving its range. An actuator measures nothing (its
+`Drift`, `Spike`, `Critical` and `DryOut` are about a measurement, and the hydroponics bay (Zone 6, seven devices) is where `DryOut` runs, on Moisture Sensor B. An actuator measures nothing (its
 state is whatever it was last commanded to), so an actuator can only run `Nominal`, `TypeViolation` or
 `Disconnect`.
 
-Eighteen of the 48 devices are actuators (four pumps, five relays, five valves and four dimmers), spread across the
+Twenty-two of the 55 devices are actuators (six pumps, five relays, six valves and five dimmers), spread across the
 zones so a zone-wide command has something to reach. See [Commands and undo](#commands-and-undo).
 
 `Critical` differs from the others in one respect worth noticing. The device does not label its reading as an
@@ -1525,7 +1526,7 @@ Bound by `SmartX.DeviceSimulator`, from `src/SmartX.DeviceSimulator/appsettings.
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `Simulator:ApiBaseUrl` | `http://localhost:5266` (`http://api:8080` in Docker) | Where the API is. |
-| `Simulator:DeviceCount` | `48` | How many of the demo devices to run, from the top of the list. |
+| `Simulator:DeviceCount` | `55` | How many of the demo devices to run, from the top of the list. |
 | `Simulator:Mix` | `Demo` | `Demo` gives each device its own scenario, for a spread of bands. `Nominal` starts every device healthy. |
 | `Simulator:Scenarios:<mac>` | none | Starts one device in a named scenario, on top of the mix. A MAC contains colons, which can't be in an environment variable name, so write it with underscores: `Simulator__Scenarios__B8_27_EB_10_00_01=Critical`. |
 | `Simulator:BackfillDuration` | `00:10:00` | How much history is posted on first start. `00:00:00` turns backfill off. |
@@ -1590,7 +1591,7 @@ These go in `.env`:
 | `SMARTX_ATTACHMENT_KEY` | the development key | Becomes `Attachments__EncryptionKey` for the API. Compose refuses to start without it. |
 | `SMARTX_ZONE_HIERARCHY` | `Demo` | Becomes `Zones__Hierarchy` for the API. |
 | `SMARTX_QUEUE_DEPTH` | `10000` | Becomes `Ingestion__MaxQueueDepth`. |
-| `SMARTX_DEVICE_COUNT` | `48` | Becomes `Simulator__DeviceCount`. |
+| `SMARTX_DEVICE_COUNT` | `55` | Becomes `Simulator__DeviceCount`. |
 | `SMARTX_SCENARIO_MIX` | `Demo` | Becomes `Simulator__Mix`: `Demo` or `Nominal`. |
 | `SMARTX_BACKFILL` | `00:10:00` | Becomes `Simulator__BackfillDuration`. |
 | `SMARTX_RATE` | `1` | Becomes `Simulator__ReportingRateMultiplier`: how many times faster than normal the fleet reports. |

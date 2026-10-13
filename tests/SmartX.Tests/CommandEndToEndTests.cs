@@ -39,7 +39,7 @@ public class CommandEndToEndTests
 
             var fleet = new DeviceFleet(
                 new GatewayClient(http, NullLogger<GatewayClient>.Instance),
-                Options.Create(new SimulatorOptions { DeviceCount = 48 }),
+                Options.Create(new SimulatorOptions { DeviceCount = 55 }),
                 TimeProvider.System,
                 new NoopLifetime(),
                 NullLogger<DeviceFleet>.Instance);

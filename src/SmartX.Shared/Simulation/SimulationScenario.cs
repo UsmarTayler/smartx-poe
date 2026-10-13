@@ -32,7 +32,16 @@ public enum SimulationScenario
     Critical,
 
     /// <summary>Stops reporting entirely.</summary>
-    Disconnect
+    Disconnect,
+
+    /// <summary>
+    /// A cycle of drying out slowly and recovering, forever: the moisture in a grow bed between waterings.
+    /// </summary>
+    /// <remarks>
+    /// Every reading is inside the registered range, so nothing is refused and the node stays trusted. What it does is fall
+    /// through the sensor's low watch level once a cycle, which is the trigger an operator responds to by running a pump.
+    /// </remarks>
+    DryOut
 }
 
 /// <summary>The body of a POST to /api/simulation/{mac}/scenario.</summary>

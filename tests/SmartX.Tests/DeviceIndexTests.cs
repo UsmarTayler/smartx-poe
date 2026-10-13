@@ -71,9 +71,9 @@ public class DeviceIndexTests(ITestOutputHelper output)
     }
 
     [Theory]
-    [InlineData(SensorCategory.Actuator, 18)]
+    [InlineData(SensorCategory.Actuator, 22)]
     [InlineData(SensorCategory.PowerConsumption, 12)]
-    [InlineData(SensorCategory.Environmental, 18)]
+    [InlineData(SensorCategory.Environmental, 21)]
     public void The_category_filter_returns_that_category_only(SensorCategory category, int expected)
     {
         var world = World.Create();
@@ -85,10 +85,10 @@ public class DeviceIndexTests(ITestOutputHelper output)
     }
 
     [Theory]
-    [InlineData(ActuatorKind.Pump, 4)]
+    [InlineData(ActuatorKind.Pump, 6)]
     [InlineData(ActuatorKind.Relay, 5)]
-    [InlineData(ActuatorKind.Valve, 5)]
-    [InlineData(ActuatorKind.Dimmer, 4)]
+    [InlineData(ActuatorKind.Valve, 6)]
+    [InlineData(ActuatorKind.Dimmer, 5)]
     public void The_actuator_kind_filter_returns_that_kind_only(ActuatorKind kind, int expected)
     {
         var world = World.Create();
@@ -177,12 +177,12 @@ public class DeviceIndexTests(ITestOutputHelper output)
 
         var facilityB = world.Find(new DeviceSearchFilters(Zone: "facility-b"));
 
-        // Zone 4 and Zone 5 directly, plus Sub-Zone H, J and K beneath them.
+        // Zone 4, Zone 5 and the hydroponics bay (Zone 6) directly, plus Sub-Zone H, J and K beneath them.
         Assert.Contains(Mac(0x21), facilityB);
         Assert.Contains(Mac(0x2E), facilityB);
         Assert.Contains(Mac(0x1D), facilityB);
         Assert.DoesNotContain(Mac(0x19), facilityB);
-        Assert.Equal(DemoDevices.All.Count(device => device.Registration.ZoneId is "zone-4" or "sub-zone-h" or "zone-5" or "sub-zone-j" or "sub-zone-k"), facilityB.Count);
+        Assert.Equal(DemoDevices.All.Count(device => device.Registration.ZoneId is "zone-4" or "sub-zone-h" or "zone-5" or "sub-zone-j" or "sub-zone-k" or "zone-6"), facilityB.Count);
     }
 
     [Fact]
@@ -204,7 +204,7 @@ public class DeviceIndexTests(ITestOutputHelper output)
     [Theory]
     [InlineData("conveyor", 2)]
     [InlineData("CONVEYOR", 2)]
-    [InlineData("pump", 4)]
+    [InlineData("pump", 6)]
     [InlineData("GW-B2", 6)]
     [InlineData("10:00:2B", 1)]
     [InlineData("no such thing", 0)]

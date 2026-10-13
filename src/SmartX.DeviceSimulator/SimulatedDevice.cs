@@ -41,6 +41,18 @@ internal sealed class SimulatedDevice(DemoDevice definition)
     // shallow and its wait time stays honest.
     private const double CriticalChance = 0.15;
 
+    // The dry-out scenario is a cycle of this many readings: fall for most of it, recover for the rest. Eighty readings at the
+    // moisture sensor's four-second cadence is a little over five minutes, so the sensor crosses its low watch level about
+    // twice in a ten-minute pattern window, which is often enough to watch and rare enough to mean something.
+    private const int DryOutCycle = 80;
+    private const int DryOutFall = 60;
+    private const double DryOutTop = 0.55;
+    private const double DryOutBottom = 0.08;
+
+    // Where in the cycle the sensor starts. Thirty readings in it is at 31 %, so the first crossing of 20 % comes about a minute
+    // after the sensor starts, and a freshly started stack has a live trigger to show without anyone waiting for it.
+    private int _cycle = 30;
+
     private double _position = 0.5;
 
     // An actuator's state, in the terms commands use: 1 for on or open, 0 for off or closed, a dimmer's level.
@@ -236,6 +248,13 @@ internal sealed class SimulatedDevice(DemoDevice definition)
                 position = CrashesLow ? 0.02 + random.NextDouble() * 0.02 : 0.96 + random.NextDouble() * 0.03;
                 break;
 
+            case SimulationScenario.DryOut:
+                // A fixed cycle and a little jitter: it is a bed drying out between waterings, not a fault, so every
+                // reading stays inside the range and the node stays trusted.
+                _cycle = (_cycle + 1) % DryOutCycle;
+                position = DryOutPosition(_cycle) + Jitter(random, 0.01);
+                break;
+
             default:
                 _position = Math.Clamp(_position + Jitter(random, 0.03), NominalLow, NominalHigh);
                 position = _position;
@@ -244,6 +263,12 @@ internal sealed class SimulatedDevice(DemoDevice definition)
 
         return Value(position);
     }
+
+    /// <summary>Where a dry-out cycle is at a reading: a straight fall to the bottom, then a straight recovery to the top.</summary>
+    private static double DryOutPosition(int index) =>
+        index <= DryOutFall
+            ? DryOutTop - (DryOutTop - DryOutBottom) * index / DryOutFall
+            : DryOutBottom + (DryOutTop - DryOutBottom) * (index - DryOutFall) / (DryOutCycle - DryOutFall);
 
     /// <summary>Which end of the range is the dangerous one for this kind of device.</summary>
     private bool CrashesLow => Registration.Unit == "%RH";
