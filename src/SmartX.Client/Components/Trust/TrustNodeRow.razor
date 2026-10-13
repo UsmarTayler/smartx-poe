@@ -29,6 +29,8 @@
 
     private string Score => Node.Score.ToString("0.00", CultureInfo.InvariantCulture);
 
+    // The visible text in the order it is drawn, because a name that rearranges or adds to it breaks voice control: someone
+    // who says "click Fault" or reads out the reason must hit the button that shows it (WCAG 2.5.3, label in name).
     private string AccessibleName =>
-        $"{Node.MacAddress}, {TrustBandStyle.For(Node.Band).Label}, score {Score}, {Node.Reason}";
+        $"{TrustBandStyle.For(Node.Band).Label} {Node.MacAddress} {Node.Reason} {Score}";
 }

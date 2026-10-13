@@ -4,43 +4,225 @@
 
 An IoT telemetry ingestion and mesh-management system, built as a university Portfolio of Evidence.
 
-Smart-X sits between a field network of sensors and the people who operate it. Sensors are registered
-into a hierarchy of facilities, zones and sub-zones, and each registration is checked against the rules
-of every level above it. Their readings pass through a staged ingestion pipeline that turns raw JSON into
-strongly typed packets without boxing. A trust engine scores every node on recent behaviour and flags the
-ones going quiet, and a live dashboard ranks the mesh worst first. Operators can attach configuration
-files, installation photos and hardware logs to a sensor. These are encrypted at rest.
+## What Smart-X is
 
-The brief has three pillars. Parts 1 and 2 deliver the first and lay the ground for the second:
-
-1. **Sensor Data Ingestion and Telemetry**: built.
-2. **Real-Time Command Stream and History**: in progress. Part 2 adds a separate device simulator that
-   reports over HTTP, two ingestion queues (a FIFO lane and a priority lane for critical alerts), and commands
-   to actuators with an undo stack.
-3. **Network Topology and Mesh Routing**: later part.
+Smart-X sits between a field network of sensors and the people who operate it. **Part 1** registers sensors into a hierarchy of
+facilities and zones (each registration checked against every level above it), passes their readings through a staged ingestion
+pipeline that turns raw JSON into strongly typed packets without boxing, scores every node's trust on recent behaviour, and shows a
+dashboard that ranks the mesh worst first, with encrypted attachments per sensor. **Part 2** adds real-time processing and device
+management on top, without replacing any of it: a separate device simulator that reports over HTTP like real hardware, two
+ingestion queues (a FIFO lane and a priority lane for critical alerts, with backpressure), commands to actuators with an undo
+stack, a time-ordered history with timelines, de-duplicated alerts and set-intersection search, everything pushed to the browser
+over SignalR, and a predictive engine that learns what operators do after what, suggests the next action, and warns of a node
+heading for Fault before it gets there. **Part 3** (Network Topology and Mesh Routing) is not built: its entry in the navigation
+is visibly disabled and marked "Part 3".
 
 ## Contents
 
-- [Prerequisites](#prerequisites)
+- [What Smart-X is](#what-smart-x-is)
 - [Architecture](#architecture)
-- [Quick start](#quick-start)
-- [Running with Docker](#running-with-docker)
-- [The device simulator](#the-device-simulator)
-- [Ingestion queues](#ingestion-queues)
-- [Commands and undo](#commands-and-undo)
-- [History, timelines, alerts and search](#history-timelines-alerts-and-search)
-- [Real-time push](#real-time-push)
-- [The Command Stream page](#the-command-stream-page)
-- [Pattern analysis and investigations](#pattern-analysis-and-investigations)
-- [Suggestions, anticipation and insights](#suggestions-anticipation-and-insights)
-- [Feature walkthrough](#feature-walkthrough)
-- [Where the assessed concepts live](#where-the-assessed-concepts-live)
+- [Quick start](#quick-start) (Docker, no `.env` needed)
+- [Running without Docker](#running-without-docker)
+- [Testing the Part 2 data structures](#testing-the-part-2-data-structures)
+  - [`Queue<T>`](#queuet-the-standard-lane), [`PriorityQueue`](#priorityqueue-the-critical-lane) (how to simulate a high-priority alert), [`Stack<T>`](#stackt-undo), [`Dictionary`](#dictionary-lookups-and-learned-counts), [`SortedDictionary`](#sorteddictionary-the-history-store), [`HashSet`](#hashset-duplicates-and-already-done), [the predictive engine](#the-predictive-engine)
+- [Where each concept lives](#where-each-concept-lives)
+- [Measurements](#measurements)
 - [Configuration reference](#configuration-reference)
-- [API reference](#api-reference)
-- [Attachments: design notes and limits](#attachments-design-notes-and-limits)
 - [Troubleshooting](#troubleshooting)
+- [Design notes](#design-notes): the device simulator, ingestion queues, commands and undo, history and alerts, real-time push, the Command Stream page, pattern analysis, suggestions, the feature walkthrough, the API reference, attachments and the test suite
 
-## Prerequisites
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph Browser
+        UI["Blazor WebAssembly client<br/>(MudBlazor)"]
+    end
+
+    subgraph Compose["docker compose"]
+        NGINX["client container<br/>nginx: static files,<br/>proxies /api and /hubs"]
+        SIM["SmartX.DeviceSimulator<br/>55 devices"]
+
+        subgraph API["SmartX.Api"]
+            EDGE["Edge, on the request thread<br/>parse, registered, type, range"]
+            STD["Queue#lt;T#gt;<br/>standard lane, bounded"]
+            CRIT["PriorityQueue<br/>critical lane"]
+            WORK["Worker<br/>BackgroundService"]
+            TRUST["Trust engine<br/>Dictionary, HashSet"]
+            HIST["History store<br/>SortedDictionary"]
+            ALERT["Alerts and device index<br/>HashSet, set intersection"]
+            CMD["Commands<br/>Stack#lt;T#gt; for undo"]
+            PAT["Pattern engine<br/>Queue window, HashSet,<br/>Dictionary of dictionaries"]
+            SUG["Suggestions and insights<br/>PriorityQueue top-K,<br/>least-squares forecast"]
+            HUB["SignalR hub<br/>topics, snapshot then stream"]
+        end
+    end
+
+    SIM -- "HTTP: register, telemetry,<br/>poll desired state" --> EDGE
+    UI -- "HTTP /api" --> NGINX
+    NGINX -- "/api" --> EDGE
+    EDGE -- "valid, critical" --> CRIT
+    EDGE -- "valid" --> STD
+    CRIT --> WORK
+    STD --> WORK
+    WORK --> TRUST
+    WORK --> HIST
+    WORK --> ALERT
+    WORK --> PAT
+    PAT --> SUG
+    HIST --> SUG
+    TRUST --> HUB
+    ALERT --> HUB
+    CMD --> HUB
+    SUG --> HUB
+    HUB -- "WebSocket, falls back<br/>to long polling" --> NGINX
+    NGINX --> UI
+```
+
+Everything the browser sees arrives through nginx on one origin. The simulator is not a special case: it talks to the API over the
+compose network, as a device would talk to a gateway. Rejected readings never enter a queue; they are answered at the edge and
+still count against the node's trust.
+
+### Layout
+
+```text
+SmartX.sln
+src/
+  SmartX.Shared/     contracts: packets, zones, sensors, trust and attachment models
+  SmartX.Api/        ASP.NET Core Minimal API: ingestion, validation, trust, storage
+  SmartX.Client/     Blazor WebAssembly app (MudBlazor), served as static files
+  SmartX.DeviceSimulator/  a fleet of simulated ESP32 devices that report to the API over HTTP
+tests/
+  SmartX.Tests/      xUnit: unit tests and in-memory API tests
+docs/
+  UPDATES.md         ledger of changes made in response to review
+docker-compose.yml   the API, the client and the simulator together
+```
+
+| Project | What it does |
+| --- | --- |
+| `SmartX.Shared` | Holds every type that crosses the wire: `TelemetryPacket<T>` and its operators, the zone hierarchy and its recursive validator, sensor registrations and their validation rules, trust bands, and attachment metadata. It has no dependencies. |
+| `SmartX.Api` | Owns all server-side behaviour. It registers sensors and validates them against their zone ancestry, runs readings through the staging buffer into per-node ring buffers, scores each node's trust, watches for missed heartbeats, and streams encrypted attachments to and from disk. Part 2 adds the ingestion queues, commands and undo, the history store, alerts and device search, the SignalR hub, and the pattern, suggestion and insight engines. |
+| `SmartX.Client` | Runs in the browser. It has the trust panel, sensors, telemetry, a sensor profile and the Command Stream page, and it talks to the API only over HTTP through one typed client, `SmartXApiClient`. |
+| `SmartX.DeviceSimulator` | A console app that behaves like a fleet of ESP32s. It registers its devices with `POST /api/sensors`, posts telemetry at each device's interval, backfills history on first start, waits for the API with backoff if it isn't up yet, and polls the API for the scenario an operator wants each device to run. It references `SmartX.Shared` only. |
+| `SmartX.Tests` | Unit tests for the shared types, and API tests that boot the real API in memory with `WebApplicationFactory`. |
+
+**Why the client and the simulator don't reference the API.** Each of them references `SmartX.Shared`, but
+none of them references the API, and the API references none of them. The client can only use the contracts and a base URL, never the API's stores,
+engine or internal types, so the split is enforced by the compiler and not just by folder layout. The
+client can also be deployed on its own. In Docker it is plain static files behind nginx with no .NET
+runtime. The simulator follows the same rule for a plainer reason: it stands in for hardware, and hardware
+cannot call into the gateway's code, only send it HTTP requests. The one exception is the test project,
+which references all of them so it can check their behaviour against the real API.
+
+## Quick start
+
+**No `.env` file is needed.** Every setting has a default, including the attachment encryption key (the published development key,
+which protects nothing and which the API warns about when it is used outside Development). You need Docker with Compose v2
+(Docker Desktop, or Engine 24+), and nothing else: not the .NET SDK, not Node.
+
+```bash
+git clone https://github.com/UsmarTayler/smartx-poe.git
+```
+
+```bash
+cd smartx-poe
+```
+
+```bash
+docker compose up -d --build
+```
+
+The first build downloads the .NET SDK and nginx images and takes a few minutes; later builds reuse cached layers. Three
+containers start: the API first, then the simulator once the API reports healthy, then the client. Open <http://localhost:8080>.
+The dashboard fills within about half a minute, and **Suggested Actions** is not empty from the first moment, because the engine
+starts with a labelled, seeded operator history (see [Suggestions](#suggestions-anticipation-and-insights)).
+
+Check it is up:
+
+```bash
+docker compose ps
+```
+
+```bash
+curl http://localhost:5266/api/health
+```
+
+That prints `{"status":"ok"}`. The fleet is 55 devices, including the hydroponics bay (the last seven), and the engine already
+has something to suggest:
+
+```bash
+curl http://localhost:5266/api/suggestions
+```
+
+The first suggestion is **Turn on Pump A**, with evidence such as "Operators did this 7 of the last 8 times (7 from seeded
+history)". The second number grows by one each time the sensor dips again, and the seeded 7 stays. The pages are `/` (trust panel), `/sensors`, `/telemetry` and `/command-stream`; refreshing any of them works.
+
+**Try a high-priority alert** (the full walkthrough is under [`PriorityQueue`](#priorityqueue-the-critical-lane)). A power
+reading above the critical threshold takes the priority lane; an ordinary one takes the standard lane:
+
+```bash
+curl -X POST http://localhost:5266/api/telemetry -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:0F","value":200}'
+```
+
+The response is `202` with `"lane":"critical"`. The same device with `"value":120` answers `"lane":"standard"`.
+
+To stop (uploaded attachments are kept in the `smartx_attachments` volume and survive `down`, restarts and rebuilds):
+
+```bash
+docker compose down
+```
+
+Add `--volumes` to delete the attachments as well.
+
+### Changing a setting
+
+Copy `.env.example` to `.env` (it is gitignored) and change what you need, for example the number of devices, whether every
+device starts healthy, the pattern window, or the host ports. The variables are listed under [Docker Compose
+settings](#docker-compose-settings). `.env` is optional, and a wrong value in it is the only way it can break the defaults.
+
+macOS, Linux or Git Bash:
+
+```bash
+cp .env.example .env
+```
+
+PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+### How the containers fit together
+
+| Service | Image | Listens on | Host port | Runs as |
+| --- | --- | --- | --- | --- |
+| `client` | nginx serving the published WebAssembly files | 8080 | `8080` | `nginx` (non-root) |
+| `api` | ASP.NET Core runtime, Release build | 8080 | `5266` | `app` (non-root) |
+| `simulator` | .NET runtime, Release build | none | none | `app` (non-root) |
+
+The simulator talks to `http://api:8080` over the compose network, exactly as a device would talk to a gateway. It publishes no
+port, because it only makes requests.
+
+Compose starts the simulator only once the API's health check passes (`condition: service_healthy`). That narrows the start-up race
+but doesn't remove it, so the simulator also waits and retries with backoff on its own. The API's health check is a request to
+`/api/health` made from inside the container with bash, because the runtime image has no `curl`. The client and the simulator
+define no health check of their own: nginx is up when it is serving, and the simulator retries rather than reporting.
+
+The browser only talks to the client container. nginx serves the app, falls back to `index.html` for any path that is not a file
+(so a refresh on `/command-stream` works), and forwards `/api/` and `/hubs/` to the `api` service, so the client's
+`ApiBaseAddress` is just `/`. Because the browser sees one origin, no CORS is involved. nginx streams uploads straight through
+without buffering them or applying its own size limit, and the API enforces the real limit. The API's host port is published so
+`curl` and the scenario endpoint can reach it directly.
+
+Both images are multi-stage. The SDK stage restores and publishes in Release, and only the output is copied into the runtime
+image, so neither image contains source or a compiler.
+
+## Running without Docker
+
+This runs the three programs directly with the .NET SDK, which is what to use to debug or to change the code. It needs no Docker.
+
+### Prerequisites
 
 | Tool | Version | Needed for | Check it with |
 | --- | --- | --- | --- |
@@ -57,43 +239,9 @@ dotnet --list-sdks
 
 You don't need Docker to run Smart-X locally, and you don't need the .NET SDK to run it with Docker.
 
-## Architecture
-
-```text
-SmartX.sln
-src/
-  SmartX.Shared/     contracts: packets, zones, sensors, trust and attachment models
-  SmartX.Api/        ASP.NET Core Minimal API: ingestion, validation, trust, storage
-  SmartX.Client/     Blazor WebAssembly app (MudBlazor), served as static files
-  SmartX.DeviceSimulator/  a fleet of simulated ESP32 devices that report to the API over HTTP
-tests/
-  SmartX.Tests/      xUnit: unit tests and in-memory API tests
-docs/
-  UPDATES.md         ledger of changes made in response to review
-docker-compose.yml   the API and the client together
-```
-
-| Project | What it does |
-| --- | --- |
-| `SmartX.Shared` | Holds every type that crosses the wire: `TelemetryPacket<T>` and its operators, the zone hierarchy and its recursive validator, sensor registrations and their validation rules, trust bands, and attachment metadata. It has no dependencies. |
-| `SmartX.Api` | Owns all server-side behaviour. It registers sensors and validates them against their zone ancestry, runs readings through the staging buffer into per-node ring buffers, scores each node's trust, watches for missed heartbeats, and streams encrypted attachments to and from disk. It also hosts the optional demo seeder and simulator. |
-| `SmartX.Client` | Runs in the browser. It has four pages (trust panel, sensors, telemetry and a sensor profile), and it talks to the API only over HTTP through one typed client, `SmartXApiClient`. |
-| `SmartX.DeviceSimulator` | A console app that behaves like a fleet of ESP32s. It registers its devices with `POST /api/sensors`, posts telemetry at each device's interval, backfills history on first start, waits for the API with backoff if it isn't up yet, and polls the API for the scenario an operator wants each device to run. It references `SmartX.Shared` only. |
-| `SmartX.Tests` | Unit tests for the shared types, and API tests that boot the real API in memory with `WebApplicationFactory`. |
-
-**Why the client and the simulator don't reference the API.** Each of them references `SmartX.Shared`, but
-none of them references the API, and the API references none of them. The client can only use the contracts and a base URL, never the API's stores,
-engine or internal types, so the split is enforced by the compiler and not just by folder layout. The
-client can also be deployed on its own. In Docker it is plain static files behind nginx with no .NET
-runtime. The simulator follows the same rule for a plainer reason: it stands in for hardware, and hardware
-cannot call into the gateway's code, only send it HTTP requests. The one exception is the test project,
-which references all of them so it can check their behaviour against the real API.
-
-## Quick start
-
 Every command runs from the repository root.
 
-### 1. Get the code
+### 1. Get the code (skip it if you have already cloned)
 
 ```bash
 git clone https://github.com/UsmarTayler/smartx-poe.git
@@ -158,7 +306,7 @@ curl http://localhost:5266/api/health
 That should return `{"status":"ok"}`.
 
 The API starts empty, with the brief's four-zone hierarchy. To fill it with the larger demo deployment
-and 48 simulated devices, start it with the demo zones, then run the [device simulator](#the-device-simulator)
+and 55 simulated devices, start it with the demo zones, then run the [device simulator](#the-device-simulator)
 in a third terminal (step 6):
 
 ```bash
@@ -194,80 +342,798 @@ reporting. Start it before the API if you like: it waits and retries until the A
 The HTTP profile is the default. For HTTPS, add `--launch-profile https` to either command and trust the
 development certificate once with `dotnet dev-certs https --trust`.
 
-## Running with Docker
+## Testing the Part 2 data structures
 
-This is an alternative to the quick start. It builds the projects inside containers and runs all three
-services together: the API, the client and the device simulator.
+Each subsection is a short recipe: the steps, then what you should see. They assume the Docker stack from the [quick start](#quick-start)
+is running, and use the API on port 5266 and the page on 8080. Each also names the automated tests that hold the behaviour in place
+(`dotnet test --filter "FullyQualifiedName~Name"` runs one). The design behind each is in the [design notes](#design-notes).
 
-### 1. Create your `.env`
+### `Queue<T>`: the standard lane
+
+The standard lane is a bounded FIFO, `Queue<QueuedReading>` behind a lock, drained by one background worker.
+
+1. Send an ordinary reading:
+
+   ```bash
+   curl -X POST http://localhost:5266/api/telemetry -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:0F","value":120}'
+   ```
+
+2. Read the pipeline's own figures:
+
+   ```bash
+   curl http://localhost:5266/api/pipeline/stats
+   ```
+
+**Expect:** `202 Accepted` with `"lane":"standard"` and a `queuePosition`. In the stats, the `standard` lane's `processed` count keeps
+climbing and its `depth` is normally 0, because the worker keeps up. Readings leave in the order they arrived.
+
+To see the **bound** (backpressure), give the worker a per-reading cost, speed the fleet up and shrink the queue:
+
+```bash
+SMARTX_QUEUE_DEPTH=50 SMARTX_PROCESS_DELAY=00:00:00.01 SMARTX_RATE=50 SMARTX_TICK=00:00:00.05 docker compose up -d
+```
+
+**Expect:** the standard queue's depth climbs to 50 (the "Standard queue" panel on `/command-stream`, or `depth` in the stats), and
+further readings are answered `503 Service Unavailable` with a `Retry-After` header and counted in `rejectedWhenFull`; nothing is
+silently dropped and memory does not grow. Run `docker compose up -d` without the variables to go back. Tests: `IngestionQueueTests`,
+`SimulatedGatewayCostTests`.
+
+The pattern engine reuses the same structure for its sliding window (a `Queue<TriggerInstance>` expired from the front); see
+[the predictive engine](#the-predictive-engine) below.
+
+### `PriorityQueue`: the critical lane
+
+Critical readings are decided at the edge and go into a `PriorityQueue<QueuedReading, (int Severity, long Sequence)>`. The worker drains
+it first. The composite priority makes it stable (equal severities leave in arrival order), and a starvation valve lets one standard
+reading through after every 20 critical ones.
+
+**How to simulate a high-priority alert.**
+
+*With curl.* A reading above the critical threshold for its category and unit takes the priority lane (power above 180 kW here; the
+other thresholds are in [Ingestion queues](#ingestion-queues)). The device's registered range is 0 to 450 kW, so the reading is valid:
+
+```bash
+curl -X POST http://localhost:5266/api/telemetry -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:0F","value":200}'
+```
+
+```bash
+curl http://localhost:5266/api/pipeline/stats
+```
+
+**Expect:** `202` with `"lane":"critical"`, and in the stats the `critical` lane's `processed` count goes up and its average wait is a
+fraction of a millisecond. The same device with `"value":120` answers `"lane":"standard"`.
+
+*From the page.* Open `/command-stream`. In the "Critical lane" strip choose a device under **Simulate on** and press **Simulate critical
+event**. The simulator reads the new scenario from the device's shadow within five seconds and the device reports a critical reading.
+**Expect:** the reading is pinned at the top of the live stream, marked Critical and announced assertively, and the strip's sentence names
+it and how much sooner it was processed. **Back to normal** undoes it.
+
+*To see it jump a backlog* (with the defaults both lanes are empty, which shows nothing), build one on purpose:
+
+```bash
+SMARTX_PROCESS_DELAY=00:00:00.004 SMARTX_RATE=50 SMARTX_TICK=00:00:00.050 docker compose up -d
+```
+
+Press **Simulate critical event** again. **Expect:** the standard lane's average wait in the tens of seconds and the critical lane's in
+tens of milliseconds, and the strip reporting the ratio ("408.7× sooner" when measured). Run `docker compose up -d` without the
+variables to return to the defaults. Tests: `CriticalLaneOrderTests` (order, which does not depend on the machine's speed),
+`IngestionQueueTests` (stability and the valve); `CriticalBypassMeasurementTests` is the measurement.
+
+The same structure ranks suggestions, capped at K; see [the predictive engine](#the-predictive-engine).
+
+### `Stack<T>`: undo
+
+Every command that changes an actuator pushes what it replaced onto a bounded `Stack<UndoEntry>`; **Undo** pops the most recent entry and
+sends the device its previous state (not the opposite of the command).
+
+1. Close a valve:
+
+   ```bash
+   curl -X POST http://localhost:5266/api/commands -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:2B","action":"ValveClose"}'
+   ```
+
+2. Look at the stack, then undo:
+
+   ```bash
+   curl http://localhost:5266/api/commands/undo-stack
+   ```
+
+   ```bash
+   curl -X POST http://localhost:5266/api/commands/undo
+   ```
+
+**Expect:** the stack lists the close with the valve's previous state on top; the undo is accepted, a restore command is sent to that
+valve, and the stack is shorter by one. Undo again with nothing to undo and the API says so. The stack holds at most 20 actions. In the
+page, the "Undo stack" panel shows the same, with "n of up to 20 actions" and an **Undo last** button; a zone-wide command ("Apply to
+zone", for example Zone 3 and **Close valve**) is one entry that undoes every child. Tests: `CommandServiceTests`,
+`CompositeCommandTests`, `UndoPanelComponentTests`.
+
+### `Dictionary`: lookups and learned counts
+
+Three dictionaries do the work you can see. The trust engine keeps `Dictionary<string, NodeState>` keyed by MAC, so each packet is one
+lookup. The device index keeps a `Dictionary<TKey, HashSet<string>>` per search facet. The pattern engine keeps a
+`Dictionary<TriggerKey, Dictionary<ActionKey, DecayedCount>>`: how often each action followed each trigger.
+
+1. A per-packet lookup by key:
+
+   ```bash
+   curl http://localhost:5266/api/trust/B8:27:EB:10:00:0F
+   ```
+
+2. The nested dictionary, for Moisture Sensor B (every association the engine holds, including the weak ones):
+
+   ```bash
+   curl "http://localhost:5266/api/patterns?mac=B8:27:EB:10:00:32&includeWeak=true"
+   ```
+
+3. A search that intersects the index's sets:
+
+   ```bash
+   curl "http://localhost:5266/api/devices/search?category=Actuator&actuatorKind=Valve&zone=zone-3"
+   ```
+
+**Expect:** (1) the node's score, band and reason. (2) A first association whose trigger is a low-level crossing on Moisture Sensor B and
+whose action is `PumpOn` on Pump A, at the `Specific` level, with `qualified: true`, `times` 7 of a `triggerTimes` that starts at 10 and grows as the sensor dips (7 and 8 of them
+seeded), a lift of roughly 10, and then a `General` association for "% sensor in Zone 6". The decimals drift as the counts decay. (3) The
+valves in Zone 3 (and its sub-zones), found by intersecting sets and not by scanning devices.
+
+To watch it learn from scratch, run `scripts/demo-patterns.sh` (about eight minutes with a short window; the instructions are in
+[Pattern analysis](#pattern-analysis-and-investigations)). Tests: `PatternEngineTests`, `TrustEngineTests`, `DeviceIndexTests`.
+
+### `SortedDictionary`: the history store
+
+History is a dictionary of nodes, each owning a `SortedDictionary<HistoryKey, HistoryEntry>` keyed by `(Timestamp, Sequence)`, so a time
+range is read in order.
+
+```bash
+curl "http://localhost:5266/api/sensors/B8:27:EB:10:00:0C/timeline?maxPoints=20"
+```
+
+**Expect:** `"shape":"Buckets"`, at most 20 buckets in time order, each with `start`, `end`, `min`, `max`, `average` and `count`, and a
+`readingCount` for the whole range. A spike survives downsampling as a bucket's `max` even when the average hides it. In the page, open
+a device on `/command-stream` to see the same data as a chart with the commands, alerts and trust changes in the range as markers, and
+**Show as table** for the numbers. A range read walks from the start of the node's keys (a `SortedDictionary` cannot seek); the cost of
+that is measured in [Measurements](#measurements). Tests: `SortedDictionaryHistoryStoreTests` (through the shared contract suite),
+`TimelineBuilderTests`.
+
+### `HashSet`: duplicates and "already done"
+
+An alert is identified by a `readonly record struct AlertKey(Mac, Kind)`. A condition that fires calls `HashSet<AlertKey>.Add`, and the
+answer is the whole decision: `true` is a new alert, `false` is a repeat, which is counted and shown as "suppressed ×N".
+
+1. Look at the alerts, wait a few seconds, look again:
+
+   ```bash
+   curl http://localhost:5266/api/alerts
+   ```
+
+2. Then the totals:
+
+   ```bash
+   curl http://localhost:5266/api/alerts/stats
+   ```
+
+**Expect:** the same alerts (one per device and kind) with `suppressedCount` higher the second time, and in the stats `suppressed` far
+larger than `raised`. In the page, the Alerts panel shows "suppressed ×N" on each row. The same idea counts a pattern once
+(`HashSet<(long Instance, ActionKey)>`: four opens of one pump after one moisture drop are one response) and tracks which actions have
+been taken since a trigger, so a suggestion disappears once its action is done. Tests: `AlertTrackerTests`, `PatternEngineTests`.
+
+### The predictive engine
+
+The engine learns what operators do in what situations, ranks the likely next action, and forecasts which nodes are heading for Fault. It
+uses a `Queue` (the window), a `HashSet` (count once, "already done"), dictionaries of dictionaries (the counts), a `PriorityQueue` capped
+at K (the ranking), and a least-squares fit (the forecast).
+
+1. Open `/command-stream`. **Expect:** **Suggested Actions** lists "Turn on Pump A" and "Open Pump A" (Moisture Sensor B dropped below
+   20 %), each with the evidence ("Operators did this 7 of the last 8 times (7 from seeded history). 12× more likely than usual."), where
+   it came from ("This device's own pattern", or "Similar devices: …"), and one button. The same top three appear on the trust panel.
+2. The same data, as the page receives it:
+
+   ```bash
+   curl http://localhost:5266/api/suggestions
+   ```
+
+   ```bash
+   curl http://localhost:5266/api/insights
+   ```
+
+3. Press **Open Pump A** (or open Pump A yourself from the device list). **Expect:** the suggestion disappears without a reload, because
+   its action has been taken; and the pattern's count does not go up, because an accepted suggestion counts at weight zero (otherwise the
+   engine would train on its own advice).
+4. Press **Not useful** on another. **Expect:** the card moves under "Marked not useful", its weight becomes 85 % (never below 50 %), and
+   **Take back** restores it exactly.
+5. Look at **Automated Insights**. **Expect:** *Anticipated* entries for nodes whose trust is falling and fitted to a line well enough
+   (for example "…trust falling, projected to reach Fault in about 2 minutes"), before they are in Fault, followed by *Now* entries for nodes
+   already in Fault with an open investigation. Each has "Open" and "Review the investigation".
+6. Moisture Sensor B dries out on a cycle (the `DryOut` scenario). **Expect:** when it next crosses below 20 %, the two suggestions
+   reappear marked **New**, with "Arrived … ms after the trigger", without a reload.
+
+Tests: `SuggestionServiceTests` (ranking, top-K, suppression, feedback, no self-reinforcement), `TrustForecasterTests` (a falling series
+projects the right time; noise, a flattening fall and a reversal do not), `InsightServiceTests`, `SuggestionsTopicTests` (snapshot then
+stream), `SuggestedActionsPanelTests`, `InsightsPanelTests` and `InvestigationCardTests` (the cards, the one-click calls and the verdict buttons). The design is in
+[Suggestions, anticipation and insights](#suggestions-anticipation-and-insights).
+
+### Running all the tests
+
+```bash
+dotnet test
+```
+
+The default run excludes the speed benchmarks, which assert thresholds on a wall clock; the behaviour they measure is covered by order in
+the default run. See [Measurements](#measurements) for how to run the benchmarks.
+
+## Where each concept lives
+
+Parts 1 and 2, in one table.
+
+| Concept | Where | What to look at |
+| --- | --- | --- |
+| Generics without boxing | [`TelemetryPacket.cs`](src/SmartX.Shared/Packets/TelemetryPacket.cs) | `TelemetryPacket<T> where T : struct`; the class comment explains how the constraint avoids boxing |
+| Generic math | [`NumericPacket.cs`](src/SmartX.Shared/Packets/NumericPacket.cs) | `NumericPacket<T> where T : struct, INumber<T>` |
+| Generic conversion at the boundary | [`ValueRange.cs`](src/SmartX.Shared/Sensors/ValueRange.cs) | `Contains<T>(T value)` uses `double.CreateChecked`, not `Convert.ToDouble(object)` |
+| Generic results on the client | [`ApiResult.cs`](src/SmartX.Client/Services/ApiResult.cs), [`SmartXApiClient.cs`](src/SmartX.Client/Services/SmartXApiClient.cs) | `ApiResult<T>` as a `readonly record struct`, and `SendReadingAsync<T>` |
+| Operator overloading, arithmetic and comparison | [`NumericPacket.cs`](src/SmartX.Shared/Packets/NumericPacket.cs) | `+`, `-`, `>`, `<`, `==`, `!=` |
+| Operator overloading, logical | [`StatePacket.cs`](src/SmartX.Shared/Packets/StatePacket.cs) | `\|`, `&`, `==`, `!=` |
+| Operator guard | [`TelemetryPacket.cs`](src/SmartX.Shared/Packets/TelemetryPacket.cs) | `EnsureCombinable`, which rejects mismatched units or categories |
+| Recursion, walking up | [`ZoneValidator.cs`](src/SmartX.Shared/Zones/ZoneValidator.cs) | `Ascend`, with its base case, cycle guard and depth guard |
+| Recursion, walking down | [`ZoneTree.cs`](src/SmartX.Shared/Zones/ZoneTree.cs) | `Descend` (sensors beneath a zone) and `BuildNode` (the nested tree) |
+| Jagged arrays | [`TelemetryStagingBuffer.cs`](src/SmartX.Shared/Collections/TelemetryStagingBuffer.cs) | the `T[][] _windows` field, `Stage` and `Drain`; the class comment covers jagged versus rectangular |
+| Custom collection | [`TelemetryRingBuffer.cs`](src/SmartX.Shared/Collections/TelemetryRingBuffer.cs) | `TelemetryRingBuffer<T>`: O(1) `Add` that overwrites the oldest, an indexer, and a struct `Enumerator` so `foreach` allocates nothing |
+| Lists | [`TelemetryStagingBuffer.cs`](src/SmartX.Shared/Collections/TelemetryStagingBuffer.cs), [`TelemetryRingBuffer.cs`](src/SmartX.Shared/Collections/TelemetryRingBuffer.cs) | `Drain` returns a pre-sized `List<T>`, and `ToList` copies a node's history out as a pre-sized list |
+| Stack for undo | [`CommandService.cs`](src/SmartX.Api/Commands/CommandService.cs) | `Stack<UndoEntry> _undo` behind a lock: `Push` (with the bounded-depth trim), `Undo`, and the class comment on why undo restores the previous state instead of doing the opposite |
+| Command lifecycle | [`CommandService.cs`](src/SmartX.Api/Commands/CommandService.cs), [`CommandStore.cs`](src/SmartX.Api/Commands/CommandStore.cs) | states and transitions; `Collect` hands each command over once; `TryTransition` is the compare-and-swap |
+| Recursion, reused | [`CommandService.cs`](src/SmartX.Api/Commands/CommandService.cs), [`ZoneTree.cs`](src/SmartX.Shared/Zones/ZoneTree.cs) | `IssueForZone` calls the same `NodesBeneath` walk as Part 1 to find every actuator under a zone, and the device search asks `ZoneIdsBeneath`, which shares the same private `Descend` |
+| Sorted dictionary | [`SortedDictionaryHistoryStore.cs`](src/SmartX.Api/History/SortedDictionaryHistoryStore.cs), [`HistoryKey.cs`](src/SmartX.Api/History/HistoryKey.cs) | a dictionary of nodes, each owning a `SortedDictionary<HistoryKey, HistoryEntry>`; the key is `(Timestamp, Sequence)` so equal timestamps cannot collide, and the class comment states the cost of a range query honestly |
+| Contract tests | [`HistoryStoreContract.cs`](tests/SmartX.Tests/HistoryStoreContract.cs) | an abstract suite over `IHistoryStore`, run by a subclass, so a replacement store is proven by adding one more subclass |
+| Downsampling | [`TimelineBuilder.cs`](src/SmartX.Api/History/TimelineBuilder.cs) | one pass into at most `maxPoints` buckets with min, max, average and count, so a spike survives |
+| HashSet for duplicate prevention | [`AlertTracker.cs`](src/SmartX.Api/Alerts/AlertTracker.cs), [`AlertKey.cs`](src/SmartX.Shared/Alerts/AlertKey.cs) | `HashSet<AlertKey>` where `Add` returning `false` is the suppress decision; the key is a `readonly record struct` so value equality works |
+| Secondary indexes and set intersection | [`DeviceIndex.cs`](src/SmartX.Api/Search/DeviceIndex.cs) | `Dictionary<TKey, HashSet<string>>` per category, kind, band, alert and zone; `Search` intersects the smallest set first, and `FindInconsistencies` is what the consistency test runs |
+| Idempotent delivery | [`SimulatedDevice.cs`](src/SmartX.DeviceSimulator/SimulatedDevice.cs) | `ApplyCommand` remembers applied command ids |
+| FIFO queue | [`TelemetryIngestionQueue.cs`](src/SmartX.Api/Ingestion/TelemetryIngestionQueue.cs) | `Queue<QueuedReading> _standard`, with the lock, the `SemaphoreSlim` signal and the bound; the class comment explains the trade-off against `Channel<T>` |
+| Priority queue | [`TelemetryIngestionQueue.cs`](src/SmartX.Api/Ingestion/TelemetryIngestionQueue.cs) | `PriorityQueue<QueuedReading, (int Severity, long Sequence)>`: the composite priority that makes it stable, and `DequeueAsync`'s starvation valve |
+| Classifying at the edge | [`CriticalClassifier.cs`](src/SmartX.Api/Ingestion/CriticalClassifier.cs), [`TelemetryEndpoints.cs`](src/SmartX.Api/Endpoints/TelemetryEndpoints.cs) | `IsCritical` against configured rules; `Enqueue` and `QueueFull` (503 with `Retry-After`) |
+| Asynchronous processing | [`TelemetryProcessor.cs`](src/SmartX.Api/Ingestion/TelemetryProcessor.cs) | the `BackgroundService` that drains the queues, and why there is one worker |
+| Device shadow | [`SimulationEndpoints.cs`](src/SmartX.Api/Endpoints/SimulationEndpoints.cs), [`DeviceShadowStore.cs`](src/SmartX.Api/Storage/DeviceShadowStore.cs) | desired state with a version; `GET /api/devices/{mac}/desired` |
+| Device simulator | [`DeviceFleet.cs`](src/SmartX.DeviceSimulator/DeviceFleet.cs), [`GatewayClient.cs`](src/SmartX.DeviceSimulator/GatewayClient.cs) | registration, backfill, backoff, and applying desired state, all over HTTP |
+| SignalR hub and groups | [`TelemetryHub.cs`](src/SmartX.Api/Realtime/TelemetryHub.cs), [`ITelemetryClient.cs`](src/SmartX.Api/Realtime/ITelemetryClient.cs) | topics as groups, a typed client interface, and the transport readable through `GetTransport` |
+| Batching, coalescing and immediate sends | [`RealtimeBroadcaster.cs`](src/SmartX.Api/Realtime/RealtimeBroadcaster.cs) | the class comment explains which messages are which and why; one loop sends, so messages leave in numbered order |
+| Snapshot plus stream | [`RealtimeFeed.cs`](src/SmartX.Client/Realtime/RealtimeFeed.cs) | join, snapshot, then apply only pushes newer than the snapshot; reference-counted start and stop |
+| One connection, reconnect and fallback | [`RealtimeConnection.cs`](src/SmartX.Client/Realtime/RealtimeConnection.cs) | the state machine: Live, Reconnecting, Polling, and the upgrade back |
+| Bounded buffers on the client | [`LiveStream.cs`](src/SmartX.Client/CommandStream/LiveStream.cs) | two `TelemetryRingBuffer<StreamRow>`: one for the stream and one for readings held while paused; resume moves the held ones in arrival order, and the class comment explains why a critical reading pins even while paused |
+| Debounce with out-of-order answers | [`DeviceSearchService.cs`](src/SmartX.Client/CommandStream/DeviceSearchService.cs) | `Request` cancels the wait of the one before it; `SearchAsync` numbers each request and only the newest may set the result |
+| Chart as data, then markup | [`TimelineChartModel.cs`](src/SmartX.Client/CommandStream/TimelineChartModel.cs), [`TimelineChart.razor`](src/SmartX.Client/Components/CommandStream/TimelineChart.razor) | the model works out the band, line, ticks and markers as numbers and strings, away from the component that draws them; gaps stay gaps |
+| Rules shared by server and client | [`CommandRules.cs`](src/SmartX.Shared/Commands/CommandRules.cs) | `WhyNotUndoable` and `StatusOf`: the server refuses with these words and the client explains with the same ones |
+| Redraw only on change | [`LiveStreamPanel.razor`](src/SmartX.Client/Components/CommandStream/LiveStreamPanel.razor) | `ShouldRender` returns a dirty flag that only the stream, the search and the catalogue set |
+| Component tests | [`CommandStreamComponentTests.cs`](tests/SmartX.Tests/CommandStreamComponentTests.cs), [`StreamComponentKit.cs`](tests/SmartX.Tests/StreamComponentKit.cs) | bUnit against the real feeds on a fake hub, a fake API and a fake clock |
+| Queue for a sliding window | [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `Queue<TriggerInstance> _window`: triggers in time order, expired from the front, so an action is paired with the triggers in the window and nothing is searched; the same FIFO structure as the ingestion lane, doing a different job |
+| HashSet to count once | [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `HashSet<(long Instance, ActionKey Action)> _paired`: `Add` returning false is why four opens of one pump after one moisture drop are one response |
+| Dictionaries of dictionaries | [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `Dictionary<TriggerKey, Dictionary<ActionKey, DecayedCount>>`: how often each action followed each trigger, with support, confidence and lift worked out from it |
+| Value-type keys, no boxing | [`PatternKeys.cs`](src/SmartX.Api/Patterns/PatternKeys.cs) | `TriggerKey` and `ActionKey` as `readonly record struct`s, so a lookup on every event allocates nothing |
+| Lazy decay in a struct | [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `DecayedCount`: a count that remembers when it last changed and is faded only when read, changed in place through `CollectionsMarshal` |
+| Hysteresis | [`ReadingTriggerDetector.cs`](src/SmartX.Api/Patterns/ReadingTriggerDetector.cs) | a watch level fires once and is re-armed only past a margin, so a hovering reading is one trigger |
+| Recursion over the zone tree, reused | [`DeviceDirectory.cs`](src/SmartX.Api/Patterns/DeviceDirectory.cs) | walks up `ParentId` to the depth the general level groups at, so "the same zone" is the Part 1 hierarchy |
+| The escalation seam, used | [`InvestigationService.cs`](src/SmartX.Api/Patterns/InvestigationService.cs) | subscribes to `FaultEntered` and `FaultCleared`; a verdict adjusts a node's sensitivity through `ITrustEngine.AdjustSensitivity`, bounded by a floor |
+| Priority queue, for ranking | [`SuggestionService.cs`](src/SmartX.Api/Patterns/SuggestionService.cs) | `PriorityQueue<Candidate, (double Score, string Id)>` capped at K: the same structure as the critical lane, used to keep the best K and not to hand out the most urgent |
+| HashSet of what is done | [`SuggestionService.cs`](src/SmartX.Api/Patterns/SuggestionService.cs) | `LiveTrigger.Taken`, a `HashSet<ActionKey>` of the actions taken since a trigger fired, so "already done" is one lookup |
+| Backdated events, decay from event time | [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `DecayedCount.Add` fades the amount forward when it is older than the count; `Replay` pairs a history with itself in a window of its own |
+| Seeded, labelled history | [`SeededHistory.cs`](src/SmartX.Api/Patterns/SeededHistory.cs) | a pure function of the clock and the options; every event is `EventSource.Seeded` |
+| Least squares and R² | [`TrustForecaster.cs`](src/SmartX.Api/Patterns/TrustForecaster.cs) | the line, the fit, the bars a forecast has to clear, and the check that a fall is not flattening |
+| The sorted history store doing analysis | [`InsightService.cs`](src/SmartX.Api/Patterns/InsightService.cs) | `GetRange` for each node's trust samples, which `TrustSampler` stores as `HistoryKind.TrustSample` |
+| Not training on its own advice | [`SuggestionService.cs`](src/SmartX.Api/Patterns/SuggestionService.cs), [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `Accept` and `TakeAcceptance` mark an action `FromSuggestion`; the engine weights it by `AcceptedSuggestionWeight`, zero |
+| Dictionary and HashSet | [`TrustEngine.cs`](src/SmartX.Api/Trust/TrustEngine.cs) | `_nodes`, keyed by MAC for O(1) lookup per packet, and `_degraded`, where each failing node appears once |
+| The ingestion pipeline, stage by stage | [`TelemetryEndpoints.cs`](src/SmartX.Api/Endpoints/TelemetryEndpoints.cs) | `IngestBatchAsync`, with each stage numbered in comments, and `TryCreatePacket` |
+| Polymorphic JSON | [`ITelemetryPacket.cs`](src/SmartX.Shared/Packets/ITelemetryPacket.cs) | `[JsonDerivedType]` over the packet types |
+| Trust formula | [`TrustFormula.cs`](src/SmartX.Shared/Trust/TrustFormula.cs) | `Score` (Laplace smoothing), `DecayWeight` (half-life), `Classify` |
+| Background services | [`HeartbeatMonitor.cs`](src/SmartX.Api/Trust/HeartbeatMonitor.cs), [`TelemetryProcessor.cs`](src/SmartX.Api/Ingestion/TelemetryProcessor.cs), [`DeviceFleet.cs`](src/SmartX.DeviceSimulator/DeviceFleet.cs) | `PeriodicTimer` driven by an injected `TimeProvider`; a worker that survives one bad reading |
+| Async all the way down | [`SmartXApiClient.cs`](src/SmartX.Client/Services/SmartXApiClient.cs), [`ISensorRegistry.cs`](src/SmartX.Api/Storage/ISensorRegistry.cs) | no `.Result`, `.Wait()` or `GetAwaiter().GetResult()` anywhere |
+| Streamed, encrypted I/O | [`AttachmentUploader.cs`](src/SmartX.Api/Attachments/AttachmentUploader.cs), [`AesGcmEncryptingStream.cs`](src/SmartX.Api/Attachments/AesGcmEncryptingStream.cs) | `MultipartReader`, not `IFormFile`, and chunked AES-256-GCM |
+
+## Measurements
+
+These are numbers already gathered in earlier parts, on the development machine, gathered here so they can be found in one place. Each
+row links to the section that explains how it was measured. They move with the machine; the shapes do not.
+
+| What | Result | Where it is measured |
+| --- | --- | --- |
+| Critical reading versus an ordinary one behind a 5,001-deep backlog | 0.4 ms against 1,691 ms, about 4,500× sooner | `CriticalBypassMeasurementTests` |
+| Same, in the Docker stack at 50× with a 4 ms per-reading cost | critical lane average wait 47 ms, standard lane 19,183 ms ("408.7× sooner"), 430 readings refused with 503 | [Seeing a critical reading overtake the standard queue](#seeing-a-critical-reading-overtake-the-standard-queue) |
+| Starvation valve: 2,000 critical readings over 200 queued normal ones | 102 normal readings processed by the time 1,028 critical ones were | `CriticalBypassMeasurementTests` |
+| History range query, 200,000 entries for one node, the same 100 entries | oldest 100 in about 18 µs, newest 100 in about 10.8 ms (about 600×): the cost of a `SortedDictionary` that cannot seek | `HistoryRangeCostMeasurementTests` |
+| Reading, accepted to browser (through nginx over WebSockets) | p50 134 ms, p95 243 ms; includes the 0 to 250 ms batch window | [Real-time push](#real-time-push) |
+| Critical reading, accepted to browser | p50 3 ms, p95 7 ms | [Real-time push](#real-time-push) |
+| HTTP requests from an idle trust panel | about 37 a minute when polling, 0 with push | [Real-time push](#real-time-push) |
+| Command Stream main thread (13 s long-task observer, readings processed a second) | 0 long tasks at 10× (78), 50× (412), 100× (826) and 150× (1,213); 133 at 250× (1,650) | [Responsiveness under load](#responsiveness-under-load) |
+| Pattern engine, worst case (window full at 5,000 triggers) | record a trigger 1.4 µs; a first-seen action paired with 5,000 triggers 16.9 ms; predict for a sensor 39 µs | `PatternBenchmarkTests` |
+| Suggestion service | trigger with a pattern, ranked and announced 150 to 250 µs; trigger with no pattern about 70 µs; an operator action re-ranked about 22 µs | `SuggestionBenchmarkTests` |
+| Trust forecast pass | 55 nodes with an hour of history 1.8 ms; with a day each (1.7 million entries) 45 ms; 4,800 nodes with ten minutes each 50 ms | `SuggestionBenchmarkTests` |
+| Trigger fired to suggestion in a client | median 15 ms, p95 16 ms in memory; 11 ms in the Docker stack through nginx | [Suggestions: Measured](#measured-suggestions-and-the-forecast) |
+| Suggestion topic at 100× | about one message every three seconds, down from about twelve a second before time-only changes were announced once a second and queued messages coalesced; 0 long tasks at 100× and 150× | [Suggestions: Measured](#measured-suggestions-and-the-forecast) |
+
+### The benchmark command
+
+The benchmarks assert thresholds on a wall clock, so they carry `[Trait("Category", "Benchmark")]` and a bare `dotnet test` leaves them
+out (`tests/SmartX.Tests/default.runsettings`). To run them all on purpose and print their numbers:
+
+```bash
+dotnet test --settings tests/SmartX.Tests/benchmark.runsettings --filter "Category=Benchmark" --logger "console;verbosity=detailed"
+```
+
+To run one family, filter by class name, for example `FullyQualifiedName~SuggestionBenchmarkTests`, `PatternBenchmarkTests`,
+`CriticalBypassMeasurementTests` or `HistoryRangeCostMeasurementTests`. The real-time figures were measured against the Docker stack and
+are reproduced with the recipes in the sections linked above.
+
+## Configuration reference
+
+The API reads configuration in the standard ASP.NET Core order: `appsettings.json`, then
+`appsettings.{Environment}.json`, then user secrets (Development only), then environment variables, then
+command-line arguments. Later sources win. An environment variable uses `__` for each `:` in a setting
+name, so `Trust:HalfLife` becomes `Trust__HalfLife`. The `Attachments`, `Zones`, `Commands`, `History`, `Alerts`, `Ingestion`, `Telemetry` and
+`Trust` sections are validated at startup, and a bad value stops the API with a message naming the
+setting.
+
+### API: `Attachments`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Attachments:StoragePath` | `App_Data/attachments` (`/data/attachments` in Docker) | Where encrypted files and their index entries are written. A relative path is resolved against the API's content root. |
+| `Attachments:MaxFileBytes` | `104857600` (100 MiB) | The largest file accepted. It is enforced byte by byte while the upload streams, and published to the client at `/api/attachments/limits`. |
+| `Attachments:EncryptionKey` | *(none)* | Base64-encoded 256-bit AES key. See [the encryption key](#the-encryption-key). |
+
+### API: `Zones`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Zones:Hierarchy` | `Brief` | Which deployment hierarchy the API manages. `Brief` is the four zones from the brief, and what the tests expect. `Demo` is the 16-zone, two-facility hierarchy the simulated fleet is deployed into. |
+
+### API: `Commands`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Commands:PendingTimeout` | `00:00:30` | How long a command may wait for its device to collect it before it becomes `TimedOut`. |
+| `Commands:DeliveredTimeout` | `00:00:30` | How long a delivered command may wait for the device's acknowledgement. |
+| `Commands:SweepInterval` | `00:00:01` | How often the timeout service looks for stale commands. |
+| `Commands:MaxUndoDepth` | `20` | How many operator actions the undo stack remembers. Older ones fall off the bottom. |
+
+### API: `History`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `History:RetentionWindow` | `24:00:00` | How long any history entry is kept: readings, commands, alerts, trust transitions and searches. |
+| `History:EvictionInterval` | `00:01:00` | How often retention runs. It runs on a timer and not on every append. |
+| `History:DefaultTimelineWindow` | `01:00:00` | How far back a timeline, the event stream or the activity record looks when `from` is omitted. |
+| `History:DefaultMaxPoints` | `200` | Buckets in a timeline when `maxPoints` is omitted. |
+| `History:MaxPointsLimit` | `2000` | The most buckets a caller may ask for. More is a `400`. |
+| `History:DefaultEventLimit` | `500` | Events in the stream when `limit` is omitted. |
+| `History:MaxEventLimit` | `5000` | The most events a caller may ask for. |
+
+### API: `Alerts`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Alerts:DisconnectedAfterIntervals` | `3` | How many of a node's own heartbeat intervals it may stay silent before it is called disconnected. |
+| `Alerts:ClearAfterValidReadings` | `3` | How many valid readings in a row end an out-of-range or wrong-type alert. |
+
+### API: `Patterns`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Patterns:Window` | `00:10:00` | How soon after a trigger an action counts as following it. Also the bound on what an action costs. |
+| `Patterns:MinimumSupport` | `3` | How many times, weighted and faded, an action must have followed a trigger before it counts as a pattern. |
+| `Patterns:SupportTolerance` | `0.98` | The share of the minimum that a faded count must reach, so three pairings do not fail the test a minute after they are made. |
+| `Patterns:MinimumLift` | `1.5` | How many times more often than chance it must follow. At 1 the trigger tells you nothing. |
+| `Patterns:HalfLife` | `7.00:00:00` | How long until a pairing counts half as much. |
+| `Patterns:SearchWeight` | `0.4` | What a search that narrowed to a few devices counts for, against 1 for opening a device or sending a command. |
+| `Patterns:MaxSearchResultsForAction` | `3` | The most devices a search can return and still be read as being about them. |
+| `Patterns:MaxTriggersInWindow` | `5000` | The most triggers held in the window. The oldest are dropped past it. |
+| `Patterns:MaxLearnedPairs` | `250000` | The most (trigger, action) pairs remembered. Past it, the most faded are forgotten first. |
+| `Patterns:WatchLowFraction` / `WatchHighFraction` | `0.20` / `0.80` | Where a sensor's low and high watch levels sit, as a fraction of its registered range. |
+| `Patterns:RearmMargin` | `0.05` | How far back past a level a reading must come before it can fire again (hysteresis). |
+| `Patterns:GeneralZoneDepth` | `1` | The depth in the zone tree that devices are grouped under at the general level. |
+
+| `Patterns:AcceptedSuggestionWeight` | `0` | What an action counts for when the operator did it by accepting a suggestion, against 1 for one of their own. Zero stops the engine training on its own advice. |
+
+### API: `Investigations`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Investigations:MaxRetained` | `200` | How many are kept. The oldest closed ones go first; an open one is never dropped to make room. |
+| `Investigations:MaxReadings` | `60` | The most readings kept in one, the latest in its window. |
+| `Investigations:DismissFactor` | `0.85` | What a node's weight for a failure is multiplied by each time a fault caused by it is dismissed. |
+| `Investigations:SensitivityFloor` | `0.5` | The lowest the scale can reach. Detection can be dulled and never switched off. |
+
+### API: `Suggestions`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Suggestions:MaxSuggestions` | `5` | How many are kept: the top K of the ranking. |
+| `Suggestions:LiftWeight` / `ConfidenceWeight` / `SeverityWeight` / `RecencyWeight` | `0.35` / `0.25` / `0.25` / `0.15` | The weights of the ranking formula. Normalised, so only their balance matters. |
+| `Suggestions:LiftCap` | `10` | The lift at which the lift term is full. |
+| `Suggestions:Severity:ThresholdCrossing` / `AlertRaised` / `Degrading` / `CriticalReading` / `Fault` | `0.4` / `0.6` / `0.6` / `0.9` / `1.0` | How severe each kind of trigger is, from 0 to 1. |
+| `Suggestions:MaxLiveTriggers` | `500` | The most live triggers held. Bounds the cost of a recomputation. |
+| `Suggestions:MaxDevicesPerGeneralSuggestion` | `3` | How many devices a "similar devices" pattern is turned into. |
+| `Suggestions:SweepInterval` | `00:00:05` | How often live triggers are checked for having aged out. |
+| `Suggestions:NotUsefulFactor` | `0.85` | What a pattern's weight is multiplied by each time "Not useful" is pressed. |
+| `Suggestions:NotUsefulFloor` | `0.5` | The lowest the weight can go. |
+| `Suggestions:MaxDismissedRetained` | `20` | How many dismissed suggestions are kept so the mark can be taken back. |
+| `Suggestions:AcceptanceExpiry` | `00:00:30` | How long an accepted suggestion waits for the action it announced. |
+
+### API: `Forecast`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Forecast:Enabled` | `true` | Whether trust is sampled and forecast at all. |
+| `Forecast:Horizon` | `00:15:00` | How far ahead a projected fault is worth announcing. |
+| `Forecast:Lookback` | `00:04:00` | How much recent history the line is fitted to. |
+| `Forecast:MinSamples` | `8` | The fewest samples a line is fitted to. |
+| `Forecast:MinRSquared` | `0.8` | How much of the samples' movement the line must explain before it is believed. |
+| `Forecast:MinFallPerMinute` | `0.005` | How steep the fall must be, in trust per minute. |
+| `Forecast:MinRecentFallRatio` | `0.5` | How much of the whole window's rate the last third must still show, for the fall to count as continuing. |
+| `Forecast:SampleInterval` | `00:00:10` | How often a node's trust score is stored. |
+| `Forecast:Interval` | `00:00:05` | How often the forecast runs over every node. |
+| `Forecast:EtaChange` | `00:00:45` | How far a projected time can move before it is announced again. |
+| `Forecast:CurrentHold` | `00:00:30` | How long a problem that is only an alert stays listed after it clears. |
+
+### API: `SeededHistory`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `SeededHistory:Enabled` | `false` (`true` in Docker) | Whether to replay the synthetic operator history at start-up. |
+| `SeededHistory:Days` | `5` | How far back it reaches. |
+| `SeededHistory:RandomSeed` | `7312` | The seed, so the same configuration is always the same history. |
+| `SeededHistory:BriefTriggers` / `BriefResponses` | `8` / `7` | How often Moisture Sensor B dropped, and how often Pump A was opened and turned on after it. |
+| `SeededHistory:OtherHabitTriggers` | `6` | How often each of the other two habits happened. |
+| `SeededHistory:PumpARounds` / `PumpAScheduledRuns` | `48` / `40` | Pump A opened on rounds and turned on on a schedule, so lift is a ratio and not infinity. |
+| `SeededHistory:RandomOpens` / `UnansweredTriggers` | `80` / `30` | Background noise. |
+| `SeededHistory:ConstantOpenEvery` | `00:04:00` | How often the one device that is always open is opened, for a day and a half. |
+| `SeededHistory:WaitForDevices` | `00:03:00` | How long to wait for the devices the habits are about to register before replaying what can be. |
+
+### API: `Realtime`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Realtime:FlushInterval` | `00:00:00.250` | How often batched and coalesced topics (readings, trust, alert repeat counts) are flushed. |
+| `Realtime:PipelineInterval` | `00:00:01` | How often pipeline statistics are pushed to clients that asked. |
+| `Realtime:MaxBufferedReadings` | `10000` | The most readings held for the next flush. More are dropped, and the batch reports how many. |
+| `Realtime:TrustScoreEpsilon` | `0.005` | How far a score must move to be worth a message, when nothing else about the node changed. |
+| `Realtime:RecentPriorityAlerts` | `20` | Critical readings carried by an alerts snapshot. |
+| `Realtime:SnapshotCommands` | `100` | Commands carried by a commands snapshot. |
+| `Realtime:MaxQueuedMessages` | `20000` | Immediate messages queued at once. Beyond it the newest are dropped and logged. |
+
+### Client: `Realtime`
+
+In `src/SmartX.Client/wwwroot/appsettings.json`. Every value is optional.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Realtime:ReconnectingFallbackAfter` | `00:00:15` | How long a dropped connection may stay reconnecting before the feeds poll. |
+| `Realtime:UpgradeRetryInterval` | `00:00:15` | How often a connection that could not be made tries again, while polling. |
+| `Realtime:PollInterval` | `00:00:03` | How often a polling feed (other than trust) asks for a snapshot. |
+| `Realtime:SnapshotRetryInterval` | `00:00:03` | How long a feed waits before retrying a snapshot that failed. |
+
+### API: `Ingestion`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Ingestion:MaxQueueDepth` | `10000` | The most readings the standard lane holds. When it is full, the API answers `503` with `Retry-After`. |
+| `Ingestion:MaxCriticalQueueDepth` | `1000` | The most readings the critical lane holds, bounded separately so a full standard lane never blocks an alert. |
+| `Ingestion:RetryAfterSeconds` | `5` | The value of the `Retry-After` header on a `503`. |
+| `Ingestion:MaxConsecutiveCritical` | `20` | After this many critical readings in a row, the worker takes one normal reading if one is waiting. The starvation valve. |
+| `Ingestion:SimulatedGatewayCost` | `00:00:00` | Simulates the per-reading processing cost of a resource-constrained gateway: how long the worker pauses after each reading. Zero is an unconstrained gateway. A few milliseconds builds a backlog, as a small board would, so the critical lane can be seen overtaking it. |
+| `Ingestion:CriticalRules` | see [Ingestion queues](#ingestion-queues) | The thresholds that make a reading critical: category, unit, an upper and/or lower limit, a severity (lower is more urgent) and a reason. Set as a list in `appsettings.json`. |
+
+### Simulator: `Simulator`
+
+Bound by `SmartX.DeviceSimulator`, from `src/SmartX.DeviceSimulator/appsettings.json` or the environment
+(`Simulator__ApiBaseUrl` and so on).
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Simulator:ApiBaseUrl` | `http://localhost:5266` (`http://api:8080` in Docker) | Where the API is. |
+| `Simulator:DeviceCount` | `55` | How many of the demo devices to run, from the top of the list. |
+| `Simulator:Mix` | `Demo` | `Demo` gives each device its own scenario, for a spread of bands. `Nominal` starts every device healthy. |
+| `Simulator:Scenarios:<mac>` | none | Starts one device in a named scenario, on top of the mix. A MAC contains colons, which can't be in an environment variable name, so write it with underscores: `Simulator__Scenarios__B8_27_EB_10_00_01=Critical`. |
+| `Simulator:BackfillDuration` | `00:10:00` | How much history is posted on first start. `00:00:00` turns backfill off. |
+| `Simulator:BackfillConcurrency` | `8` | How many backfill requests may be in flight at once. |
+| `Simulator:ShadowPollInterval` | `00:00:05` | How often each device asks the API what it should be doing. Also how long a scenario change takes to appear. |
+| `Simulator:TickInterval` | `00:00:00.5` | How often the fleet checks which devices are due to report. Must be well under a fifth of the shortest heartbeat, which is five seconds in the demo fleet. |
+| `Simulator:RandomSeed` | `1729` | Seeds the generated values, so two runs produce the same readings. |
+| `Simulator:CommandFailureRate` | `0` | The chance, from 0 to 1, that an actuator fails to apply a command. Zero by default so demos are predictable; raise it to see `Failed` commands. |
+| `Simulator:StartupTimeout` | `00:05:00` | How long to keep retrying while the API isn't answering before giving up. |
+
+### API: `Telemetry`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Telemetry:RetentionPerNode` | `256` | Readings kept per sensor in its ring buffer before the oldest is overwritten. |
+
+### API: `Trust`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Trust:SuccessWeight` | `1` | Added to successes for each valid, in-range reading. |
+| `Trust:RangeViolationWeight` | `1` | Added to failures for a reading outside its range. |
+| `Trust:SchemaFailureWeight` | `2` | Added to failures for a wrong-typed reading. |
+| `Trust:MissedHeartbeatWeight` | `3` | Added to failures for each heartbeat interval that passes in silence. |
+| `Trust:HalfLife` | `00:10:00` | The age at which an outcome counts half as much as a fresh one. |
+| `Trust:OutcomeWindow` | `256` | Recent outcomes retained per node for scoring. |
+| `Trust:HistoryLength` | `120` | Trust samples retained per node for its full history. |
+| `Trust:HistorySampleInterval` | `00:00:10` | Minimum spacing between history samples. A band change is always sampled. |
+| `Trust:SnapshotHistoryPoints` | `30` | Recent samples included with each node in `/api/trust`, for its sparkline. |
+| `Trust:NominalThreshold` | `0.75` | The lowest score that counts as Nominal. |
+| `Trust:FaultThreshold` | `0.5` | Scores below this are Fault. |
+| `Trust:DefaultHeartbeatInterval` | `00:01:00` | The heartbeat assumed for a sensor registered without one. |
+| `Trust:HeartbeatCheckInterval` | `00:00:05` | How often the heartbeat monitor looks for silent nodes. |
+
+### API: `Cors`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Cors:AllowedOrigins` | `http://localhost:5131` and `https://localhost:7258`, set in `appsettings.Development.json` only | The client origins allowed to call the API from a browser. It isn't needed in Docker, where nginx puts the client and the API on one origin. |
+
+### Client: `src/SmartX.Client/wwwroot/appsettings.json`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `ApiBaseAddress` | `http://localhost:5266/` | Where the client sends API requests. It can be absolute, or relative to the page (Docker uses `/`). |
+| `TrustFeed:PollIntervalSeconds` | `3` | How often the trust panel refreshes. Each refresh is two requests, however many nodes there are. |
+| `CommandStream:SearchDebounce` | `00:00:00.300` | How long typing must pause before a device search is sent. |
+| `CommandStream:StreamCapacity` | `500` | The most readings the live stream keeps, and the most it holds while paused. |
+| `CommandStream:PinDuration` | `00:00:30` | How long a critical reading stays pinned if nobody acknowledges it. |
+| `CommandStream:MaxPinned` | `20` | The most critical readings pinned at once. |
+
+In Docker these two come from the client container's `API_BASE_ADDRESS` and
+`TRUST_POLL_INTERVAL_SECONDS` environment variables. They are written into `appsettings.json` when the
+container starts, so the image never needs rebuilding to point somewhere else.
+
+### Docker Compose settings
+
+These go in `.env`, which is optional (every one has a default):
+
+| Variable | Default in `.env.example` | What it does |
+| --- | --- | --- |
+| `SMARTX_ATTACHMENT_KEY` | the development key | Becomes `Attachments__EncryptionKey` for the API. Optional: without it Compose uses the published development key. |
+| `SMARTX_ZONE_HIERARCHY` | `Demo` | Becomes `Zones__Hierarchy` for the API. |
+| `SMARTX_QUEUE_DEPTH` | `10000` | Becomes `Ingestion__MaxQueueDepth`. |
+| `SMARTX_DEVICE_COUNT` | `55` | Becomes `Simulator__DeviceCount`. |
+| `SMARTX_SCENARIO_MIX` | `Demo` | Becomes `Simulator__Mix`: `Demo` or `Nominal`. |
+| `SMARTX_BACKFILL` | `00:10:00` | Becomes `Simulator__BackfillDuration`. |
+| `SMARTX_RATE` | `1` | Becomes `Simulator__ReportingRateMultiplier`: how many times faster than normal the fleet reports. |
+| `SMARTX_TICK` | `00:00:00.500` | Becomes `Simulator__TickInterval`: how often the simulator wakes to send what is due. Lower it as the rate rises. |
+| `SMARTX_PROCESS_DELAY` | `00:00:00` | Becomes `Ingestion__SimulatedGatewayCost`: the simulated per-reading cost of a constrained gateway; see [the Command Stream page](#seeing-a-critical-reading-overtake-the-standard-queue). |
+| `SMARTX_PATTERN_WINDOW` | `00:10:00` | Becomes `Patterns__Window`. A short one, such as `00:01:00`, lets the pattern example be shown in minutes. |
+| `SMARTX_PATTERN_HALFLIFE` | `7.00:00:00` | Becomes `Patterns__HalfLife`. |
+| `SMARTX_SEED_HISTORY` | `true` | Becomes `SeededHistory__Enabled`. `false` leaves the suggestion engine knowing only what it has observed. |
+| `SMARTX_CLIENT_PORT` | `8080` | Host port for the client. Open this one in the browser. |
+| `SMARTX_API_PORT` | `5266` | Host port for the API, for `curl` and the scenario endpoint. |
+
+### The encryption key
+
+Attachments are encrypted at rest with AES-256-GCM, using a 256-bit key supplied as base64.
+
+**The key is never in source code, or in any settings file the API loads.** It reaches the API in one of
+three ways:
+
+| Where the API runs | How the key is supplied |
+| --- | --- |
+| Locally, `dotnet run` | User secrets, which live in your user profile outside the repository (`dotnet user-secrets set …`, see [step 3](#3-set-the-development-encryption-key-once-per-machine)) |
+| Docker Compose | `SMARTX_ATTACHMENT_KEY` in your gitignored `.env`; without one, the published development key |
+| Anywhere else | The environment variable `Attachments__EncryptionKey`, set by the host or a secret store |
+
+**The development key.** The key in this README and in `.env.example` is
+`jk8ISNL3b2INdPgIONnlaaf0nycILpHni4khrvGdBlg=`. It is fixed so that attachments uploaded while developing
+or recording a demo are still readable after a restart. It is **published, and so it protects nothing**.
+Anyone with this repository can decrypt what it encrypts. The API recognises it by fingerprint and logs a
+warning whenever it runs outside the Development environment with it.
+
+To use a private key instead, generate one.
 
 macOS, Linux or Git Bash:
 
 ```bash
-cp .env.example .env
+openssl rand -base64 32
 ```
 
 PowerShell:
 
 ```powershell
-Copy-Item .env.example .env
+$key = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($key); [Convert]::ToBase64String($key)
 ```
 
-`.env` is gitignored. It holds the encryption key and the settings described
-[below](#docker-compose-settings).
+**If no key is set:**
 
-### 2. Build and start
+- In the Development environment, the API generates a temporary key for that run and logs a warning.
+  Everything works until you restart, after which those attachments can't be read.
+- In any other environment, the API refuses to start and names the missing setting.
+
+**If the key changes,** attachments encrypted under the old key are hidden from lists, not shown as
+downloads that would fail. They are not deleted, so restoring the old key brings them back.
+
+#### What this does and does not demonstrate
+
+This demonstrates the *encryption mechanism*, not production key management.
+
+- **Demonstrated:**
+  - streamed authenticated encryption with a random nonce per file
+  - tamper detection on every chunk, before any plaintext is released
+  - no plaintext written to disk at any point
+  - a key supplied through configuration, never code
+  - a fingerprint of the key recorded with each file, so a key change is detected rather than failing at
+    download
+- **Not demonstrated:**
+  - A real deployment would fetch the key from a managed key vault (Azure Key Vault, AWS KMS, HashiCorp
+    Vault), keep it out of the process environment, and audit every access.
+  - Keys would be rotated, re-encrypting or re-wrapping existing files. The key fingerprint shows which
+    files a rotation would have to touch, but no rotation is implemented.
+  - Envelope encryption, where each file gets its own data key, itself encrypted by a master key, is the
+    usual approach, and is not implemented here.
+
+## Troubleshooting
+
+### The indicator says "Polling" and never goes Live
+
+The browser could not open the push connection, so the app is polling and retrying every 15 seconds. Hover the chip, or
+open the browser's network tab and look for `/hubs/telemetry`. The usual cause is a proxy between the browser and the API
+that does not pass WebSocket upgrades; SignalR then falls back to long polling and the indicator may say "Live" while the
+tooltip says "over LongPolling". In the Docker stack the `/hubs/` location in `src/SmartX.Client/nginx/default.conf`
+needs `proxy_http_version 1.1` and the `Upgrade` and `Connection` headers. Another proxy in front needs the same.
+
+### The address is already in use
+
+`dotnet run` fails with `Failed to bind to address http://127.0.0.1:5266: address already in use`, or
+Docker reports `port is already allocated`.
+
+Find what is holding the port.
+
+PowerShell:
+
+```powershell
+Get-NetTCPConnection -LocalPort 5266 | Select-Object OwningProcess
+```
+
+macOS or Linux:
 
 ```bash
-docker compose up --build
+lsof -i :5266
 ```
 
-The first build downloads the .NET SDK and nginx images and takes a few minutes. Later builds reuse the
-cached layers. Open <http://localhost:8080>.
+Usually it's an earlier run of the same app, or the Docker stack while you run locally (both use
+`5266`). Stop that first. To move a port instead:
 
-Three containers start, in order: the API first, then the simulator once the API reports healthy. The
-dashboard fills within about half a minute. To run fewer devices, or to start every device healthy, change
-`SMARTX_DEVICE_COUNT` or `SMARTX_SCENARIO_MIX` in `.env` (see [Docker Compose
-settings](#docker-compose-settings)).
+- **Locally:** change `applicationUrl` in the project's `Properties/launchSettings.json`, then update the
+  other half to match. `ApiBaseAddress` in the client's `wwwroot/appsettings.json` must point at the
+  API's port, and `Cors:AllowedOrigins` in the API's `appsettings.Development.json` must list the client's
+  origin.
+- **Docker:** change `SMARTX_CLIENT_PORT` or `SMARTX_API_PORT` in `.env`.
 
-### 3. Stop
+### The build fails with "file is locked by SmartX.Api"
 
-```bash
-docker compose down
+A running API or client holds its own executable. Stop it (Ctrl+C in its terminal, or stop debugging in
+Visual Studio) and build again.
+
+### The client build fails with MSB3030 "Could not copy the file … webcil"
+
+This happens on Windows when the repository is cloned somewhere with a long path. The Blazor build writes
+files several folders deep under `src/SmartX.Client/obj`, and once the full path passes Windows'
+260-character limit the copy fails. Either clone to a shorter path such as `C:\src\smartx-poe`, or
+enable long paths once from an administrator PowerShell and restart the terminal:
+
+```powershell
+New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name LongPathsEnabled -Value 1 -PropertyType DWORD -Force
 ```
 
-Uploaded attachments are kept in the `smartx_attachments` volume, and survive `down`, restarts and
-rebuilds. To delete them as well:
+### The browser console shows a CORS error
 
-```bash
-docker compose down --volumes
-```
+The error reads `blocked by CORS policy: No 'Access-Control-Allow-Origin' header`. The client is being
+served from an origin the API doesn't allow.
 
-### How the containers fit together
+- Check which address is in the browser's address bar. If you used the HTTPS profile, or changed a port,
+  that origin has to be in `Cors:AllowedOrigins` in `src/SmartX.Api/appsettings.Development.json`.
+- The CORS list is only in the Development settings. If the API was started with
+  `ASPNETCORE_ENVIRONMENT=Production` while the client runs on its own port, pass the origin explicitly:
+  `dotnet run --project src/SmartX.Api -- --Cors:AllowedOrigins:0=http://localhost:5131`.
+- In Docker there is no cross-origin request. If you see this error there, the client's
+  `API_BASE_ADDRESS` has been set to an absolute URL. Leave it as `/`.
 
-| Service | Image | Listens on | Host port | Runs as |
-| --- | --- | --- | --- | --- |
-| `client` | nginx serving the published WebAssembly files | 8080 | `8080` | `nginx` (non-root) |
-| `api` | ASP.NET Core runtime, Release build | 8080 | `5266` | `app` (non-root) |
-| `simulator` | .NET runtime, Release build | none | none | `app` (non-root) |
+### "The API could not be reached"
 
-The simulator talks to `http://api:8080` over the compose network, exactly as a device would talk to a
-gateway. It publishes no port, because it only makes requests.
+The client loaded, but nothing answered at `ApiBaseAddress`.
 
-Compose starts the simulator only once the API's health check passes (`condition: service_healthy`). That
-narrows the start-up race but doesn't remove it, so the simulator also waits and retries with backoff on its
-own. The API's health check is a request to `/api/health` made from inside the container with bash, because
-the runtime image has no `curl`.
+1. Check the API is running. `curl http://localhost:5266/api/health` should return `{"status":"ok"}`.
+2. Check the address in `src/SmartX.Client/wwwroot/appsettings.json` matches the port the API printed.
+3. In Docker, check both containers are up with `docker compose ps`, and read the API's log with
+   `docker compose logs api`.
 
-The browser only talks to the client container. nginx serves the app, and forwards any request under
-`/api/` to the `api` service on the compose network, so the client's `ApiBaseAddress` is just `/`.
-Because the browser sees one origin, no CORS is involved, and the browser never needs to resolve `api`,
-a name that only exists inside the compose network. nginx streams uploads straight through without
-buffering them or applying its own size limit, and the API enforces the real limit. The API's host port
-is published so `curl` and the scenario endpoint can reach it directly.
+### The API won't start: missing or invalid encryption key
 
-Both images are multi-stage. The SDK stage restores and publishes in Release, and only the output is
-copied into the runtime image, so neither image contains source or a compiler.
+The message is `Attachments:EncryptionKey is required outside Development` or `must be a base64-encoded
+256-bit (32-byte) key`.
+
+- **Locally:** set the key with the user-secrets command in [step
+  3](#3-set-the-development-encryption-key-once-per-machine). User secrets are only read in the
+  Development environment, which is what `dotnet run` uses by default.
+- **Docker:** compose needs no `.env` and uses the development key when `SMARTX_ATTACHMENT_KEY` is unset, so this only happens
+  if your `.env` sets it to something that is not a key. A key must decode to exactly 32 bytes, which is 44 base64 characters
+  ending in `=`. Delete the line to use the default.
+
+### Attachments disappeared after a restart
+
+- The API log says `No Attachments:EncryptionKey is configured`: the run used a temporary key. Set the
+  development key, and upload again.
+- The API log says `stored attachments were encrypted with a different key and are hidden`: the key has
+  changed since they were uploaded. Set the previous key again and they reappear.
+- **Docker:** check the volume still exists with `docker volume ls`. `docker compose down --volumes`
+  deletes it.
+
+### The sensor page says "Sensor not found" after a restart
+
+Sensors are held in memory, so a restarted API has forgotten every sensor. Register them again, or restart
+the device simulator, which re-registers its whole fleet on start.
+
+### After restarting the API, some devices are missing
+
+The API holds its device list in memory, so a restart empties it. Devices that are reporting notice, register
+themselves again and are back within seconds. Devices running the `Disconnect` scenario send nothing, so
+nothing tells them the API forgot them, and they stay unregistered until they reconnect. Restarting the
+simulator (`docker compose restart simulator`) re-registers the whole fleet at once.
+
+### A command ended as TimedOut
+
+Nothing collected it. Either the device is silent (the `Disconnect` scenario, or real hardware that is off or out
+of range), or it collected the command and never confirmed it. `GET /api/commands/{id}` shows which: a command
+that was never collected has no `deliveredAt`. A timed-out command can't be undone, because its effect on the
+device is unknown. Bring the device back, look at its state, and issue a new command.
+
+### Undo was refused
+
+The response is a `409` and its `items` say why for each command. A command that timed out or failed can't be
+undone, since the device's real state is unknown and restoring an unknown state could do harm. A command whose
+previous state was never observed can't be undone either, because there is nothing recorded to return to; the
+actuator has to report in once before a command can record what it replaced. A refused entry is removed from the
+stack, so the next undo reaches the action beneath it.
+
+### A command is refused with "registered without an actuator kind"
+
+The device is an actuator that was registered before actuator kinds existed, or without one. Register it with
+`actuatorKind` set (or through the form, which asks for it) so the API knows which commands it understands.
+
+### Telemetry returns 503
+
+The ingestion queue is full: the API is receiving readings faster than it processes them. The response's
+`Retry-After` header says how long to wait. See `GET /api/pipeline/stats` for the queue depth. If it happens
+under a normal load, raise `Ingestion:MaxQueueDepth`; if a device is flooding the API, that is what the
+limit is for.
+
+### The dashboard is empty when running the simulator
+
+- The API must be started with `--Zones:Hierarchy=Demo` (or `SMARTX_ZONE_HIERARCHY=Demo` in Docker). With the
+  default hierarchy, the API refuses the demo devices' zones and the simulator stops with a message naming
+  the first device it could not register.
+- The simulator logs `Waiting for the gateway` while the API isn't answering, and gives up after
+  `Simulator:StartupTimeout`. Check the API is running and `Simulator:ApiBaseUrl` is right.
+- In Docker, read the simulator's log with `docker compose logs simulator`.
+
+### A scenario change doesn't take effect straight away
+
+That is expected. The API records the desired state and the device applies it on its next poll, which is
+every `Simulator:ShadowPollInterval` (five seconds by default). Trust then takes a few heartbeats to
+move.
+
+### The Docker client container keeps restarting
+
+Run `docker compose logs client`. If you see `not found` or `bad interpreter` for
+`40-smartx-client-config.sh`, the script was checked out with Windows line endings. The repository's
+`.gitattributes` prevents that on a fresh clone. For an existing checkout, run `git add --renormalize .`,
+then check the script back out and rebuild with `docker compose up --build`.
+
+## Design notes
+
+The long-form explanation behind each part, in the order it was built. The recipes above are the way to test; these are the way to
+understand and defend the design. Sections: [the device simulator](#the-device-simulator), [ingestion queues](#ingestion-queues),
+[commands and undo](#commands-and-undo), [history, timelines, alerts and search](#history-timelines-alerts-and-search),
+[real-time push](#real-time-push), [the Command Stream page](#the-command-stream-page),
+[pattern analysis and investigations](#pattern-analysis-and-investigations),
+[suggestions, anticipation and insights](#suggestions-anticipation-and-insights), [the feature walkthrough](#feature-walkthrough),
+[the API reference](#api-reference), [attachments](#attachments-design-notes-and-limits) and [the test suite](#tests).
 
 ## The device simulator
 
@@ -288,7 +1154,7 @@ has to hit the API like a device would.
    normally until its scenario began a few minutes ago and follows the scenario after that, which is what
    gives each sparkline a bend.
 4. **Reports** at each device's registered interval, a little inside it (at 80%) so a late tick can't be
-   what makes a healthy device miss its heartbeat, and with jitter so forty-eight devices don't all report in the
+   what makes a healthy device miss its heartbeat, and with jitter so fifty-five devices don't all report in the
    same millisecond.
 5. **Polls for its desired state** every five seconds, and applies any change.
 6. **Re-registers if the API forgets it.** The API keeps its device list in memory, so restarting it while the
@@ -1269,7 +2135,7 @@ verdicts. In the Docker stack the investigation had the window from 21:13:01.657
 0.85 and nothing else; changing the verdict to **Confirm** put it back to 1; a **Relabel** without a cause was refused with a 400,
 and with `Power` was stored.
 
-### Measured
+### Measured: the pattern engine
 
 `PatternBenchmarkTests` measured the cost per event in the worst case the engine allows: the window full to its bound of 5,000
 triggers, spread over a fleet of 5,000 sensors and 100 actuators in 50 zones, on a developer laptop.
@@ -1471,7 +2337,7 @@ as a trigger ages sends nothing. New suggestions and anticipated insights go out
 Status is never colour alone: Anticipated, Now, Open, Resolved and New each have a word and an icon. Nothing on the Part 1 pages
 changes except that strip.
 
-### Measured
+### Measured: suggestions and the forecast
 
 `SuggestionBenchmarkTests` (behind the Benchmark trait, like the pattern engine's) and the Docker stack, on the development machine.
 
@@ -1586,7 +2452,7 @@ you have registered a sensor or two.
 
 1. Open **Trust panel**, the home page. Nodes are listed worst first by band, then by score, each with a
    reason and a sparkline. The tile at the top shows mesh confidence and the count per band.
-2. [Switch](#changing-a-scenario-live) `B8:27:EB:10:00:01` to `Disconnect`. Within seconds its reason
+2. [Switch](#changing-a-scenario-live-the-device-shadow) `B8:27:EB:10:00:01` to `Disconnect`. Within seconds its reason
    reads `no packets for …` and it starts climbing the list. It turns Degrading after about 1½ minutes and
    Fault after about 3½, because twenty minutes of good history takes a while to outweigh.
 3. Switch it back to `Nominal`. It reports again straight away and sinks back down as its score recovers.
@@ -1605,375 +2471,6 @@ you have registered a sensor or two.
    and the API rejects it with `415` after inspecting its bytes.
 
 Restart the API, or the Docker stack, and the attachments are still there.
-
-## Where the assessed concepts live
-
-| Concept | Where | What to look at |
-| --- | --- | --- |
-| Generics without boxing | [`TelemetryPacket.cs`](src/SmartX.Shared/Packets/TelemetryPacket.cs) | `TelemetryPacket<T> where T : struct`; the class comment explains how the constraint avoids boxing |
-| Generic math | [`NumericPacket.cs`](src/SmartX.Shared/Packets/NumericPacket.cs) | `NumericPacket<T> where T : struct, INumber<T>` |
-| Generic conversion at the boundary | [`ValueRange.cs`](src/SmartX.Shared/Sensors/ValueRange.cs) | `Contains<T>(T value)` uses `double.CreateChecked`, not `Convert.ToDouble(object)` |
-| Generic results on the client | [`ApiResult.cs`](src/SmartX.Client/Services/ApiResult.cs), [`SmartXApiClient.cs`](src/SmartX.Client/Services/SmartXApiClient.cs) | `ApiResult<T>` as a `readonly record struct`, and `SendReadingAsync<T>` |
-| Operator overloading, arithmetic and comparison | [`NumericPacket.cs`](src/SmartX.Shared/Packets/NumericPacket.cs) | `+`, `-`, `>`, `<`, `==`, `!=` |
-| Operator overloading, logical | [`StatePacket.cs`](src/SmartX.Shared/Packets/StatePacket.cs) | `\|`, `&`, `==`, `!=` |
-| Operator guard | [`TelemetryPacket.cs`](src/SmartX.Shared/Packets/TelemetryPacket.cs) | `EnsureCombinable`, which rejects mismatched units or categories |
-| Recursion, walking up | [`ZoneValidator.cs`](src/SmartX.Shared/Zones/ZoneValidator.cs) | `Ascend`, with its base case, cycle guard and depth guard |
-| Recursion, walking down | [`ZoneTree.cs`](src/SmartX.Shared/Zones/ZoneTree.cs) | `Descend` (sensors beneath a zone) and `BuildNode` (the nested tree) |
-| Jagged arrays | [`TelemetryStagingBuffer.cs`](src/SmartX.Shared/Collections/TelemetryStagingBuffer.cs) | the `T[][] _windows` field, `Stage` and `Drain`; the class comment covers jagged versus rectangular |
-| Custom collection | [`TelemetryRingBuffer.cs`](src/SmartX.Shared/Collections/TelemetryRingBuffer.cs) | `TelemetryRingBuffer<T>`: O(1) `Add` that overwrites the oldest, an indexer, and a struct `Enumerator` so `foreach` allocates nothing |
-| Lists | [`TelemetryStagingBuffer.cs`](src/SmartX.Shared/Collections/TelemetryStagingBuffer.cs), [`TelemetryRingBuffer.cs`](src/SmartX.Shared/Collections/TelemetryRingBuffer.cs) | `Drain` returns a pre-sized `List<T>`, and `ToList` copies a node's history out as a pre-sized list |
-| Stack for undo | [`CommandService.cs`](src/SmartX.Api/Commands/CommandService.cs) | `Stack<UndoEntry> _undo` behind a lock: `Push` (with the bounded-depth trim), `Undo`, and the class comment on why undo restores the previous state instead of doing the opposite |
-| Command lifecycle | [`CommandService.cs`](src/SmartX.Api/Commands/CommandService.cs), [`CommandStore.cs`](src/SmartX.Api/Commands/CommandStore.cs) | states and transitions; `Collect` hands each command over once; `TryTransition` is the compare-and-swap |
-| Recursion, reused | [`CommandService.cs`](src/SmartX.Api/Commands/CommandService.cs), [`ZoneTree.cs`](src/SmartX.Shared/Zones/ZoneTree.cs) | `IssueForZone` calls the same `NodesBeneath` walk as Part 1 to find every actuator under a zone, and the device search asks `ZoneIdsBeneath`, which shares the same private `Descend` |
-| Sorted dictionary | [`SortedDictionaryHistoryStore.cs`](src/SmartX.Api/History/SortedDictionaryHistoryStore.cs), [`HistoryKey.cs`](src/SmartX.Api/History/HistoryKey.cs) | a dictionary of nodes, each owning a `SortedDictionary<HistoryKey, HistoryEntry>`; the key is `(Timestamp, Sequence)` so equal timestamps cannot collide, and the class comment states the cost of a range query honestly |
-| Contract tests | [`HistoryStoreContract.cs`](tests/SmartX.Tests/HistoryStoreContract.cs) | an abstract suite over `IHistoryStore`, run by a subclass, so a replacement store is proven by adding one more subclass |
-| Downsampling | [`TimelineBuilder.cs`](src/SmartX.Api/History/TimelineBuilder.cs) | one pass into at most `maxPoints` buckets with min, max, average and count, so a spike survives |
-| HashSet for duplicate prevention | [`AlertTracker.cs`](src/SmartX.Api/Alerts/AlertTracker.cs), [`AlertKey.cs`](src/SmartX.Shared/Alerts/AlertKey.cs) | `HashSet<AlertKey>` where `Add` returning `false` is the suppress decision; the key is a `readonly record struct` so value equality works |
-| Secondary indexes and set intersection | [`DeviceIndex.cs`](src/SmartX.Api/Search/DeviceIndex.cs) | `Dictionary<TKey, HashSet<string>>` per category, kind, band, alert and zone; `Search` intersects the smallest set first, and `FindInconsistencies` is what the consistency test runs |
-| Idempotent delivery | [`SimulatedDevice.cs`](src/SmartX.DeviceSimulator/SimulatedDevice.cs) | `ApplyCommand` remembers applied command ids |
-| FIFO queue | [`TelemetryIngestionQueue.cs`](src/SmartX.Api/Ingestion/TelemetryIngestionQueue.cs) | `Queue<QueuedReading> _standard`, with the lock, the `SemaphoreSlim` signal and the bound; the class comment explains the trade-off against `Channel<T>` |
-| Priority queue | [`TelemetryIngestionQueue.cs`](src/SmartX.Api/Ingestion/TelemetryIngestionQueue.cs) | `PriorityQueue<QueuedReading, (int Severity, long Sequence)>`: the composite priority that makes it stable, and `DequeueAsync`'s starvation valve |
-| Classifying at the edge | [`CriticalClassifier.cs`](src/SmartX.Api/Ingestion/CriticalClassifier.cs), [`TelemetryEndpoints.cs`](src/SmartX.Api/Endpoints/TelemetryEndpoints.cs) | `IsCritical` against configured rules; `Enqueue` and `QueueFull` (503 with `Retry-After`) |
-| Asynchronous processing | [`TelemetryProcessor.cs`](src/SmartX.Api/Ingestion/TelemetryProcessor.cs) | the `BackgroundService` that drains the queues, and why there is one worker |
-| Device shadow | [`SimulationEndpoints.cs`](src/SmartX.Api/Endpoints/SimulationEndpoints.cs), [`DeviceShadowStore.cs`](src/SmartX.Api/Storage/DeviceShadowStore.cs) | desired state with a version; `GET /api/devices/{mac}/desired` |
-| Device simulator | [`DeviceFleet.cs`](src/SmartX.DeviceSimulator/DeviceFleet.cs), [`GatewayClient.cs`](src/SmartX.DeviceSimulator/GatewayClient.cs) | registration, backfill, backoff, and applying desired state, all over HTTP |
-| SignalR hub and groups | [`TelemetryHub.cs`](src/SmartX.Api/Realtime/TelemetryHub.cs), [`ITelemetryClient.cs`](src/SmartX.Api/Realtime/ITelemetryClient.cs) | topics as groups, a typed client interface, and the transport readable through `GetTransport` |
-| Batching, coalescing and immediate sends | [`RealtimeBroadcaster.cs`](src/SmartX.Api/Realtime/RealtimeBroadcaster.cs) | the class comment explains which messages are which and why; one loop sends, so messages leave in numbered order |
-| Snapshot plus stream | [`RealtimeFeed.cs`](src/SmartX.Client/Realtime/RealtimeFeed.cs) | join, snapshot, then apply only pushes newer than the snapshot; reference-counted start and stop |
-| One connection, reconnect and fallback | [`RealtimeConnection.cs`](src/SmartX.Client/Realtime/RealtimeConnection.cs) | the state machine: Live, Reconnecting, Polling, and the upgrade back |
-| Bounded buffers on the client | [`LiveStream.cs`](src/SmartX.Client/CommandStream/LiveStream.cs) | two `TelemetryRingBuffer<StreamRow>`: one for the stream and one for readings held while paused; resume moves the held ones in arrival order, and the class comment explains why a critical reading pins even while paused |
-| Debounce with out-of-order answers | [`DeviceSearchService.cs`](src/SmartX.Client/CommandStream/DeviceSearchService.cs) | `Request` cancels the wait of the one before it; `SearchAsync` numbers each request and only the newest may set the result |
-| Chart as data, then markup | [`TimelineChartModel.cs`](src/SmartX.Client/CommandStream/TimelineChartModel.cs), [`TimelineChart.razor`](src/SmartX.Client/Components/CommandStream/TimelineChart.razor) | the model works out the band, line, ticks and markers as numbers and strings, away from the component that draws them; gaps stay gaps |
-| Rules shared by server and client | [`CommandRules.cs`](src/SmartX.Shared/Commands/CommandRules.cs) | `WhyNotUndoable` and `StatusOf`: the server refuses with these words and the client explains with the same ones |
-| Redraw only on change | [`LiveStreamPanel.razor`](src/SmartX.Client/Components/CommandStream/LiveStreamPanel.razor) | `ShouldRender` returns a dirty flag that only the stream, the search and the catalogue set |
-| Component tests | [`CommandStreamComponentTests.cs`](tests/SmartX.Tests/CommandStreamComponentTests.cs), [`StreamComponentKit.cs`](tests/SmartX.Tests/StreamComponentKit.cs) | bUnit against the real feeds on a fake hub, a fake API and a fake clock |
-| Queue for a sliding window | [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `Queue<TriggerInstance> _window`: triggers in time order, expired from the front, so an action is paired with the triggers in the window and nothing is searched; the same FIFO structure as the ingestion lane, doing a different job |
-| HashSet to count once | [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `HashSet<(long Instance, ActionKey Action)> _paired`: `Add` returning false is why four opens of one pump after one moisture drop are one response |
-| Dictionaries of dictionaries | [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `Dictionary<TriggerKey, Dictionary<ActionKey, DecayedCount>>`: how often each action followed each trigger, with support, confidence and lift worked out from it |
-| Value-type keys, no boxing | [`PatternKeys.cs`](src/SmartX.Api/Patterns/PatternKeys.cs) | `TriggerKey` and `ActionKey` as `readonly record struct`s, so a lookup on every event allocates nothing |
-| Lazy decay in a struct | [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `DecayedCount`: a count that remembers when it last changed and is faded only when read, changed in place through `CollectionsMarshal` |
-| Hysteresis | [`ReadingTriggerDetector.cs`](src/SmartX.Api/Patterns/ReadingTriggerDetector.cs) | a watch level fires once and is re-armed only past a margin, so a hovering reading is one trigger |
-| Recursion over the zone tree, reused | [`DeviceDirectory.cs`](src/SmartX.Api/Patterns/DeviceDirectory.cs) | walks up `ParentId` to the depth the general level groups at, so "the same zone" is the Part 1 hierarchy |
-| The escalation seam, used | [`InvestigationService.cs`](src/SmartX.Api/Patterns/InvestigationService.cs) | subscribes to `FaultEntered` and `FaultCleared`; a verdict adjusts a node's sensitivity through `ITrustEngine.AdjustSensitivity`, bounded by a floor |
-| Priority queue, for ranking | [`SuggestionService.cs`](src/SmartX.Api/Patterns/SuggestionService.cs) | `PriorityQueue<Candidate, (double Score, string Id)>` capped at K: the same structure as the critical lane, used to keep the best K and not to hand out the most urgent |
-| HashSet of what is done | [`SuggestionService.cs`](src/SmartX.Api/Patterns/SuggestionService.cs) | `LiveTrigger.Taken`, a `HashSet<ActionKey>` of the actions taken since a trigger fired, so "already done" is one lookup |
-| Backdated events, decay from event time | [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `DecayedCount.Add` fades the amount forward when it is older than the count; `Replay` pairs a history with itself in a window of its own |
-| Seeded, labelled history | [`SeededHistory.cs`](src/SmartX.Api/Patterns/SeededHistory.cs) | a pure function of the clock and the options; every event is `EventSource.Seeded` |
-| Least squares and R² | [`TrustForecaster.cs`](src/SmartX.Api/Patterns/TrustForecaster.cs) | the line, the fit, the bars a forecast has to clear, and the check that a fall is not flattening |
-| The sorted history store doing analysis | [`InsightService.cs`](src/SmartX.Api/Patterns/InsightService.cs) | `GetRange` for each node's trust samples, which `TrustSampler` stores as `HistoryKind.TrustSample` |
-| Not training on its own advice | [`SuggestionService.cs`](src/SmartX.Api/Patterns/SuggestionService.cs), [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `Accept` and `TakeAcceptance` mark an action `FromSuggestion`; the engine weights it by `AcceptedSuggestionWeight`, zero |
-| Dictionary and HashSet | [`TrustEngine.cs`](src/SmartX.Api/Trust/TrustEngine.cs) | `_nodes`, keyed by MAC for O(1) lookup per packet, and `_degraded`, where each failing node appears once |
-| The ingestion pipeline, stage by stage | [`TelemetryEndpoints.cs`](src/SmartX.Api/Endpoints/TelemetryEndpoints.cs) | `IngestBatchAsync`, with each stage numbered in comments, and `TryCreatePacket` |
-| Polymorphic JSON | [`ITelemetryPacket.cs`](src/SmartX.Shared/Packets/ITelemetryPacket.cs) | `[JsonDerivedType]` over the packet types |
-| Trust formula | [`TrustFormula.cs`](src/SmartX.Shared/Trust/TrustFormula.cs) | `Score` (Laplace smoothing), `DecayWeight` (half-life), `Classify` |
-| Background services | [`HeartbeatMonitor.cs`](src/SmartX.Api/Trust/HeartbeatMonitor.cs), [`TelemetryProcessor.cs`](src/SmartX.Api/Ingestion/TelemetryProcessor.cs), [`DeviceFleet.cs`](src/SmartX.DeviceSimulator/DeviceFleet.cs) | `PeriodicTimer` driven by an injected `TimeProvider`; a worker that survives one bad reading |
-| Async all the way down | [`SmartXApiClient.cs`](src/SmartX.Client/Services/SmartXApiClient.cs), [`ISensorRegistry.cs`](src/SmartX.Api/Storage/ISensorRegistry.cs) | no `.Result`, `.Wait()` or `GetAwaiter().GetResult()` anywhere |
-| Streamed, encrypted I/O | [`AttachmentUploader.cs`](src/SmartX.Api/Attachments/AttachmentUploader.cs), [`AesGcmEncryptingStream.cs`](src/SmartX.Api/Attachments/AesGcmEncryptingStream.cs) | `MultipartReader`, not `IFormFile`, and chunked AES-256-GCM |
-
-## Configuration reference
-
-The API reads configuration in the standard ASP.NET Core order: `appsettings.json`, then
-`appsettings.{Environment}.json`, then user secrets (Development only), then environment variables, then
-command-line arguments. Later sources win. An environment variable uses `__` for each `:` in a setting
-name, so `Trust:HalfLife` becomes `Trust__HalfLife`. The `Attachments`, `Zones`, `Commands`, `History`, `Alerts`, `Ingestion`, `Telemetry` and
-`Trust` sections are validated at startup, and a bad value stops the API with a message naming the
-setting.
-
-### API: `Attachments`
-
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `Attachments:StoragePath` | `App_Data/attachments` (`/data/attachments` in Docker) | Where encrypted files and their index entries are written. A relative path is resolved against the API's content root. |
-| `Attachments:MaxFileBytes` | `104857600` (100 MiB) | The largest file accepted. It is enforced byte by byte while the upload streams, and published to the client at `/api/attachments/limits`. |
-| `Attachments:EncryptionKey` | *(none)* | Base64-encoded 256-bit AES key. See [the encryption key](#the-encryption-key). |
-
-### API: `Zones`
-
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `Zones:Hierarchy` | `Brief` | Which deployment hierarchy the API manages. `Brief` is the four zones from the brief, and what the tests expect. `Demo` is the 16-zone, two-facility hierarchy the simulated fleet is deployed into. |
-
-### API: `Commands`
-
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `Commands:PendingTimeout` | `00:00:30` | How long a command may wait for its device to collect it before it becomes `TimedOut`. |
-| `Commands:DeliveredTimeout` | `00:00:30` | How long a delivered command may wait for the device's acknowledgement. |
-| `Commands:SweepInterval` | `00:00:01` | How often the timeout service looks for stale commands. |
-| `Commands:MaxUndoDepth` | `20` | How many operator actions the undo stack remembers. Older ones fall off the bottom. |
-
-### API: `History`
-
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `History:RetentionWindow` | `24:00:00` | How long any history entry is kept: readings, commands, alerts, trust transitions and searches. |
-| `History:EvictionInterval` | `00:01:00` | How often retention runs. It runs on a timer and not on every append. |
-| `History:DefaultTimelineWindow` | `01:00:00` | How far back a timeline, the event stream or the activity record looks when `from` is omitted. |
-| `History:DefaultMaxPoints` | `200` | Buckets in a timeline when `maxPoints` is omitted. |
-| `History:MaxPointsLimit` | `2000` | The most buckets a caller may ask for. More is a `400`. |
-| `History:DefaultEventLimit` | `500` | Events in the stream when `limit` is omitted. |
-| `History:MaxEventLimit` | `5000` | The most events a caller may ask for. |
-
-### API: `Alerts`
-
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `Alerts:DisconnectedAfterIntervals` | `3` | How many of a node's own heartbeat intervals it may stay silent before it is called disconnected. |
-| `Alerts:ClearAfterValidReadings` | `3` | How many valid readings in a row end an out-of-range or wrong-type alert. |
-
-### API: `Patterns`
-
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `Patterns:Window` | `00:10:00` | How soon after a trigger an action counts as following it. Also the bound on what an action costs. |
-| `Patterns:MinimumSupport` | `3` | How many times, weighted and faded, an action must have followed a trigger before it counts as a pattern. |
-| `Patterns:SupportTolerance` | `0.98` | The share of the minimum that a faded count must reach, so three pairings do not fail the test a minute after they are made. |
-| `Patterns:MinimumLift` | `1.5` | How many times more often than chance it must follow. At 1 the trigger tells you nothing. |
-| `Patterns:HalfLife` | `7.00:00:00` | How long until a pairing counts half as much. |
-| `Patterns:SearchWeight` | `0.4` | What a search that narrowed to a few devices counts for, against 1 for opening a device or sending a command. |
-| `Patterns:MaxSearchResultsForAction` | `3` | The most devices a search can return and still be read as being about them. |
-| `Patterns:MaxTriggersInWindow` | `5000` | The most triggers held in the window. The oldest are dropped past it. |
-| `Patterns:MaxLearnedPairs` | `250000` | The most (trigger, action) pairs remembered. Past it, the most faded are forgotten first. |
-| `Patterns:WatchLowFraction` / `WatchHighFraction` | `0.20` / `0.80` | Where a sensor's low and high watch levels sit, as a fraction of its registered range. |
-| `Patterns:RearmMargin` | `0.05` | How far back past a level a reading must come before it can fire again (hysteresis). |
-| `Patterns:GeneralZoneDepth` | `1` | The depth in the zone tree that devices are grouped under at the general level. |
-
-| `Patterns:AcceptedSuggestionWeight` | `0` | What an action counts for when the operator did it by accepting a suggestion, against 1 for one of their own. Zero stops the engine training on its own advice. |
-
-### API: `Investigations`
-
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `Investigations:MaxRetained` | `200` | How many are kept. The oldest closed ones go first; an open one is never dropped to make room. |
-| `Investigations:MaxReadings` | `60` | The most readings kept in one, the latest in its window. |
-| `Investigations:DismissFactor` | `0.85` | What a node's weight for a failure is multiplied by each time a fault caused by it is dismissed. |
-| `Investigations:SensitivityFloor` | `0.5` | The lowest the scale can reach. Detection can be dulled and never switched off. |
-
-### API: `Suggestions`
-
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `Suggestions:MaxSuggestions` | `5` | How many are kept: the top K of the ranking. |
-| `Suggestions:LiftWeight` / `ConfidenceWeight` / `SeverityWeight` / `RecencyWeight` | `0.35` / `0.25` / `0.25` / `0.15` | The weights of the ranking formula. Normalised, so only their balance matters. |
-| `Suggestions:LiftCap` | `10` | The lift at which the lift term is full. |
-| `Suggestions:Severity:ThresholdCrossing` / `AlertRaised` / `Degrading` / `CriticalReading` / `Fault` | `0.4` / `0.6` / `0.6` / `0.9` / `1.0` | How severe each kind of trigger is, from 0 to 1. |
-| `Suggestions:MaxLiveTriggers` | `500` | The most live triggers held. Bounds the cost of a recomputation. |
-| `Suggestions:MaxDevicesPerGeneralSuggestion` | `3` | How many devices a "similar devices" pattern is turned into. |
-| `Suggestions:SweepInterval` | `00:00:05` | How often live triggers are checked for having aged out. |
-| `Suggestions:NotUsefulFactor` | `0.85` | What a pattern's weight is multiplied by each time "Not useful" is pressed. |
-| `Suggestions:NotUsefulFloor` | `0.5` | The lowest the weight can go. |
-| `Suggestions:MaxDismissedRetained` | `20` | How many dismissed suggestions are kept so the mark can be taken back. |
-| `Suggestions:AcceptanceExpiry` | `00:00:30` | How long an accepted suggestion waits for the action it announced. |
-
-### API: `Forecast`
-
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `Forecast:Enabled` | `true` | Whether trust is sampled and forecast at all. |
-| `Forecast:Horizon` | `00:15:00` | How far ahead a projected fault is worth announcing. |
-| `Forecast:Lookback` | `00:04:00` | How much recent history the line is fitted to. |
-| `Forecast:MinSamples` | `8` | The fewest samples a line is fitted to. |
-| `Forecast:MinRSquared` | `0.8` | How much of the samples' movement the line must explain before it is believed. |
-| `Forecast:MinFallPerMinute` | `0.005` | How steep the fall must be, in trust per minute. |
-| `Forecast:MinRecentFallRatio` | `0.5` | How much of the whole window's rate the last third must still show, for the fall to count as continuing. |
-| `Forecast:SampleInterval` | `00:00:10` | How often a node's trust score is stored. |
-| `Forecast:Interval` | `00:00:05` | How often the forecast runs over every node. |
-| `Forecast:EtaChange` | `00:00:45` | How far a projected time can move before it is announced again. |
-| `Forecast:CurrentHold` | `00:00:30` | How long a problem that is only an alert stays listed after it clears. |
-
-### API: `SeededHistory`
-
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `SeededHistory:Enabled` | `false` (`true` in Docker) | Whether to replay the synthetic operator history at start-up. |
-| `SeededHistory:Days` | `5` | How far back it reaches. |
-| `SeededHistory:RandomSeed` | `7312` | The seed, so the same configuration is always the same history. |
-| `SeededHistory:BriefTriggers` / `BriefResponses` | `8` / `7` | How often Moisture Sensor B dropped, and how often Pump A was opened and turned on after it. |
-| `SeededHistory:OtherHabitTriggers` | `6` | How often each of the other two habits happened. |
-| `SeededHistory:PumpARounds` / `PumpAScheduledRuns` | `48` / `40` | Pump A opened on rounds and turned on on a schedule, so lift is a ratio and not infinity. |
-| `SeededHistory:RandomOpens` / `UnansweredTriggers` | `80` / `30` | Background noise. |
-| `SeededHistory:ConstantOpenEvery` | `00:04:00` | How often the one device that is always open is opened, for a day and a half. |
-| `SeededHistory:WaitForDevices` | `00:03:00` | How long to wait for the devices the habits are about to register before replaying what can be. |
-
-### API: `Realtime`
-
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `Realtime:FlushInterval` | `00:00:00.250` | How often batched and coalesced topics (readings, trust, alert repeat counts) are flushed. |
-| `Realtime:PipelineInterval` | `00:00:01` | How often pipeline statistics are pushed to clients that asked. |
-| `Realtime:MaxBufferedReadings` | `10000` | The most readings held for the next flush. More are dropped, and the batch reports how many. |
-| `Realtime:TrustScoreEpsilon` | `0.005` | How far a score must move to be worth a message, when nothing else about the node changed. |
-| `Realtime:RecentPriorityAlerts` | `20` | Critical readings carried by an alerts snapshot. |
-| `Realtime:SnapshotCommands` | `100` | Commands carried by a commands snapshot. |
-| `Realtime:MaxQueuedMessages` | `20000` | Immediate messages queued at once. Beyond it the newest are dropped and logged. |
-
-### Client: `Realtime`
-
-In `src/SmartX.Client/wwwroot/appsettings.json`. Every value is optional.
-
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `Realtime:ReconnectingFallbackAfter` | `00:00:15` | How long a dropped connection may stay reconnecting before the feeds poll. |
-| `Realtime:UpgradeRetryInterval` | `00:00:15` | How often a connection that could not be made tries again, while polling. |
-| `Realtime:PollInterval` | `00:00:03` | How often a polling feed (other than trust) asks for a snapshot. |
-| `Realtime:SnapshotRetryInterval` | `00:00:03` | How long a feed waits before retrying a snapshot that failed. |
-
-### API: `Ingestion`
-
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `Ingestion:MaxQueueDepth` | `10000` | The most readings the standard lane holds. When it is full, the API answers `503` with `Retry-After`. |
-| `Ingestion:MaxCriticalQueueDepth` | `1000` | The most readings the critical lane holds, bounded separately so a full standard lane never blocks an alert. |
-| `Ingestion:RetryAfterSeconds` | `5` | The value of the `Retry-After` header on a `503`. |
-| `Ingestion:MaxConsecutiveCritical` | `20` | After this many critical readings in a row, the worker takes one normal reading if one is waiting. The starvation valve. |
-| `Ingestion:SimulatedGatewayCost` | `00:00:00` | Simulates the per-reading processing cost of a resource-constrained gateway: how long the worker pauses after each reading. Zero is an unconstrained gateway. A few milliseconds builds a backlog, as a small board would, so the critical lane can be seen overtaking it. |
-| `Ingestion:CriticalRules` | see [Ingestion queues](#ingestion-queues) | The thresholds that make a reading critical: category, unit, an upper and/or lower limit, a severity (lower is more urgent) and a reason. Set as a list in `appsettings.json`. |
-
-### Simulator: `Simulator`
-
-Bound by `SmartX.DeviceSimulator`, from `src/SmartX.DeviceSimulator/appsettings.json` or the environment
-(`Simulator__ApiBaseUrl` and so on).
-
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `Simulator:ApiBaseUrl` | `http://localhost:5266` (`http://api:8080` in Docker) | Where the API is. |
-| `Simulator:DeviceCount` | `55` | How many of the demo devices to run, from the top of the list. |
-| `Simulator:Mix` | `Demo` | `Demo` gives each device its own scenario, for a spread of bands. `Nominal` starts every device healthy. |
-| `Simulator:Scenarios:<mac>` | none | Starts one device in a named scenario, on top of the mix. A MAC contains colons, which can't be in an environment variable name, so write it with underscores: `Simulator__Scenarios__B8_27_EB_10_00_01=Critical`. |
-| `Simulator:BackfillDuration` | `00:10:00` | How much history is posted on first start. `00:00:00` turns backfill off. |
-| `Simulator:BackfillConcurrency` | `8` | How many backfill requests may be in flight at once. |
-| `Simulator:ShadowPollInterval` | `00:00:05` | How often each device asks the API what it should be doing. Also how long a scenario change takes to appear. |
-| `Simulator:TickInterval` | `00:00:00.5` | How often the fleet checks which devices are due to report. Must be well under a fifth of the shortest heartbeat, which is five seconds in the demo fleet. |
-| `Simulator:RandomSeed` | `1729` | Seeds the generated values, so two runs produce the same readings. |
-| `Simulator:CommandFailureRate` | `0` | The chance, from 0 to 1, that an actuator fails to apply a command. Zero by default so demos are predictable; raise it to see `Failed` commands. |
-| `Simulator:StartupTimeout` | `00:05:00` | How long to keep retrying while the API isn't answering before giving up. |
-
-### API: `Telemetry`
-
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `Telemetry:RetentionPerNode` | `256` | Readings kept per sensor in its ring buffer before the oldest is overwritten. |
-
-### API: `Trust`
-
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `Trust:SuccessWeight` | `1` | Added to successes for each valid, in-range reading. |
-| `Trust:RangeViolationWeight` | `1` | Added to failures for a reading outside its range. |
-| `Trust:SchemaFailureWeight` | `2` | Added to failures for a wrong-typed reading. |
-| `Trust:MissedHeartbeatWeight` | `3` | Added to failures for each heartbeat interval that passes in silence. |
-| `Trust:HalfLife` | `00:10:00` | The age at which an outcome counts half as much as a fresh one. |
-| `Trust:OutcomeWindow` | `256` | Recent outcomes retained per node for scoring. |
-| `Trust:HistoryLength` | `120` | Trust samples retained per node for its full history. |
-| `Trust:HistorySampleInterval` | `00:00:10` | Minimum spacing between history samples. A band change is always sampled. |
-| `Trust:SnapshotHistoryPoints` | `30` | Recent samples included with each node in `/api/trust`, for its sparkline. |
-| `Trust:NominalThreshold` | `0.75` | The lowest score that counts as Nominal. |
-| `Trust:FaultThreshold` | `0.5` | Scores below this are Fault. |
-| `Trust:DefaultHeartbeatInterval` | `00:01:00` | The heartbeat assumed for a sensor registered without one. |
-| `Trust:HeartbeatCheckInterval` | `00:00:05` | How often the heartbeat monitor looks for silent nodes. |
-
-### API: `Cors`
-
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `Cors:AllowedOrigins` | `http://localhost:5131` and `https://localhost:7258`, set in `appsettings.Development.json` only | The client origins allowed to call the API from a browser. It isn't needed in Docker, where nginx puts the client and the API on one origin. |
-
-### Client: `src/SmartX.Client/wwwroot/appsettings.json`
-
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `ApiBaseAddress` | `http://localhost:5266/` | Where the client sends API requests. It can be absolute, or relative to the page (Docker uses `/`). |
-| `TrustFeed:PollIntervalSeconds` | `3` | How often the trust panel refreshes. Each refresh is two requests, however many nodes there are. |
-| `CommandStream:SearchDebounce` | `00:00:00.300` | How long typing must pause before a device search is sent. |
-| `CommandStream:StreamCapacity` | `500` | The most readings the live stream keeps, and the most it holds while paused. |
-| `CommandStream:PinDuration` | `00:00:30` | How long a critical reading stays pinned if nobody acknowledges it. |
-| `CommandStream:MaxPinned` | `20` | The most critical readings pinned at once. |
-
-In Docker these two come from the client container's `API_BASE_ADDRESS` and
-`TRUST_POLL_INTERVAL_SECONDS` environment variables. They are written into `appsettings.json` when the
-container starts, so the image never needs rebuilding to point somewhere else.
-
-### Docker Compose settings
-
-These go in `.env`:
-
-| Variable | Default in `.env.example` | What it does |
-| --- | --- | --- |
-| `SMARTX_ATTACHMENT_KEY` | the development key | Becomes `Attachments__EncryptionKey` for the API. Compose refuses to start without it. |
-| `SMARTX_ZONE_HIERARCHY` | `Demo` | Becomes `Zones__Hierarchy` for the API. |
-| `SMARTX_QUEUE_DEPTH` | `10000` | Becomes `Ingestion__MaxQueueDepth`. |
-| `SMARTX_DEVICE_COUNT` | `55` | Becomes `Simulator__DeviceCount`. |
-| `SMARTX_SCENARIO_MIX` | `Demo` | Becomes `Simulator__Mix`: `Demo` or `Nominal`. |
-| `SMARTX_BACKFILL` | `00:10:00` | Becomes `Simulator__BackfillDuration`. |
-| `SMARTX_RATE` | `1` | Becomes `Simulator__ReportingRateMultiplier`: how many times faster than normal the fleet reports. |
-| `SMARTX_TICK` | `00:00:00.500` | Becomes `Simulator__TickInterval`: how often the simulator wakes to send what is due. Lower it as the rate rises. |
-| `SMARTX_PROCESS_DELAY` | `00:00:00` | Becomes `Ingestion__SimulatedGatewayCost`: the simulated per-reading cost of a constrained gateway; see [the Command Stream page](#seeing-a-critical-reading-overtake-the-standard-queue). |
-| `SMARTX_PATTERN_WINDOW` | `00:10:00` | Becomes `Patterns__Window`. A short one, such as `00:01:00`, lets the pattern example be shown in minutes. |
-| `SMARTX_PATTERN_HALFLIFE` | `7.00:00:00` | Becomes `Patterns__HalfLife`. |
-| `SMARTX_SEED_HISTORY` | `true` | Becomes `SeededHistory__Enabled`. `false` leaves the suggestion engine knowing only what it has observed. |
-| `SMARTX_CLIENT_PORT` | `8080` | Host port for the client. Open this one in the browser. |
-| `SMARTX_API_PORT` | `5266` | Host port for the API, for `curl` and the scenario endpoint. |
-
-### The encryption key
-
-Attachments are encrypted at rest with AES-256-GCM, using a 256-bit key supplied as base64.
-
-**The key is never in source code, or in any settings file the API loads.** It reaches the API in one of
-three ways:
-
-| Where the API runs | How the key is supplied |
-| --- | --- |
-| Locally, `dotnet run` | User secrets, which live in your user profile outside the repository (`dotnet user-secrets set …`, see [step 3](#3-set-the-development-encryption-key-once-per-machine)) |
-| Docker Compose | `SMARTX_ATTACHMENT_KEY` in your gitignored `.env` |
-| Anywhere else | The environment variable `Attachments__EncryptionKey`, set by the host or a secret store |
-
-**The development key.** The key in this README and in `.env.example` is
-`jk8ISNL3b2INdPgIONnlaaf0nycILpHni4khrvGdBlg=`. It is fixed so that attachments uploaded while developing
-or recording a demo are still readable after a restart. It is **published, and so it protects nothing**.
-Anyone with this repository can decrypt what it encrypts. The API recognises it by fingerprint and logs a
-warning whenever it runs outside the Development environment with it.
-
-To use a private key instead, generate one.
-
-macOS, Linux or Git Bash:
-
-```bash
-openssl rand -base64 32
-```
-
-PowerShell:
-
-```powershell
-$key = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($key); [Convert]::ToBase64String($key)
-```
-
-**If no key is set:**
-
-- In the Development environment, the API generates a temporary key for that run and logs a warning.
-  Everything works until you restart, after which those attachments can't be read.
-- In any other environment, the API refuses to start and names the missing setting.
-
-**If the key changes,** attachments encrypted under the old key are hidden from lists, not shown as
-downloads that would fail. They are not deleted, so restoring the old key brings them back.
-
-#### What this does and does not demonstrate
-
-This demonstrates the *encryption mechanism*, not production key management.
-
-- **Demonstrated:**
-  - streamed authenticated encryption with a random nonce per file
-  - tamper detection on every chunk, before any plaintext is released
-  - no plaintext written to disk at any point
-  - a key supplied through configuration, never code
-  - a fingerprint of the key recorded with each file, so a key change is detected rather than failing at
-    download
-- **Not demonstrated:**
-  - A real deployment would fetch the key from a managed key vault (Azure Key Vault, AWS KMS, HashiCorp
-    Vault), keep it out of the process environment, and audit every access.
-  - Keys would be rotated, re-encrypting or re-wrapping existing files. The key fingerprint shows which
-    files a rotation would have to touch, but no rotation is implemented.
-  - Envelope encryption, where each file gets its own data key, itself encrypted by a master key, is the
-    usual approach, and is not implemented here.
 
 ## API reference
 
@@ -2062,164 +2559,6 @@ simulator registers again when it starts. Attachments are the exception, and per
   entry with the same GUID name. The index holds the original name, size, SHA-256 and key fingerprint, and
   is loaded into memory at startup. Locally the directory is `src/SmartX.Api/App_Data/attachments`, which
   is gitignored. In Docker it is the `smartx_attachments` volume.
-
-## Troubleshooting
-
-### The indicator says "Polling" and never goes Live
-
-The browser could not open the push connection, so the app is polling and retrying every 15 seconds. Hover the chip, or
-open the browser's network tab and look for `/hubs/telemetry`. The usual cause is a proxy between the browser and the API
-that does not pass WebSocket upgrades; SignalR then falls back to long polling and the indicator may say "Live" while the
-tooltip says "over LongPolling". In the Docker stack the `/hubs/` location in `src/SmartX.Client/nginx/default.conf`
-needs `proxy_http_version 1.1` and the `Upgrade` and `Connection` headers. Another proxy in front needs the same.
-
-### The address is already in use
-
-`dotnet run` fails with `Failed to bind to address http://127.0.0.1:5266: address already in use`, or
-Docker reports `port is already allocated`.
-
-Find what is holding the port.
-
-PowerShell:
-
-```powershell
-Get-NetTCPConnection -LocalPort 5266 | Select-Object OwningProcess
-```
-
-macOS or Linux:
-
-```bash
-lsof -i :5266
-```
-
-Usually it's an earlier run of the same app, or the Docker stack while you run locally (both use
-`5266`). Stop that first. To move a port instead:
-
-- **Locally:** change `applicationUrl` in the project's `Properties/launchSettings.json`, then update the
-  other half to match. `ApiBaseAddress` in the client's `wwwroot/appsettings.json` must point at the
-  API's port, and `Cors:AllowedOrigins` in the API's `appsettings.Development.json` must list the client's
-  origin.
-- **Docker:** change `SMARTX_CLIENT_PORT` or `SMARTX_API_PORT` in `.env`.
-
-### The build fails with "file is locked by SmartX.Api"
-
-A running API or client holds its own executable. Stop it (Ctrl+C in its terminal, or stop debugging in
-Visual Studio) and build again.
-
-### The client build fails with MSB3030 "Could not copy the file … webcil"
-
-This happens on Windows when the repository is cloned somewhere with a long path. The Blazor build writes
-files several folders deep under `src/SmartX.Client/obj`, and once the full path passes Windows'
-260-character limit the copy fails. Either clone to a shorter path such as `C:\src\smartx-poe`, or
-enable long paths once from an administrator PowerShell and restart the terminal:
-
-```powershell
-New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name LongPathsEnabled -Value 1 -PropertyType DWORD -Force
-```
-
-### The browser console shows a CORS error
-
-The error reads `blocked by CORS policy: No 'Access-Control-Allow-Origin' header`. The client is being
-served from an origin the API doesn't allow.
-
-- Check which address is in the browser's address bar. If you used the HTTPS profile, or changed a port,
-  that origin has to be in `Cors:AllowedOrigins` in `src/SmartX.Api/appsettings.Development.json`.
-- The CORS list is only in the Development settings. If the API was started with
-  `ASPNETCORE_ENVIRONMENT=Production` while the client runs on its own port, pass the origin explicitly:
-  `dotnet run --project src/SmartX.Api -- --Cors:AllowedOrigins:0=http://localhost:5131`.
-- In Docker there is no cross-origin request. If you see this error there, the client's
-  `API_BASE_ADDRESS` has been set to an absolute URL. Leave it as `/`.
-
-### "The API could not be reached"
-
-The client loaded, but nothing answered at `ApiBaseAddress`.
-
-1. Check the API is running. `curl http://localhost:5266/api/health` should return `{"status":"ok"}`.
-2. Check the address in `src/SmartX.Client/wwwroot/appsettings.json` matches the port the API printed.
-3. In Docker, check both containers are up with `docker compose ps`, and read the API's log with
-   `docker compose logs api`.
-
-### The API won't start: missing or invalid encryption key
-
-The message is `Attachments:EncryptionKey is required outside Development` or `must be a base64-encoded
-256-bit (32-byte) key`.
-
-- **Locally:** set the key with the user-secrets command in [step
-  3](#3-set-the-development-encryption-key-once-per-machine). User secrets are only read in the
-  Development environment, which is what `dotnet run` uses by default.
-- **Docker:** compose stops with `Set SMARTX_ATTACHMENT_KEY - copy .env.example to .env`. Create `.env`
-  as in [step 1](#1-create-your-env). A key must decode to exactly 32 bytes, which is 44 base64
-  characters ending in `=`.
-
-### Attachments disappeared after a restart
-
-- The API log says `No Attachments:EncryptionKey is configured`: the run used a temporary key. Set the
-  development key, and upload again.
-- The API log says `stored attachments were encrypted with a different key and are hidden`: the key has
-  changed since they were uploaded. Set the previous key again and they reappear.
-- **Docker:** check the volume still exists with `docker volume ls`. `docker compose down --volumes`
-  deletes it.
-
-### The sensor page says "Sensor not found" after a restart
-
-Sensors are held in memory, so a restarted API has forgotten every sensor. Register them again, or restart
-the device simulator, which re-registers its whole fleet on start.
-
-### After restarting the API, some devices are missing
-
-The API holds its device list in memory, so a restart empties it. Devices that are reporting notice, register
-themselves again and are back within seconds. Devices running the `Disconnect` scenario send nothing, so
-nothing tells them the API forgot them, and they stay unregistered until they reconnect. Restarting the
-simulator (`docker compose restart simulator`) re-registers the whole fleet at once.
-
-### A command ended as TimedOut
-
-Nothing collected it. Either the device is silent (the `Disconnect` scenario, or real hardware that is off or out
-of range), or it collected the command and never confirmed it. `GET /api/commands/{id}` shows which: a command
-that was never collected has no `deliveredAt`. A timed-out command can't be undone, because its effect on the
-device is unknown. Bring the device back, look at its state, and issue a new command.
-
-### Undo was refused
-
-The response is a `409` and its `items` say why for each command. A command that timed out or failed can't be
-undone, since the device's real state is unknown and restoring an unknown state could do harm. A command whose
-previous state was never observed can't be undone either, because there is nothing recorded to return to; the
-actuator has to report in once before a command can record what it replaced. A refused entry is removed from the
-stack, so the next undo reaches the action beneath it.
-
-### A command is refused with "registered without an actuator kind"
-
-The device is an actuator that was registered before actuator kinds existed, or without one. Register it with
-`actuatorKind` set (or through the form, which asks for it) so the API knows which commands it understands.
-
-### Telemetry returns 503
-
-The ingestion queue is full: the API is receiving readings faster than it processes them. The response's
-`Retry-After` header says how long to wait. See `GET /api/pipeline/stats` for the queue depth. If it happens
-under a normal load, raise `Ingestion:MaxQueueDepth`; if a device is flooding the API, that is what the
-limit is for.
-
-### The dashboard is empty when running the simulator
-
-- The API must be started with `--Zones:Hierarchy=Demo` (or `SMARTX_ZONE_HIERARCHY=Demo` in Docker). With the
-  default hierarchy, the API refuses the demo devices' zones and the simulator stops with a message naming
-  the first device it could not register.
-- The simulator logs `Waiting for the gateway` while the API isn't answering, and gives up after
-  `Simulator:StartupTimeout`. Check the API is running and `Simulator:ApiBaseUrl` is right.
-- In Docker, read the simulator's log with `docker compose logs simulator`.
-
-### A scenario change doesn't take effect straight away
-
-That is expected. The API records the desired state and the device applies it on its next poll, which is
-every `Simulator:ShadowPollInterval` (five seconds by default). Trust then takes a few heartbeats to
-move.
-
-### The Docker client container keeps restarting
-
-Run `docker compose logs client`. If you see `not found` or `bad interpreter` for
-`40-smartx-client-config.sh`, the script was checked out with Windows line endings. The repository's
-`.gitattributes` prevents that on a fresh clone. For an existing checkout, run `git add --renormalize .`,
-then check the script back out and rebuild with `docker compose up --build`.
 
 ## Tests
 

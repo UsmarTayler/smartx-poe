@@ -30,7 +30,9 @@
         {
             <div class="smartx-devices" role="list" aria-label="Matching devices">
                 <Virtualize Items="_hits" Context="hit" ItemSize="56" OverscanCount="4">
-                    <button type="button" class="smartx-device-row" role="listitem" @key="hit.MacAddress"
+                    @* The listitem is a wrapper, not the button: a button's own role cannot be overridden without losing aria-pressed. *@
+                    <div role="listitem" @key="hit.MacAddress">
+                    <button type="button" class="smartx-device-row"
                             aria-pressed="@(State.StreamDevice == hit.MacAddress ? "true" : "false")"
                             @onclick="() => Select(hit.MacAddress)">
                         <span class="smartx-device-row__name">@hit.Room</span>
@@ -48,6 +50,7 @@
                             </span>
                         }
                     </button>
+                    </div>
                 </Virtualize>
             </div>
         }

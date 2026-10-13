@@ -1,7 +1,6 @@
-# Brings up the API, the client and the device simulator together:
-#   cp .env.example .env
+# Brings up the API, the client and the device simulator together. No .env is needed:
 #   docker compose up --build
-# Then open http://localhost:8080.
+# Then open http://localhost:8080. Copy .env.example to .env only to change a setting.
 
 name: smartx
 
@@ -12,9 +11,10 @@ services:
       dockerfile: src/SmartX.Api/Dockerfile
     image: smartx-api
     environment:
-      # Required outside Development, and deliberately not defaulted here: compose stops with this message
-      # rather than starting an API that refuses to run.
-      Attachments__EncryptionKey: ${SMARTX_ATTACHMENT_KEY:?Set SMARTX_ATTACHMENT_KEY - copy .env.example to .env}
+      # Defaults to the development key published in the README and .env.example, so a fresh clone starts with no .env.
+      # It protects nothing, since anyone with the repository has it, and the API logs a warning when it runs outside
+      # Development with it. Set SMARTX_ATTACHMENT_KEY to a private key (openssl rand -base64 32) for anything but a demo.
+      Attachments__EncryptionKey: ${SMARTX_ATTACHMENT_KEY:-jk8ISNL3b2INdPgIONnlaaf0nycILpHni4khrvGdBlg=}
       # The deployment the simulated fleet is registered into. The zones are gateway configuration; the
       # devices in them come from the simulator over HTTP.
       Zones__Hierarchy: ${SMARTX_ZONE_HIERARCHY:-Demo}

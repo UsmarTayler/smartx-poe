@@ -63,7 +63,7 @@
 
     <div class="smartx-investigation__actions" role="group" aria-label="@($"Verdict on {Investigation.Room}")">
         <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.QueryStats" OnClick="Investigate"
-                   aria-label="@($"Show the decay window of {Investigation.Room} on its timeline")">Show decay window</MudButton>
+                   aria-label="@($"Show decay window of {Investigation.Room} on its timeline")">Show decay window</MudButton>
 
         <MudButton Size="Size.Small" Variant="@(Investigation.Verdict == Verdict.Confirm ? Variant.Filled : Variant.Outlined)" Color="Color.Primary" Disabled="_busy"
                    StartIcon="@Icons.Material.Filled.Check" OnClick="() => GiveAsync(Verdict.Confirm, null)"

@@ -14,6 +14,8 @@
         <MudText Typo="Typo.caption" Class="mud-text-secondary">Anticipated faults first, then what is wrong now.</MudText>
     </div>
 
+    @* A live region has to be in the page before its content arrives, or a screen reader will not announce what is added to it: so this wrapper is always rendered, and the list, the empty state and the loading state come and go inside it. "additions" announces a new item once and stays quiet while an existing one's numbers tick. *@
+    <div aria-live="polite" aria-relevant="additions">
     @if (!State.IsLoaded && State.Problem is not null)
     {
         <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="mt-2" role="status">
@@ -32,7 +34,7 @@
     }
     else
     {
-        <ul class="smartx-insights" aria-label="Insights, anticipated first" aria-live="polite">
+        <ul class="smartx-insights" aria-label="Insights, anticipated first">
             @foreach (var insight in State.Insights)
             {
                 var anticipated = insight.Kind == InsightKind.Anticipated;
@@ -93,6 +95,7 @@
             }
         </ul>
     }
+    </div>
 </MudPaper>
 
 @code {
