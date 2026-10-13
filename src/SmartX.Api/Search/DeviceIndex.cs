@@ -75,6 +75,15 @@ internal sealed class DeviceIndex
         }
     }
 
+    /// <summary>Every registration, as a snapshot. For callers that group devices in ways the filters do not.</summary>
+    public IReadOnlyList<SensorRegistration> Registrations()
+    {
+        lock (Gate)
+        {
+            return [.. _devices.Values.Select(entry => entry.Registration)];
+        }
+    }
+
     /// <summary>Indexes a newly registered device.</summary>
     /// <returns><see langword="false"/> when the device is already indexed, in which case nothing changes.</returns>
     public bool Register(SensorRegistration sensor, TrustBand band = TrustBand.Unproven)

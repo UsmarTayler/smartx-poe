@@ -41,18 +41,18 @@ public class SearchEndpointTests
     }
 
     [Theory]
-    [InlineData("category=Actuator", 18)]
+    [InlineData("category=Actuator", 22)]
     [InlineData("category=PowerConsumption", 12)]
-    [InlineData("category=Environmental", 18)]
-    [InlineData("actuatorKind=Valve", 5)]
-    [InlineData("actuatorKind=Pump", 4)]
-    [InlineData("actuatorKind=Dimmer", 4)]
+    [InlineData("category=Environmental", 21)]
+    [InlineData("actuatorKind=Valve", 6)]
+    [InlineData("actuatorKind=Pump", 6)]
+    [InlineData("actuatorKind=Dimmer", 5)]
     [InlineData("actuatorKind=Relay", 5)]
-    [InlineData("q=pump", 4)]
+    [InlineData("q=pump", 6)]
     [InlineData("q=B8:27:EB:10:00:2B", 1)]
     [InlineData("zone=zone-3", 11)]
     [InlineData("zone=sub-zone-f", 5)]
-    [InlineData("band=Unproven", 48)]
+    [InlineData("band=Unproven", 55)]
     [InlineData("band=Fault", 0)]
     [InlineData("alert=Disconnected", 0)]
     public async Task Each_filter_alone_finds_the_right_devices(string query, int expected)
@@ -188,7 +188,7 @@ public class SearchEndpointTests
         var (api, http) = await CommandEndpointTests.HostAsync();
         using var _ = api;
 
-        Assert.Equal(5, (await SearchAsync(http, "?actuatorKind=valve")).Count);
+        Assert.Equal(6, (await SearchAsync(http, "?actuatorKind=valve")).Count);
         Assert.Equal(11, (await SearchAsync(http, "?zone=ZONE-3")).Count);
     }
 

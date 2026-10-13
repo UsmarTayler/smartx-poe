@@ -248,7 +248,7 @@ public class HistoryEndpointTests
         var search = Assert.Single(activity, entry => entry.Kind == ActivityKind.Search);
         Assert.Equal(SensorCategory.Actuator, search.Filters!.Category);
         Assert.Equal(ActuatorKind.Valve, search.Filters.ActuatorKind);
-        Assert.Equal(5, search.ResultCount);
+        Assert.Equal(6, search.ResultCount);
         Assert.Contains(new AlertKey(Freezer, AlertKind.OutOfRange), search.ActiveAlerts);
         Assert.Contains(new AlertKey(Freezer, AlertKind.Fault), search.ActiveAlerts);
         Assert.Contains("category Actuator", search.Summary, StringComparison.Ordinal);

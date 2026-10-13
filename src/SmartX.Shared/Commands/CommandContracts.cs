@@ -6,7 +6,8 @@ namespace SmartX.Shared;
 /// <param name="MacAddress">The actuator to command.</param>
 /// <param name="Action">What to ask of it.</param>
 /// <param name="Level">The level, for SetLevel.</param>
-public sealed record IssueCommandRequest(string MacAddress, CommandAction Action, double? Level = null);
+/// <param name="SuggestionId">The suggestion the operator accepted by sending this, when they did. Not part of the command: it only says why it was sent.</param>
+public sealed record IssueCommandRequest(string MacAddress, CommandAction Action, double? Level = null, string? SuggestionId = null);
 
 /// <summary>The body of a POST to /api/commands/zone.</summary>
 /// <param name="ZoneId">The zone to act on. Every matching actuator in it, and in every zone beneath it, is commanded.</param>

@@ -137,6 +137,7 @@ internal sealed class RealtimeHost : IAsyncDisposable
             connection.On<CommandUpdate>(RealtimeMethods.CommandChanged, message => _received.Enqueue((RealtimeMethods.CommandChanged, message)));
             connection.On<PipelineUpdate>(RealtimeMethods.PipelineUpdated, message => _received.Enqueue((RealtimeMethods.PipelineUpdated, message)));
             connection.On<ReadingsBatch>(RealtimeMethods.ReadingsArrived, message => _received.Enqueue((RealtimeMethods.ReadingsArrived, message)));
+            connection.On<SuggestionsUpdate>(RealtimeMethods.SuggestionsUpdated, message => _received.Enqueue((RealtimeMethods.SuggestionsUpdated, message)));
         }
 
         public HubConnection Connection { get; }

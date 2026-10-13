@@ -327,3 +327,84 @@ public sealed class PipelineFeed(
 
     protected override void OnFetchFailed(ApiProblem problem) => Current = Current with { Problem = problem };
 }
+
+// ---- suggestions and insights ---------------------------------------------------------------------------------
+
+/// <summary>The suggested actions and automated insights, as of the last snapshot or push.</summary>
+/// <param name="Suggestions">Ranked, best first.</param>
+/// <param name="Insights">Anticipated first, then current.</param>
+/// <param name="Dismissed">Marked "Not useful" and not yet forgotten, newest first.</param>
+/// <param name="Arrivals">
+/// When each suggestion or insight that arrived by a push was first seen here, by id. A snapshot adds nothing to it: what was
+/// already there when the page opened has not just arrived. Used to highlight what is new, and to say how long it took.
+/// </param>
+/// <param name="RefreshedAt">When this was last brought up to date.</param>
+/// <param name="Problem">Why the last attempt to fetch it failed, if it did.</param>
+/// <param name="IsLoaded">Whether any snapshot has ever arrived.</param>
+public sealed record SuggestionFeedState(
+    IReadOnlyList<Suggestion> Suggestions,
+    IReadOnlyList<Insight> Insights,
+    IReadOnlyList<DismissedSuggestion> Dismissed,
+    IReadOnlyDictionary<string, DateTimeOffset> Arrivals,
+    DateTimeOffset? RefreshedAt,
+    ApiProblem? Problem,
+    bool IsLoaded)
+{
+    public static SuggestionFeedState Empty { get; } =
+        new([], [], [], new Dictionary<string, DateTimeOffset>(), null, null, false);
+}
+
+/// <summary>A live view of what the engine suggests and what needs a look.</summary>
+public interface ISuggestionFeed : IFeed
+{
+    /// <summary>The latest state. Kept after the feed stops, so a return visit renders at once.</summary>
+    SuggestionFeedState Current { get; }
+}
+
+/// <summary><see cref="ISuggestionFeed"/> over the suggestions topic.</summary>
+/// <remarks>
+/// Each message is the whole picture, not a difference, so applying one is replacing the state and a lost or reordered
+/// message costs nothing: the next replaces it. What this adds to the shared snapshot-then-stream machinery is the memory of
+/// what arrived live, which is what lets a card be highlighted for a moment without any extra message from the server.
+/// </remarks>
+public sealed class SuggestionFeed(
+    RealtimeConnection connection,
+    IRealtimeSnapshots snapshots,
+    TimeProvider time,
+    RealtimeClientOptions options) : RealtimeFeed<SuggestionsUpdate>(connection, time, options), ISuggestionFeed
+{
+    /// <inheritdoc />
+    public SuggestionFeedState Current { get; private set; } = SuggestionFeedState.Empty;
+
+    protected override string Topic => RealtimeTopics.Suggestions;
+
+    protected override Task<ApiResult<SuggestionsUpdate>> FetchSnapshotAsync(CancellationToken cancellationToken) =>
+        snapshots.GetSuggestionsAsync(cancellationToken);
+
+    protected override void ApplySnapshot(SuggestionsUpdate snapshot) => Apply(snapshot, arrived: false);
+
+    protected override void RegisterHandlers() =>
+        Listen<SuggestionsUpdate>(RealtimeMethods.SuggestionsUpdated, update => Apply(update, arrived: true));
+
+    protected override void OnFetchFailed(ApiProblem problem) => Current = Current with { Problem = problem };
+
+    private void Apply(SuggestionsUpdate update, bool arrived)
+    {
+        var now = Clock.GetUtcNow();
+        var known = Current.Suggestions.Select(suggestion => suggestion.Id).Concat(Current.Insights.Select(insight => insight.Id)).ToHashSet(StringComparer.Ordinal);
+        var present = update.Suggestions.Select(suggestion => suggestion.Id).Concat(update.Insights.Select(insight => insight.Id)).ToHashSet(StringComparer.Ordinal);
+
+        // What arrived earlier stays marked while it is still there; what is new in a push is marked now; what has gone is forgotten.
+        var arrivals = Current.Arrivals.Where(pair => present.Contains(pair.Key)).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+
+        if (arrived)
+        {
+            foreach (var id in present.Where(id => !known.Contains(id)))
+            {
+                arrivals[id] = now;
+            }
+        }
+
+        Current = new SuggestionFeedState(update.Suggestions, update.Insights, update.Dismissed, arrivals, now, null, true);
+    }
+}

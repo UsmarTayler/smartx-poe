@@ -424,8 +424,11 @@ h1:focus {
     gap: 16px;
     align-items: start;
     grid-template-columns: minmax(0, 1fr);
-    /* Stacked order: alerts, pipeline, device search, stream, then undo and recent activity. */
+    /* Stacked order: suggestions, insights, investigations, alerts, pipeline, device search, stream, then undo and recent activity. */
     grid-template-areas:
+        "suggestions"
+        "insights"
+        "investigations"
         "alerts"
         "pipeline"
         "device"
@@ -435,6 +438,9 @@ h1:focus {
 }
 
 .smartx-cs__area { min-width: 0; }
+.smartx-cs__area--suggestions { grid-area: suggestions; }
+.smartx-cs__area--insights { grid-area: insights; }
+.smartx-cs__area--investigations { grid-area: investigations; }
 .smartx-cs__area--alerts { grid-area: alerts; }
 .smartx-cs__area--pipeline { grid-area: pipeline; }
 .smartx-cs__area--device { grid-area: device; }
@@ -446,6 +452,8 @@ h1:focus {
     .smartx-cs {
         grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
         grid-template-areas:
+            "suggestions insights"
+            "investigations investigations"
             "pipeline pipeline"
             "stream device"
             "alerts undo"
@@ -457,12 +465,99 @@ h1:focus {
     .smartx-cs {
         grid-template-columns: minmax(0, 1.15fr) minmax(0, 1.15fr) minmax(0, 1fr);
         grid-template-areas:
+            "suggestions suggestions insights"
+            "investigations investigations investigations"
             "pipeline pipeline pipeline"
             "stream device alerts"
             "stream device undo"
             "activity activity activity";
     }
 }
+
+/* Suggested actions, insights and investigations */
+.smartx-suggestions, .smartx-insights { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 10px; }
+
+/* Bounded, like the alert list: a mesh with many problems must not push everything else off the page. */
+.smartx-insights { max-height: 640px; overflow-y: auto; padding-right: 4px; }
+
+.smartx-suggestion, .smartx-insight, .smartx-investigation {
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 8px;
+    padding: 10px 12px;
+    background: var(--mud-palette-surface);
+}
+
+.smartx-insight { border-left: 4px solid var(--smartx-status, transparent); }
+
+.smartx-suggestion__head, .smartx-insight__head, .smartx-investigation__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+}
+
+.smartx-suggestion__what { font-size: 1.02rem; }
+.smartx-suggestion p, .smartx-insight p { margin: 6px 0 0; font-size: 0.875rem; overflow-wrap: anywhere; }
+.smartx-suggestion__level { display: flex; align-items: center; gap: 6px; }
+.smartx-suggestion__weight { font-size: 0.75rem; color: var(--mud-palette-text-secondary); }
+.smartx-suggestion__actions, .smartx-insight__actions, .smartx-investigation__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.smartx-suggestions--strip .smartx-suggestion { padding: 8px 10px; }
+.smartx-suggestions--strip .smartx-suggestion__evidence, .smartx-suggestions--strip .smartx-suggestion__level { display: none; }
+
+/* A suggestion or insight that has just arrived: an outline, and the word New. It moves nothing and fades by itself. */
+.smartx-suggestion--new, .smartx-insight--new {
+    outline: 2px solid var(--mud-palette-primary);
+    outline-offset: 1px;
+    animation: smartx-arrive 1.6s ease-out 1;
+}
+
+.smartx-suggestion__new {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 0 8px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--mud-palette-primary-text);
+    background: var(--mud-palette-primary);
+}
+
+@keyframes smartx-arrive {
+    0% { background: color-mix(in srgb, var(--mud-palette-primary) 22%, transparent); }
+    100% { background: var(--mud-palette-surface); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .smartx-suggestion--new, .smartx-insight--new { animation: none; }
+}
+
+.smartx-suggestions__dismissed ul { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
+.smartx-suggestions__dismissed li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; font-size: 0.875rem; }
+.smartx-suggestions__dismissed summary { cursor: pointer; font-size: 0.875rem; }
+
+.smartx-insight__reasons, .smartx-insight__working ul { margin: 6px 0 0; padding-left: 18px; font-size: 0.8125rem; color: var(--mud-palette-text-secondary); }
+.smartx-insight__working summary { cursor: pointer; font-size: 0.8125rem; margin-top: 6px; }
+.smartx-insight__link { font-size: 0.875rem; }
+
+.smartx-investigations { display: grid; gap: 12px; margin-top: 8px; }
+.smartx-investigations__subhead { margin: 8px 0 0; font-size: 0.875rem; font-weight: 600; }
+.smartx-investigation__facts { display: grid; gap: 4px 16px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin: 8px 0 0; }
+.smartx-investigation__facts dt { font-size: 0.72rem; color: var(--mud-palette-text-secondary); }
+.smartx-investigation__facts dd { margin: 0; font-size: 0.875rem; overflow-wrap: anywhere; }
+.smartx-investigation__precedent, .smartx-investigation__verdict, .smartx-investigation__note, .smartx-investigation__help { margin: 8px 0 0; font-size: 0.8125rem; }
+.smartx-investigation__verdict { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-weight: 600; }
+.smartx-investigation__relabel { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.smartx-select {
+    padding: 6px 8px;
+    border: 1px solid var(--mud-palette-lines-inputs);
+    border-radius: 4px;
+    background: var(--mud-palette-surface);
+    color: var(--mud-palette-text-primary);
+    font: inherit;
+}
+
+.smartx-timeline-focus { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; font-size: 0.875rem; }
 
 /* Pipeline strip */
 .smartx-pipeline__lanes {

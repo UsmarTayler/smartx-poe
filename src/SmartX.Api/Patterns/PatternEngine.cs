@@ -38,6 +38,28 @@ internal interface IPatternEngine
     /// <summary>What tends to follow each kind of trigger that has been seen on a device or on its kind in its zone.</summary>
     IReadOnlyList<PatternAnswer> ForDevice(string macAddress, DateTimeOffset now);
 
+    /// <summary>
+    /// Learns from a history that happened in the past, in the order it happened, without touching the live window.
+    /// </summary>
+    /// <remarks>
+    /// For the seeded operator history. The events are applied with their own times, so the counts fade from when each thing
+    /// happened and not from when it was replayed, and they are paired only with each other: a replayed action must not be
+    /// matched against a live trigger that came after it.
+    /// </remarks>
+    void Replay(IEnumerable<HistoricEvent> history);
+
+    /// <summary>
+    /// A number that goes up each time the engine learns something: an action that counted. Lets a caller that last looked
+    /// at an unchanged engine skip asking again.
+    /// </summary>
+    long LearnedVersion { get; }
+
+    /// <summary>Raised after an observed trigger was recorded. Not raised for replayed history.</summary>
+    event Action<TriggerEvent>? TriggerRecorded;
+
+    /// <summary>Raised after an observed operator action was recorded, whether or not the engine learned from it.</summary>
+    event Action<OperatorAction>? ActionRecorded;
+
     /// <summary>The thresholds an association has to clear.</summary>
     PatternSettings Settings { get; }
 
@@ -61,15 +83,47 @@ internal struct DecayedCount
     /// <summary>When the thing counted last happened. Only used by coverage, which needs the gap since the last time.</summary>
     public DateTimeOffset Last;
 
+    /// <summary>How many times it was counted, not faded: the number an operator can read as "7 times".</summary>
+    public int Times;
+
+    /// <summary>How many of those were part of the seeded history.</summary>
+    public int SeededTimes;
+
     /// <summary>What the count is worth at a moment, after fading.</summary>
     public readonly double ValueAt(DateTimeOffset now, TimeSpan halfLife) =>
         Value <= 0 ? 0 : Value * TrustFormula.DecayWeight(now - At, halfLife);
 
-    /// <summary>Fades the count to a moment, then adds to it.</summary>
-    public void Add(double amount, DateTimeOffset now, TimeSpan halfLife)
+    /// <summary>
+    /// Adds to the count as of the moment the thing happened, which need not be the latest moment the count has seen.
+    /// </summary>
+    /// <remarks>
+    /// <b>Decay runs from event time.</b> The value is kept as of <see cref="At"/>. An addition at or after it fades the
+    /// existing value forward and adds the amount at full weight, as before. An addition from before it, which is what
+    /// replaying a seeded history after something live has been counted looks like, instead fades the <i>amount</i> forward
+    /// to <see cref="At"/>, so a habit seen five days ago is worth what a habit seen five days ago is worth, whenever the
+    /// engine was told about it. Nothing here reads the wall clock.
+    /// </remarks>
+    public void Add(double amount, DateTimeOffset moment, TimeSpan halfLife, bool seeded = false)
     {
-        Value = ValueAt(now, halfLife) + amount;
-        At = now;
+        if (moment >= At)
+        {
+            Value = ValueAt(moment, halfLife) + amount;
+            At = moment;
+        }
+        else
+        {
+            Value += amount * TrustFormula.DecayWeight(At - moment, halfLife);
+        }
+
+        if (amount > 0)
+        {
+            Times++;
+
+            if (seeded)
+            {
+                SeededTimes++;
+            }
+        }
     }
 
     /// <summary>
@@ -78,6 +132,12 @@ internal struct DecayedCount
     /// </summary>
     public void AddCoverage(TimeSpan window, DateTimeOffset now, TimeSpan halfLife)
     {
+        // An occurrence from before the last one is already inside the stretch that one accounts for, up to the window.
+        if (now < Last)
+        {
+            return;
+        }
+
         var gap = now - Last;
 
         Add((gap < window ? gap : window).TotalSeconds, now, halfLife);
@@ -130,10 +190,10 @@ internal sealed class PatternEngine : IPatternEngine
 
     // The recent triggers, oldest first. A Queue<T> because the only operations are "add to the back" and "remove from the
     // front while old", and both are O(1).
-    private readonly Queue<TriggerInstance> _window = new();
+    private Queue<TriggerInstance> _window = new();
 
     // Pairings already counted: (trigger instance, action). A set, so that counting the same one twice is impossible.
-    private readonly HashSet<(long Instance, ActionKey Action)> _paired = [];
+    private HashSet<(long Instance, ActionKey Action)> _paired = [];
 
     // How often each action followed each trigger, how often each trigger happened, and how much time each action covers
     // with its windows (the baseline for lift). Doubles, because they fade.
@@ -145,7 +205,12 @@ internal sealed class PatternEngine : IPatternEngine
     private readonly Dictionary<string, string> _scopeLabels = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _targetLabels = new(StringComparer.Ordinal);
 
+    // Reused by every action, under the lock: the latest trigger of each kind in the window. See LearnAction.
+    private readonly Dictionary<TriggerKey, TriggerInstance> _latestSpecific = [];
+    private readonly Dictionary<TriggerKey, TriggerInstance> _latestGeneral = [];
+
     private long _nextInstance;
+    private long _learnedVersion;
     private int _pairs;
     private int _pruneAfter;
     private DateTimeOffset? _watchingSince;
@@ -177,91 +242,224 @@ internal sealed class PatternEngine : IPatternEngine
 
     // ---- learning ---------------------------------------------------------------------------------------------------
 
+    public event Action<TriggerEvent>? TriggerRecorded;
+
+    public event Action<OperatorAction>? ActionRecorded;
+
+    public long LearnedVersion => Interlocked.Read(ref _learnedVersion);
+
     public void RecordTrigger(TriggerEvent trigger)
     {
         var known = _devices.TryDescribe(trigger.MacAddress, out var profile);
 
         lock (_gate)
         {
-            var now = Advance(trigger.At);
-            Expire(now);
+            LearnTrigger(trigger, known, profile);
+        }
 
-            var specific = new TriggerKey(PatternLevel.Specific, trigger.Kind, trigger.MacAddress, trigger.Detail);
-            TriggerKey? general = null;
-
-            Count(_triggers, specific, 1, now);
-            _scopeLabels.TryAdd(specific.Scope, known ? profile.Room : trigger.MacAddress);
-
-            if (known)
-            {
-                var scope = GeneralScope(profile);
-
-                general = new TriggerKey(PatternLevel.General, trigger.Kind, scope, trigger.Detail);
-                Count(_triggers, general.Value, 1, now);
-                _scopeLabels.TryAdd(scope, $"{profile.ClassLabel} in {profile.GeneralZoneName}");
-            }
-
-            // Bounded. Past the cap the oldest triggers are dropped as if they had aged out, so a flood of triggers makes
-            // the window shorter, not an action slower.
-            while (_window.Count >= _options.MaxTriggersInWindow)
-            {
-                Remove(_window.Dequeue());
-            }
-
-            _window.Enqueue(new TriggerInstance(++_nextInstance, now, specific, general, known ? profile.GeneralZoneId : null));
+        // Announced outside the lock, and not for a replay: a subscriber that recomputes something from here must be able to
+        // ask the engine a question without waiting for the engine to finish telling it.
+        if (trigger.Source == EventSource.Observed)
+        {
+            TriggerRecorded?.Invoke(trigger);
         }
     }
 
     public void RecordAction(OperatorAction action)
     {
         var known = _devices.TryDescribe(action.MacAddress, out var profile);
-        var weight = WeightOf(action.Kind);
 
         lock (_gate)
         {
-            var now = Advance(action.At);
-            Expire(now);
+            LearnAction(action, known, profile);
+        }
 
-            var specific = new ActionKey(PatternLevel.Specific, action.Kind, action.MacAddress, action.Command);
-            ActionKey? general = null;
+        if (action.Source == EventSource.Observed)
+        {
+            ActionRecorded?.Invoke(action);
+        }
+    }
 
-            Cover(_actions, specific, now);
-            _targetLabels.TryAdd(specific.Target, known ? profile.Room : action.MacAddress);
+    public void Replay(IEnumerable<HistoricEvent> history)
+    {
+        ArgumentNullException.ThrowIfNull(history);
 
-            if (known)
+        // Oldest first, and triggers before actions that share a moment, so a response is never counted before its cause.
+        var ordered = history.OrderBy(item => item.At).ThenBy(item => item.Trigger is null ? 1 : 0).ToList();
+
+        if (ordered.Count == 0)
+        {
+            return;
+        }
+
+        // Devices are looked up before the lock is taken, as for a live event, so the engine's lock is never held while
+        // another component's lock is asked for.
+        Dictionary<string, DeviceProfile?> profiles = new(StringComparer.Ordinal);
+
+        foreach (var item in ordered)
+        {
+            var mac = item.Trigger?.MacAddress ?? item.Action!.Value.MacAddress;
+
+            if (!profiles.ContainsKey(mac))
             {
-                // A kind of device in a zone, so "a pump in Zone 1" has its own baseline: how often a pump in that zone is
-                // opened, and not how often any pump anywhere is. Otherwise a pump opened all day in another zone would make
-                // every pump look as if it follows everything.
-                var target = GeneralScope(profile);
+                profiles[mac] = _devices.TryDescribe(mac, out var found) ? found : null;
+            }
+        }
 
-                general = new ActionKey(PatternLevel.General, action.Kind, target, action.Command);
-                Cover(_actions, general.Value, now);
-                _targetLabels.TryAdd(target, $"{profile.ClassLabel} in {profile.GeneralZoneName}");
+        lock (_gate)
+        {
+            // The live window and its set of counted pairs are put aside and restored afterwards. History is paired with
+            // itself, in a window of its own, so that a replayed action cannot be matched against a live trigger that
+            // happened after it, and a replayed trigger cannot be answered by a live action.
+            var liveWindow = _window;
+            var livePaired = _paired;
+            var liveLatest = _latest;
+
+            _window = new Queue<TriggerInstance>();
+            _paired = [];
+            _latest = DateTimeOffset.MinValue;
+
+            // The engine has been "watching" since the history began, which is what the baseline for lift is measured over.
+            if (_watchingSince is not { } since || ordered[0].At < since)
+            {
+                _watchingSince = ordered[0].At;
             }
 
-            // Every trigger still in the window is a candidate cause. foreach on a Queue<T> uses its struct enumerator,
-            // so the walk allocates nothing.
-            foreach (var instance in _window)
+            try
             {
-                Pair(instance, instance.Specific, specific, weight, now);
-
-                // The general pattern is about a kind of device in the same zone. An action on a device somewhere else
-                // is not evidence for it, though it can still be evidence at the specific level.
-                if (general is { } generalAction
-                    && instance.General is { } generalTrigger
-                    && instance.GeneralZone == profile.GeneralZoneId)
+                foreach (var item in ordered)
                 {
-                    Pair(instance, generalTrigger, generalAction, weight, now);
+                    if (item.Trigger is { } trigger)
+                    {
+                        var profile = profiles[trigger.MacAddress];
+                        LearnTrigger(trigger, profile is not null, profile);
+                    }
+                    else if (item.Action is { } action)
+                    {
+                        var profile = profiles[action.MacAddress];
+                        LearnAction(action, profile is not null, profile);
+                    }
                 }
+            }
+            finally
+            {
+                _window = liveWindow;
+                _paired = livePaired;
+                _latest = liveLatest;
             }
         }
     }
 
-    private double WeightOf(OperatorActionKind kind) => kind == OperatorActionKind.Searched ? _options.SearchWeight : 1;
+    /// <summary>Counts a trigger and puts it in the window. Caller holds the lock.</summary>
+    private void LearnTrigger(TriggerEvent trigger, bool known, DeviceProfile? profile)
+    {
+        var seeded = trigger.Source == EventSource.Seeded;
+        var now = Advance(trigger.At);
+        Expire(now);
+
+        var specific = new TriggerKey(PatternLevel.Specific, trigger.Kind, trigger.MacAddress, trigger.Detail);
+        TriggerKey? general = null;
+
+        Count(_triggers, specific, 1, now, seeded);
+        _scopeLabels.TryAdd(specific.Scope, known ? profile!.Room : trigger.MacAddress);
+
+        if (known)
+        {
+            var scope = GeneralScope(profile!);
+
+            general = new TriggerKey(PatternLevel.General, trigger.Kind, scope, trigger.Detail);
+            Count(_triggers, general.Value, 1, now, seeded);
+            _scopeLabels.TryAdd(scope, $"{profile!.ClassLabel} in {profile.GeneralZoneName}");
+        }
+
+        // Bounded. Past the cap the oldest triggers are dropped as if they had aged out, so a flood of triggers makes
+        // the window shorter, not an action slower.
+        while (_window.Count >= _options.MaxTriggersInWindow)
+        {
+            Remove(_window.Dequeue());
+        }
+
+        _window.Enqueue(new TriggerInstance(++_nextInstance, now, specific, general, known ? profile!.GeneralZoneId : null));
+    }
+
+    /// <summary>Counts an action against every trigger in the window. Caller holds the lock.</summary>
+    private void LearnAction(OperatorAction action, bool known, DeviceProfile? profile)
+    {
+        var weight = WeightOf(action);
+
+        // An action taken on the system's own advice teaches it nothing by default (see AcceptedSuggestionWeight): it is
+        // neither a response to the trigger nor one more occurrence of the action, since counting it as the second would
+        // raise the baseline and make a genuine habit look weaker.
+        if (weight <= 0)
+        {
+            return;
+        }
+
+        Interlocked.Increment(ref _learnedVersion);
+
+        var seeded = action.Source == EventSource.Seeded;
+        var now = Advance(action.At);
+        Expire(now);
+
+        var specific = new ActionKey(PatternLevel.Specific, action.Kind, action.MacAddress, action.Command);
+        ActionKey? general = null;
+
+        Cover(_actions, specific, now);
+        _targetLabels.TryAdd(specific.Target, known ? profile!.Room : action.MacAddress);
+
+        if (known)
+        {
+            // A kind of device in a zone, so "a pump in Zone 1" has its own baseline: how often a pump in that zone is
+            // opened, and not how often any pump anywhere is. Otherwise a pump opened all day in another zone would make
+            // every pump look as if it follows everything.
+            var target = GeneralScope(profile!);
+
+            general = new ActionKey(PatternLevel.General, action.Kind, target, action.Command);
+            Cover(_actions, general.Value, now);
+            _targetLabels.TryAdd(target, $"{profile!.ClassLabel} in {profile.GeneralZoneName}");
+        }
+
+        // Every trigger still in the window is a candidate cause, but an action answers each kind of trigger once. A sensor that
+        // fires a dozen times in ten minutes, and an operator who does one thing in that time, is one response to a noisy sensor
+        // and not twelve: crediting the action to every firing would make a single click look like a habit that held twelve times
+        // out of twelve. So the latest firing of each kind is found (the queue is oldest first, so a later one replaces an earlier
+        // one in the scratch dictionary, which is reused so the walk allocates nothing once it is warm) and the action is paired
+        // with those. Every firing is still counted as a trigger, which is what makes the noisy sensor's confidence low, as it should be.
+        _latestSpecific.Clear();
+        _latestGeneral.Clear();
+
+        foreach (var instance in _window)
+        {
+            _latestSpecific[instance.Specific] = instance;
+
+            // The general pattern is about a kind of device in the same zone. An action on a device somewhere else
+            // is not evidence for it, though it can still be evidence at the specific level.
+            if (general is not null && instance.General is { } generalTrigger && instance.GeneralZone == profile!.GeneralZoneId)
+            {
+                _latestGeneral[generalTrigger] = instance;
+            }
+        }
+
+        foreach (var (trigger, instance) in _latestSpecific)
+        {
+            Pair(instance, trigger, specific, weight, now, seeded);
+        }
+
+        foreach (var (trigger, instance) in _latestGeneral)
+        {
+            Pair(instance, trigger, general!.Value, weight, now, seeded);
+        }
+    }
+
+    private double WeightOf(OperatorAction action)
+    {
+        var weight = action.Kind == OperatorActionKind.Searched ? _options.SearchWeight : 1;
+
+        return action.FromSuggestion ? weight * _options.AcceptedSuggestionWeight : weight;
+    }
 
     /// <summary>Counts an action as following a trigger, once per trigger instance.</summary>
-    private void Pair(TriggerInstance instance, TriggerKey trigger, ActionKey action, double weight, DateTimeOffset now)
+    private void Pair(TriggerInstance instance, TriggerKey trigger, ActionKey action, double weight, DateTimeOffset now, bool seeded)
     {
         if (!_paired.Add((instance.Id, action)))
         {
@@ -276,21 +474,21 @@ internal sealed class PatternEngine : IPatternEngine
             _followed.Add(trigger, actions);
         }
 
-        if (Count(actions, action, weight, now) && ++_pairs > Math.Max(_options.MaxLearnedPairs, _pruneAfter))
+        if (Count(actions, action, weight, now, seeded) && ++_pairs > Math.Max(_options.MaxLearnedPairs, _pruneAfter))
         {
             Prune(now);
         }
     }
 
     /// <returns>Whether this was a count that did not exist before.</returns>
-    private bool Count<TKey>(Dictionary<TKey, DecayedCount> counts, TKey key, double amount, DateTimeOffset now)
+    private bool Count<TKey>(Dictionary<TKey, DecayedCount> counts, TKey key, double amount, DateTimeOffset now, bool seeded = false)
         where TKey : notnull
     {
         // A reference into the dictionary's own storage: the struct is changed where it lives, with no copy and no
         // allocation, which is the point of a struct here.
         ref var count = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(counts, key, out var existed);
 
-        count.Add(amount, now, _options.HalfLife);
+        count.Add(amount, now, _options.HalfLife, seeded);
 
         return !existed;
     }
@@ -368,7 +566,7 @@ internal sealed class PatternEngine : IPatternEngine
         }
     }
 
-    private static string GeneralScope(DeviceProfile profile) => $"{profile.Class}@{profile.GeneralZoneId}";
+    private static string GeneralScope(DeviceProfile profile) => profile.GeneralScope;
 
     // ---- answering --------------------------------------------------------------------------------------------------
 
@@ -396,7 +594,7 @@ internal sealed class PatternEngine : IPatternEngine
 
                 foreach (var (action, support) in actions)
                 {
-                    var association = Score(trigger, action, support.ValueAt(now, _options.HalfLife), now);
+                    var association = Score(trigger, action, support, now);
 
                     if (query.IncludeWeak || association.Qualified)
                     {
@@ -507,7 +705,7 @@ internal sealed class PatternEngine : IPatternEngine
         {
             foreach (var (action, support) in actions)
             {
-                var association = Score(trigger, action, support.ValueAt(now, _options.HalfLife), now);
+                var association = Score(trigger, action, support, now);
 
                 if (association.Qualified)
                 {
@@ -522,9 +720,12 @@ internal sealed class PatternEngine : IPatternEngine
     }
 
     /// <summary>Support, confidence and lift for one trigger and one action. Caller holds the lock.</summary>
-    private PatternAssociation Score(TriggerKey trigger, ActionKey action, double support, DateTimeOffset now)
+    private PatternAssociation Score(TriggerKey trigger, ActionKey action, DecayedCount followed, DateTimeOffset now)
     {
+        var support = followed.ValueAt(now, _options.HalfLife);
         var triggerCount = _triggers.TryGetValue(trigger, out var counted) ? counted.ValueAt(now, _options.HalfLife) : 0;
+        var triggerTimes = counted.Times;
+        var seededTriggerTimes = counted.SeededTimes;
 
         // Capped at one. The two counts fade from different moments, so their ratio can stray a hair above one, and a
         // probability above one is not a thing to show.
@@ -543,7 +744,11 @@ internal sealed class PatternEngine : IPatternEngine
             lift,
             triggerCount,
             baseline,
-            qualified);
+            qualified,
+            followed.Times,
+            followed.SeededTimes,
+            triggerTimes,
+            seededTriggerTimes);
     }
 
     /// <summary>

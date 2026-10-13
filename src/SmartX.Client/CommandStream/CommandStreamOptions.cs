@@ -29,4 +29,11 @@ public sealed class CommandStreamOptions
 
     /// <summary>The most critical readings pinned at once.</summary>
     public int MaxPinned { get; set; } = 20;
+
+    /// <summary>How long a suggestion or insight that has just arrived is highlighted.</summary>
+    /// <remarks>
+    /// Long enough to be noticed by someone looking at another part of the page, short enough that it is gone before it
+    /// becomes the thing they are looking at. The highlight is an outline and a word, and it does not move anything.
+    /// </remarks>
+    public TimeSpan ArrivalHighlight { get; set; } = TimeSpan.FromSeconds(8);
 }

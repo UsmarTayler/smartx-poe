@@ -25,6 +25,8 @@ public interface IRealtimeSnapshots
     Task<ApiResult<StreamSnapshot>> GetStreamAsync(CancellationToken cancellationToken);
 
     Task<ApiResult<DeviceSnapshot>> GetDeviceAsync(string macAddress, CancellationToken cancellationToken);
+
+    Task<ApiResult<SuggestionsUpdate>> GetSuggestionsAsync(CancellationToken cancellationToken);
 }
 
 /// <summary><see cref="IRealtimeSnapshots"/> over the API's <c>/api/realtime</c> endpoints.</summary>
@@ -47,4 +49,7 @@ public sealed class ApiRealtimeSnapshots(SmartXApiClient api) : IRealtimeSnapsho
 
     public Task<ApiResult<DeviceSnapshot>> GetDeviceAsync(string macAddress, CancellationToken cancellationToken) =>
         api.GetDeviceSnapshotAsync(macAddress, cancellationToken);
+
+    public Task<ApiResult<SuggestionsUpdate>> GetSuggestionsAsync(CancellationToken cancellationToken) =>
+        api.GetSuggestionsSnapshotAsync(cancellationToken);
 }

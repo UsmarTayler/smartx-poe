@@ -1,0 +1,136 @@
+@implements IAsyncDisposable
+@inject ISuggestionFeed Feed
+@inject IOperatorApi Api
+
+@* The open investigations. One opens when a node falls into fault, and closes by itself when the fault clears or when an operator
+   gives a verdict. The list is refetched when the set of open investigations in the live insights changes, so a new one appears
+   without a reload. An investigation the operator has just given a verdict on stays here, marked resolved, so a changed mind is one
+   click away. *@
+<MudPaper Outlined="true" Class="pa-3" role="region" aria-label="Investigations">
+    <div class="smartx-stream__header">
+        <MudText Typo="Typo.h6" HtmlTag="h2">Investigations</MudText>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">A node that falls into fault is gathered here with what you would need to judge it.</MudText>
+    </div>
+
+    @if (_problem is not null)
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="mt-2" role="status">@_problem</MudAlert>
+    }
+
+    @if (!_loaded)
+    {
+        <div aria-hidden="true"><MudSkeleton Height="96px" Class="mt-2" /></div>
+    }
+    else if (_open.Count == 0 && _resolved.Count == 0)
+    {
+        <EmptyState Icon="@Icons.Material.Outlined.FactCheck"
+                    Title="No investigations are open"
+                    Text="One opens the moment a node's trust falls into Fault, with its decay window, the alerts on it and what operators did last time." />
+    }
+    else
+    {
+        <div class="smartx-investigations">
+            @foreach (var investigation in _open)
+            {
+                <InvestigationCard @key="investigation.Id" Investigation="investigation" OnChanged="Changed" />
+            }
+
+            @if (_resolved.Count > 0)
+            {
+                <h3 class="smartx-investigations__subhead">Resolved by you this session</h3>
+
+                @foreach (var investigation in _resolved)
+                {
+                    <InvestigationCard @key="investigation.Id" Investigation="investigation" OnChanged="Changed" />
+                }
+            }
+        </div>
+    }
+</MudPaper>
+
+@code {
+    private const int ResolvedKept = 5;
+
+    private List<InvestigationDetails> _open = [];
+    private readonly List<InvestigationDetails> _resolved = [];
+    private HashSet<Guid> _loadedFor = [];
+    private bool _loaded;
+    private string? _problem;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Feed.Updated += OnFeedChanged;
+
+        await Feed.StartAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var result = await Api.GetOpenInvestigationsAsync();
+
+        if (result.IsSuccess)
+        {
+            _open = [.. result.Value];
+            _loadedFor = [.. _open.Select(investigation => investigation.Id)];
+            _problem = null;
+
+            // One that was resolved by a verdict and is now open again is open, not resolved.
+            _resolved.RemoveAll(resolved => _loadedFor.Contains(resolved.Id));
+        }
+        else
+        {
+            // What was shown stays, and the reason is said.
+            _problem = $"Investigations could not be loaded: {result.Problem.Message}";
+        }
+
+        _loaded = true;
+    }
+
+    private void OnFeedChanged()
+    {
+        // The insights carry the id of every open investigation, so a change in that set is the signal to fetch, with no timer.
+        var now = Feed.Current.Insights.Where(insight => insight.InvestigationId is not null).Select(insight => insight.InvestigationId!.Value).ToHashSet();
+
+        if (_loaded && !now.SetEquals(_loadedFor))
+        {
+            _ = InvokeAsync(async () =>
+            {
+                await LoadAsync();
+                StateHasChanged();
+            });
+        }
+    }
+
+    /// <summary>A verdict was given. The investigation moves to what the server says it is now.</summary>
+    private Task Changed(InvestigationDetails investigation)
+    {
+        _open.RemoveAll(existing => existing.Id == investigation.Id);
+        _resolved.RemoveAll(existing => existing.Id == investigation.Id);
+
+        if (investigation.Status == InvestigationStatus.Open)
+        {
+            _open.Insert(0, investigation);
+        }
+        else
+        {
+            _resolved.Insert(0, investigation);
+
+            if (_resolved.Count > ResolvedKept)
+            {
+                _resolved.RemoveRange(ResolvedKept, _resolved.Count - ResolvedKept);
+            }
+        }
+
+        _loadedFor = [.. _open.Select(existing => existing.Id)];
+
+        return Task.CompletedTask;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Feed.Updated -= OnFeedChanged;
+
+        await Feed.StopAsync();
+    }
+}

@@ -58,6 +58,15 @@
         </ul>
     }
 
+    @if (Focus is { } focus)
+    {
+        <div class="smartx-timeline-focus" role="status">
+            <MudIcon Icon="@Icons.Material.Filled.CenterFocusStrong" Size="Size.Small" aria-hidden="true" />
+            <span>Showing @focus.Label: @ReadingFormatter.Time(focus.From) to @ReadingFormatter.Time(focus.To).</span>
+            <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="State.ClearTimelineFocus">Back to live</MudButton>
+        </div>
+    }
+
     <div class="smartx-detail__range" role="group" aria-label="Timeline range">
         @foreach (var range in Enum.GetValues<TimelineRange>())
         {
@@ -93,6 +102,7 @@
     private DeviceFeed? _feed;
     private SensorTimeline? _timeline;
     private TimelineRange _loadedRange;
+    private TimelineFocus? _loadedFocus;
     private int _width = 480;
     private bool _loading;
     private bool _reloading;
@@ -102,6 +112,9 @@
     public string Mac { get; set; } = string.Empty;
 
     private string Title => _sensor?.Location.Room ?? Mac;
+
+    /// <summary>A stretch of time this device's timeline is pointed at, such as an investigation's decay window.</summary>
+    private TimelineFocus? Focus => State.TimelineFocus is { } focus && string.Equals(focus.MacAddress, Mac, StringComparison.OrdinalIgnoreCase) ? focus : null;
 
     private NodeTrustSnapshot? Node => Trust.Current.Nodes.FirstOrDefault(node => string.Equals(node.MacAddress, Mac, StringComparison.OrdinalIgnoreCase));
 
@@ -143,8 +156,12 @@
         _width = await Sizing.WidthAsync();
         _loadedRange = State.TimelineRange;
 
-        var to = Time.GetUtcNow();
-        var result = await Api.GetTimelineAsync(Mac, to - TimelineRanges.Length(_loadedRange), to, ChartSizes.MaxPointsFor(_width));
+        // Pointed at a stretch of the past when an investigation asked for it, and following the range otherwise.
+        _loadedFocus = Focus;
+
+        var to = _loadedFocus?.To ?? Time.GetUtcNow();
+        var from = _loadedFocus?.From ?? to - TimelineRanges.Length(_loadedRange);
+        var result = await Api.GetTimelineAsync(Mac, from, to, ChartSizes.MaxPointsFor(_width));
 
         _loading = false;
 
@@ -162,8 +179,9 @@
 
     private void OnStateChanged()
     {
-        // A different range is a different request. Anything else on the page changing is not this component's business.
-        if (State.TimelineRange != _loadedRange)
+        // A different range, or a different stretch of time, is a different request. Anything else on the page changing is not
+        // this component's business.
+        if (State.TimelineRange != _loadedRange || Focus != _loadedFocus)
         {
             _ = InvokeAsync(async () =>
             {
@@ -183,7 +201,8 @@
     {
         // The chart grows to the right as readings arrive. Once it has grown by a quarter of the range, the server's
         // buckets are asked for afresh so that the left edge moves and the extension does not stretch for ever.
-        if (_timeline is { } timeline && !_reloading && _feed is { Current.Recent.Count: > 0 } feed
+        // A timeline pointed at the past does not grow: what happened then has happened.
+        if (_loadedFocus is null && _timeline is { } timeline && !_reloading && _feed is { Current.Recent.Count: > 0 } feed
             && feed.Current.Recent[^1].Timestamp - timeline.To > TimelineRanges.Length(_loadedRange) / 4)
         {
             _reloading = true;

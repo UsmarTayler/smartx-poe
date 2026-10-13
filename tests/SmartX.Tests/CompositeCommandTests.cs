@@ -89,9 +89,9 @@ public class CompositeCommandTests
     {
         var fleet = Fleet.Create();
 
-        // Facility B > Zone 4 > Sub-Zone H: the drain valve is two levels below the zone that was named.
+        // Facility B > Zone 4 > Sub-Zone H: the dock drain valve is two levels below the zone that was named. The hydroponics bay's drain valve is one level below.
         var facilityB = fleet.CloseValves("facility-b");
-        Assert.Equal([Mac(0x21)], facilityB.Result!.Commands.Select(command => command.MacAddress));
+        Assert.Equal([Mac(0x21), Mac(0x37)], facilityB.Result!.Commands.Select(command => command.MacAddress).Order());
 
         // And Facility A reaches all four of Zone 3's valves without being told about Zone 3.
         Assert.Equal(4, fleet.CloseValves("facility-a").Result!.Commands.Count);
@@ -278,8 +278,8 @@ public class CompositeCommandTests
 
         var issue = fleet.Service.IssueForZone("facility-b", CommandAction.SetLevel, 20, fleet.Catalogue, fleet.Sensors);
 
-        // Warehouse lights (Zone 4) and meeting room lights and office lights (Zone 5, two levels down).
-        Assert.Equal([Mac(0x27), Mac(0x2E), Mac(0x2F)], issue.Result!.Commands.Select(command => command.MacAddress).Order());
+        // Warehouse lights (Zone 4), the hydroponics grow light (Zone 6), and meeting room lights and office lights (Zone 5, two levels down).
+        Assert.Equal([Mac(0x27), Mac(0x2E), Mac(0x2F), Mac(0x36)], issue.Result!.Commands.Select(command => command.MacAddress).Order());
         Assert.All(issue.Result.Commands, command => Assert.Equal(20, command.Level));
     }
 }

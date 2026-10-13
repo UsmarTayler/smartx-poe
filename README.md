@@ -32,6 +32,7 @@ The brief has three pillars. Parts 1 and 2 deliver the first and lay the ground 
 - [Real-time push](#real-time-push)
 - [The Command Stream page](#the-command-stream-page)
 - [Pattern analysis and investigations](#pattern-analysis-and-investigations)
+- [Suggestions, anticipation and insights](#suggestions-anticipation-and-insights)
 - [Feature walkthrough](#feature-walkthrough)
 - [Where the assessed concepts live](#where-the-assessed-concepts-live)
 - [Configuration reference](#configuration-reference)
@@ -180,7 +181,7 @@ The API must be running with `--Zones:Hierarchy=Demo`, as in step 4.
 dotnet run --project src/SmartX.DeviceSimulator
 ```
 
-It registers 48 devices, posts about ten minutes of history so the dashboard is not empty, and keeps them
+It registers 55 devices, posts about ten minutes of history so the dashboard is not empty, and keeps them
 reporting. Start it before the API if you like: it waits and retries until the API answers.
 
 ### Ports
@@ -294,7 +295,7 @@ has to hit the API like a device would.
    simulator runs empties the list. A device that gets a `404` on a report registers itself again and resends,
    so the fleet recovers within a few seconds without being restarted.
 
-The 48 devices and their zones live in the demo deployment: two facilities, 16 zones, three levels deep
+The 55 devices and their zones live in the demo deployment: two facilities, 17 zones, three levels deep
 (Facility → Zone → Sub-Zone), with constraints at every level. The zones stay in the API, selected with
 `Zones:Hierarchy=Demo`, because a deployment hierarchy is gateway configuration and not something a device
 carries. The devices come only from the simulator.
@@ -303,18 +304,20 @@ carries. The devices come only from the simulator.
 
 | Scenario | Behaviour | What it exercises | Demo fleet |
 | --- | --- | --- | --- |
-| `Nominal` | In-range readings at the registered interval | Successes | 30 devices |
+| `Nominal` | In-range readings at the registered interval | Successes | 35 devices |
 | `Drift` | Readings walk toward the top of the range, then hover across it | Range violations, gradually | 4 |
 | `Spike` | Mostly normal, with occasional values well outside the range | Range violations, intermittently | 4 |
 | `TypeViolation` | Mostly normal, with occasional wrong-typed payloads (`"ERR"`, `21.5` to an integer meter, `1` instead of `true`) | Schema failures | 4 |
 | `Critical` | Occasional extreme but valid readings: a power spike or a moisture crash | The priority queue | 2 |
 | `Disconnect` | Stops reporting entirely | Missed heartbeats | 4 |
+| `DryOut` | A cycle of falling slowly through the sensor's low watch level and recovering, every reading in range | The pattern engine's trigger, with no trust cost | 1 |
+| `Fouling` | A probe going bad: the share of wrong readings climbs from none to all over about seven minutes, holds, then clears | A trust fall steady enough to forecast | 1 |
 
-`Drift`, `Spike` and `Critical` are about a measurement leaving its range. An actuator measures nothing (its
+`Drift`, `Spike`, `Critical` and `DryOut` are about a measurement, and the hydroponics bay (Zone 6, seven devices) is where `DryOut` runs, on Moisture Sensor B. An actuator measures nothing (its
 state is whatever it was last commanded to), so an actuator can only run `Nominal`, `TypeViolation` or
 `Disconnect`.
 
-Eighteen of the 48 devices are actuators (four pumps, five relays, five valves and four dimmers), spread across the
+Twenty-two of the 55 devices are actuators (six pumps, five relays, six valves and five dimmers), spread across the
 zones so a zone-wide command has something to reach. See [Commands and undo](#commands-and-undo).
 
 `Critical` differs from the others in one respect worth noticing. The device does not label its reading as an
@@ -833,6 +836,7 @@ groups, so a client receives only what it joined; nothing is filtered on the cli
 | `commands` | command state changes | **immediately** |
 | `stream` | every accepted reading | **batched**, every flush window |
 | `pipeline` | ingestion queue statistics | periodic, once a second |
+| `suggestions` | the ranked suggestions, the insights and the recently dismissed, whole each time | **immediately**, when the set, the order or an occurrence changed; never per reading |
 | `device:{mac}` | one device's readings, for a timeline view | **batched** |
 
 ### What is batched, coalesced and immediate
@@ -970,9 +974,12 @@ readings live in scoped services.
 | Devices | Search (300 ms debounce) and filters (text, category, actuator kind, zone including sub-zones, band, alert kind); a device in detail with its current reading, band, alerts, timeline and controls; zone-wide actions | `/api/devices/search`, `/api/sensors/{mac}/timeline`, the `device:{mac}` topic |
 | Undo stack | Actions, top first, with the stack depth; Undo last; the result exactly as the API reports it | `/api/commands/undo-stack`, `/api/commands/undo`, `/api/commands/limits` |
 | Alerts | Kind, device, raised-at, "suppressed ×N", acknowledged flag and an Acknowledge button; most severe first, then newest | `IAlertFeed` |
+| Suggested Actions | The best five suggestions, each with what, why, evidence, level, one click and "Not useful"; new arrivals outlined and marked New | `ISuggestionFeed`; see [Suggestions](#suggestions-anticipation-and-insights) |
+| Automated Insights | Anticipated faults with a countdown that moves, then what is wrong now | `ISuggestionFeed` |
+| Investigations | Each open investigation with its decay window, cause and precedent, and Confirm, Dismiss and Relabel | `/api/investigations`, refetched when the insights say the set changed |
 | Recent activity | What the operator did, collapsed by default | `/api/activity` |
 
-The layout is three columns on a desktop, two at 768 px and one at 400 px, where the order is alerts, pipeline, device search, stream.
+The layout is three columns on a desktop, two at 768 px and one at 400 px. What to do (Suggested Actions) and what to look at (Automated Insights) come first, then the investigations, then the pipeline, stream and devices. Stacked, the order is suggestions, insights, investigations, alerts, pipeline, device search, stream.
 It is decided by container queries on the page, not by the window, so the drawer opening does not break it.
 
 ### What each data structure looks like on this page
@@ -1065,7 +1072,7 @@ line and the markers; and leaving the page and coming back restores the filters,
 
 The gateway learns which operator actions tend to follow which system events, and uses it two ways: it can say what operators
 usually do after something, and when a node falls into fault it opens an investigation that the operator's verdict feeds back
-into. This is the analysis. Ranking what it learned, showing it in the interface as "Suggested Actions" and delivering it in real time come after it, and are not part of what is described here.
+into. This is the analysis. Ranking what it learned, showing it as "Suggested Actions" and delivering it in real time are in [the next section](#suggestions-anticipation-and-insights).
 
 Everything lives in [`src/SmartX.Api/Patterns/`](src/SmartX.Api/Patterns). The engine sits behind `IPatternEngine` and has no
 reference to SignalR; one bridge class tells it what the rest of the system is doing and the endpoints ask it.
@@ -1289,6 +1296,256 @@ dotnet test tests/SmartX.Tests --settings tests/SmartX.Tests/benchmark.runsettin
 brief's example, the window, counting once, lift, minimum support, decay, both levels and which answers, hysteresis, the investigation's
 window, each verdict and its bounds, and the endpoints. `PatternBenchmarkTests` is the benchmark, behind the Benchmark trait.
 
+## Suggestions, anticipation and insights
+
+The pattern analysis above learns what operators do. This is what it is used for: it looks at what has just happened,
+says what an operator is likely to want to do about it, and says which devices to look at before anyone has searched for
+them. The two halves the brief asks for are here, **Suggested Actions** and **Automated Insights**, at the top of the
+[Command Stream page](#the-command-stream-page), and a compact strip of the best suggestions on the trust panel.
+
+### What a fresh `docker compose up` shows
+
+An engine that has observed nothing would show nothing, and "the suggestion engine is not working" and "the suggestion
+engine has not met anyone yet" look the same on screen. So on start the API replays a **seeded operator history**: five days
+of invented operator behaviour, with backdated times, through the real pattern engine. Within a minute of `docker compose up`,
+before anyone has touched anything:
+
+- **Suggested Actions** holds the brief's own example: *Turn on Pump A* and *Open Pump A*, because Moisture Sensor B in the
+  hydroponics bay dips below 20 % on a loop, and the history says an operator opens Pump A and turns it on after that.
+  Other habits show up as the sensors that trigger them cross their levels.
+- **Automated Insights** lists what is already wrong (devices in Fault, with open investigations, or with active alerts), and
+  gains an **Anticipated** entry when a node's trust is falling fast enough to be projected into Fault.
+
+### The seeded history is labelled, always
+
+Synthetic data must not pass for observed data. Every seeded event carries `Source = Seeded`; the engine counts seeded and
+observed events separately; and the evidence on every suggestion says how much of it is seeded:
+
+> Operators did this 7 of the last 8 times (7 from seeded history). 10× more likely than usual.
+
+Once real operators act, the seeded share falls: "9 of the last 10 times (7 from seeded history)". It is switched by
+`SeededHistory:Enabled` (the Docker stack turns it on, `SMARTX_SEED_HISTORY=false` turns it off, and the tests leave it off
+unless one turns it on). What is in it, all from [`SeededHistory.cs`](src/SmartX.Api/Patterns/SeededHistory.cs), built from a
+fixed random seed so the same configuration is always the same history:
+
+| In the history | How many | Why |
+| --- | --- | --- |
+| Moisture Sensor B dropping below 20 %, answered by opening Pump A and turning it on | 8 triggers, 7 answered | The brief's example. One in eight is unanswered, so it is a habit and not a rule |
+| A chiller's temperature rising, then its valve checked | 6 | Another realistic habit, learned at both levels |
+| The compressor's power spiking, then the conveyor relay inspected | 6 | A third |
+| Pump A opened on rounds, and turned on on a schedule | 48 and 40 | So its lift is a ratio and not infinity |
+| Devices opened at random times; threshold crossings nobody answered | 80 and 30 | Background noise |
+| **Pump B opened every four minutes for a day and a half** | about 540 | The device lift exists to filter out: it follows every trigger with confidence near one, and is never suggested |
+
+**The engine accepts backdated events.** Decay is computed from when an event happened, never from when the engine was told
+(`DecayedCount.Add` fades the *amount* forward when it is older than the count, and the existing value forward otherwise), and
+`IPatternEngine.Replay` pairs the history with itself in a window of its own, so a replayed action is never matched against a
+live trigger that came after it. The history is replayed once the devices it is about have registered, because the general
+level ("a pump in Zone 6") needs to know what kind of device and which zone.
+
+### The hydroponics bay
+
+The brief's example is "Pump A right after Moisture Sensor B drops below 20 %", and its scenario names hydroponic farms, so the
+demo fleet has a Zone 6 with seven devices named to match: Moisture Sensor A, **Moisture Sensor B**, Nutrient EC Sensor, Pump A,
+Pump B, Grow Light and Drain Valve. Moisture is registered 0 to 100 %, so the engine's low watch level (a fifth of the way up
+the range) is literally 20 %. Moisture Sensor B runs the `DryOut` scenario, which falls slowly through 20 % about every five
+minutes and recovers, every reading in range. The Nutrient EC Sensor runs `Fouling`: the share of wrong readings climbs over
+about seven minutes, which is a trust fall slow enough to be seen coming (see [the forecast](#anticipating-the-forecast)).
+
+### Ranking
+
+[`SuggestionService`](src/SmartX.Api/Patterns/SuggestionService.cs) works from the live triggers (those still inside the
+pattern window) and the qualified patterns for each: the device's own pattern first, and the pattern for its kind in its zone
+as the fallback. A general pattern ("a pump in Zone 1") is turned into the pumps in that zone, because a button has to do
+something to one device. Each candidate is scored from 0 to 1:
+
+```
+score = weight × ( wL·L + wC·C + wS·S + wR·R ) / ( wL + wC + wS + wR )
+
+  L  lift, ln(lift) / ln(LiftCap), capped at 1     how much more likely than usual
+  C  confidence                                    how reliably it follows the trigger
+  S  severity of the trigger                       Fault 1.0, critical reading 0.9, alert or degrading 0.6, crossing 0.4
+  R  recency, 1 - age / window                     1 for a trigger that has just fired, 0 as it leaves the window
+  weight                                           what "Not useful" has done to this pattern: 1 down to a floor of 0.5
+
+  defaults: wL = 0.35, wC = 0.25, wS = 0.25, wR = 0.15, LiftCap = 10, K = 5
+```
+
+Lift has the most weight because it is what separates a habit from a coincidence. Recency has the least because it only breaks
+ties: a suggestion does not become wrong as it ages, and the window ends it anyway. The weights are normalised, so changing one
+changes the balance and never the range.
+
+**The top K is a `PriorityQueue`**, the same structure as the ingestion pipeline's critical lane, used for the opposite job.
+That one hands out the most urgent thing first; this one keeps the best K. Every candidate is offered to a min-heap capped at K,
+and when it holds K + 1 the lowest is removed, so the cost is O(n log K) and not a sort of everything.
+
+**What is already done is not suggested.** Each live trigger has a `HashSet<ActionKey>` of the actions taken since it fired.
+Opening Pump A, or sending it the command, puts the action in the set, and a candidate in the set is skipped. Opening *any* pump
+in the zone also satisfies a pattern about pumps in the zone. A search is weaker than opening and does not count.
+
+### Every suggestion explains itself
+
+| On the card | Example |
+| --- | --- |
+| What | Turn on Pump A |
+| Why | Moisture Sensor B dropped below 20 % at 14:02 |
+| Evidence | Operators did this 7 of the last 8 times (7 from seeded history). 10× more likely than usual. |
+| Level | This device's own pattern, or Similar devices: a °C sensor in Zone 3 – Cold Store |
+| One click | Turn on Pump A: the same call as the Override button, with the suggestion's id attached |
+| Not useful | Lowers this pattern's weight; can be taken back |
+
+The occurrence that is happening now is not counted as a miss: "7 of the last 8" counts the eight times it has already
+happened. A trigger that fires again before anything is done (a reading hovering about a level) is the same suggestion with a
+later time, not a second one, so a card does not flash "New" for ever.
+
+### Feedback without a feedback loop
+
+**"Not useful"** removes the suggestion and multiplies its pattern's weight by 0.85, never below 0.5, the same rules as the
+investigation verdicts: small steps, a floor that dulls and never silences, and exactly reversible, because the amount taken is
+remembered and "Take back" gives that amount back. The suggestion comes back, with the lowered weight, the next time its trigger
+fires.
+
+**Accepting a suggestion must not make it more confident.** An operator who clicks "Turn on Pump A" because it was suggested has
+not shown a habit of turning on Pump A. Counting the click would make the pattern stronger, which would rank it higher, which
+would get it clicked more: the engine would train on its own advice, and a coincidence would harden into a "habit" that nobody
+has. So the one-click action carries the suggestion's id; the API registers the acceptance before the command or the selection is
+made (`ISuggestionService.Accept`) and the action that follows consumes it (`TakeAcceptance`), which marks it `FromSuggestion`;
+and the engine counts such an action at `Patterns:AcceptedSuggestionWeight`, **zero by default**. At zero it counts neither as
+following the trigger nor as one more occurrence of the action, because the second would raise the baseline and make a genuine
+habit look weaker. The same action done by hand, from the device list, counts in full. The acceptance lapses after 30 seconds if
+the action never follows (a refused command must not mislabel a later action of the operator's own).
+
+### Insights: devices to look at before anyone searches
+
+**Current.** Devices in Fault, with an open investigation, or with active alerts, one insight per device, ranked by the worst of
+them: Fault 1.0, an open investigation 0.85, a disconnected device 0.75, out of range 0.7, with acknowledged alerts counting for
+less. These come from structures that already exist; the point is that an operator does not have to search to find what is broken.
+
+#### Anticipating: the forecast
+
+Reporting what is already broken is not anticipating. For every node that is not in Fault, [`InsightService`](src/SmartX.Api/Patterns/InsightService.cs)
+fits a **least-squares line** to its recent trust samples, read from the history store with `GetRange` (the sorted structure whose
+job is "this node between these two moments"; a small `TrustSampler` stores one score per node every ten seconds beside its
+readings). The slope is `Sxy / Sxx`, R² is `Sxy² / (Sxx · Syy)`, and an insight is raised only when **all** of these hold:
+
+| Bar | Default | Why |
+| --- | --- | --- |
+| Samples | at least 8 over the last 4 minutes | A line through a few points is a coincidence |
+| Fit quality R² | at least 0.8 | A noisy series that goes nowhere fits a line badly and raises nothing |
+| Steepness | at least 0.005 trust a minute | A perfect fit to a nearly flat line says nothing within the horizon |
+| Horizon | reaches the fault threshold (0.5) within 15 minutes | Past that a straight line is a hope |
+| Not flattening | the last third of the window still falls at half the rate of the whole | After a burst of failures trust drops and levels off, and a line through the drop overshoots |
+
+A node already in Fault is current and is not forecast. An insight is **withdrawn when the trend reverses**, at looser bars than it
+was raised at (half the R² and half the steepness, and a quarter longer horizon), so a fit at the edge does not appear and
+disappear every pass. A projected time that drifts by under 45 seconds is not announced again; the countdown on the page is worked
+out on the page from the projected moment.
+
+The straight line is an approximation and the guard above is what makes it usable: trust under steady failure is curved, and a
+line fitted early over-projects. It is measured against real trust curves in the tests, and the trade-offs are listed at the end of
+this section.
+
+### Real-time delivery
+
+A `suggestions` topic on the existing hub, with the same snapshot-then-stream rule as the others: join, fetch
+`GET /api/realtime/suggestions`, apply only pushes newer than its sequence. Every message is the **whole picture** (ranked
+suggestions, insights, the recently dismissed), so a lost or reordered message is replaced by the next. It is recomputed when a
+trigger fires, when an action is taken, when a suggestion is dismissed or taken back, when a trust trend crosses the forecast bar,
+and on a five-second sweep that ends triggers that have aged out. **Never per reading**: a trigger with no pattern is asked about
+once and costs nothing more. A message is sent only when the set, the order or an occurrence's time changed, so a score drifting
+as a trigger ages sends nothing. New suggestions and anticipated insights go out **immediately**, like alerts.
+
+### The UI
+
+- **Suggested Actions**, ranked. Each card shows what, why, evidence, level, the one-click action and "Not useful". A new
+  arrival is outlined, says **New** in words, and says how long it took ("Arrived 41 ms after the trigger") for a few seconds, and
+  moves nothing. With nothing to suggest it says what it is waiting for.
+- **Automated Insights**: anticipated first, each with a countdown that moves on its own and the working one click away
+  ("A straight line fits 18 samples over 3 minutes with R² 0.97"); then current problems.
+- **Investigations**: the card P14 had no UI for. Each shows the node, the decay window, what the trust engine blames, the alerts,
+  and the precedent. **Confirm**, **Dismiss** and **Relabel** (with a cause picker) call the verdict endpoint; changing a verdict
+  gives back what the earlier one took. **Show decay window** opens the device and points its timeline at the window, a minute
+  either side, with a "Back to live" button.
+- **A compact strip** of the top three on the trust panel, so they are visible from the Part 1 page too.
+
+Status is never colour alone: Anticipated, Now, Open, Resolved and New each have a word and an icon. Nothing on the Part 1 pages
+changes except that strip.
+
+### Measured
+
+`SuggestionBenchmarkTests` (behind the Benchmark trait, like the pattern engine's) and the Docker stack, on the development machine.
+
+| What | Cost |
+| --- | --- |
+| A trigger that has a pattern, recorded, ranked, explained and announced | about 150 to 250 µs |
+| A trigger with no pattern (the common case): asked about once and dropped | about 70 µs |
+| A sweep at the bound of 500 live triggers | about 100 µs |
+| An operator action recorded and the suggestions re-ranked | about 22 µs |
+| "Not useful" and "Take back" | about 43 µs the pair |
+| A forecast pass, 55 nodes with an hour of history each | 1.8 ms |
+| A forecast pass, 55 nodes with a **day** of history each (1.7 million entries held) | 45 ms (810 µs a node) |
+| A forecast pass, 4,800 nodes with ten minutes each (1 million entries) | 50 ms (10.5 µs a node) |
+| Trigger fired to suggestion received in a client (in-memory host, long polling), 40 runs | median 15 ms, p95 16 ms, worst 46 ms |
+| The same, in the Docker stack through nginx, as the page measured it | 11 ms ("Arrived 11 ms after the trigger") |
+
+The forecast pass grows with how much history each node holds, and that is the honest cost of `GetRange` on the `SortedDictionary`
+store: it cannot seek, so it walks from the start of a node's range, which is why a day of history is forty times a minute's. At one
+pass every five seconds the worst figure above is under 1 % of a core. The balanced tree that replaces the store in Part 3 makes the
+same query O(log n + k), and the benchmark is the check.
+
+**The Command Stream stays responsive at the rates Prompt 13 measured**, with both new panels on the page. In the Docker stack, with
+the page open on `/command-stream` and a long-task observer (main-thread tasks over 50 ms) running for 13 seconds:
+
+| Rate | Readings processed a second | Long tasks in 13 s |
+| --- | --- | --- |
+| 100× | 828 | 0 |
+| 150× | 1,241 | 0 |
+
+Getting there needed three fixes, each found by running it. A trigger that fires again moved a suggestion's time, and a hovering
+sensor fires many times a second at a high rate: that is announced at most once a second now. The list of current problems was
+ordered by when each node was last scored, which is every packet, so it reshuffled itself and announced each shuffle: it is ordered
+by when each device first appeared. And queued messages are coalesced: one waiting is enough, because it is built from the state
+when it is sent. At 100× the topic went from about 12 messages a second to about one every three seconds.
+
+### Trade-offs
+
+- **A straight line is an approximation.** Trust under steady failure is curved, and a line fitted early over-projects. Five bars and
+  a flattening check keep most of that out, but a node whose trust drops and then settles is forecast while it is still dropping (about
+  three minutes in the test) and withdrawn when it levels off. A projection is a prompt to look, not a promise; the trust band remains
+  the authority on what is a fault.
+- **Seeded history is a choice, and a labelled one.** It makes the first run show something, at the price of the engine's first
+  suggestions resting on invented evidence. The evidence says so on every card, it is one switch to turn off, and the suggestions
+  appear in the same way if it is.
+- **An accepted suggestion teaches nothing by default.** That is the safe side of a self-fulfilling prophecy, and it means an operator
+  who really does follow the advice every time never makes a pattern stronger by doing so. Raising `AcceptedSuggestionWeight` gives
+  that back, at the price of the loop.
+- **A "similar devices" suggestion picks the first few devices in address order**, not the ones operators actually opened. The engine
+  does not keep per-device counts at the general level, so there is nothing better to rank them by.
+- **The suggestions are in memory**, like everything in Part 2: a restart forgets what was dismissed and what is live, and replays
+  the seeded history.
+
+### Trying it
+
+```bash
+docker compose up --build -d
+# open http://localhost:8080/command-stream
+
+curl http://localhost:5266/api/suggestions        # what the engine suggests now, with its sequence
+curl http://localhost:5266/api/insights           # anticipated first, then current
+curl "http://localhost:5266/api/patterns?mac=B8:27:EB:10:00:32&includeWeak=true"   # Moisture Sensor B's patterns
+
+SMARTX_SEED_HISTORY=false docker compose up -d    # the engine knows only what it has observed
+```
+
+### Tests
+
+Fresh start with seeding on, the brief's example produces a suggestion as soon as Moisture Sensor B crosses 20 % (over HTTP, through
+the hub, to a client); seeded evidence is labelled and counted separately; higher lift and severity rank first and the top K holds;
+a suggestion disappears when its action is taken; "Not useful" lowers the pattern within bounds and is reversible; accepting does
+not raise confidence at the default weight; a steadily falling series produces an insight with the right projected time, a noisy
+flat series does not, a flattening fall does not, and a reversing trend withdraws it; snapshot-then-stream ordering for the topic;
+and component tests for the cards, the one-click calls, the verdict buttons and the cause picker.
+
 ## Feature walkthrough
 
 These steps assume the API and the device simulator are both running, so there is a fleet to look at. Each one also works on an empty API once
@@ -1398,6 +1655,13 @@ Restart the API, or the Docker stack, and the attachments are still there.
 | Hysteresis | [`ReadingTriggerDetector.cs`](src/SmartX.Api/Patterns/ReadingTriggerDetector.cs) | a watch level fires once and is re-armed only past a margin, so a hovering reading is one trigger |
 | Recursion over the zone tree, reused | [`DeviceDirectory.cs`](src/SmartX.Api/Patterns/DeviceDirectory.cs) | walks up `ParentId` to the depth the general level groups at, so "the same zone" is the Part 1 hierarchy |
 | The escalation seam, used | [`InvestigationService.cs`](src/SmartX.Api/Patterns/InvestigationService.cs) | subscribes to `FaultEntered` and `FaultCleared`; a verdict adjusts a node's sensitivity through `ITrustEngine.AdjustSensitivity`, bounded by a floor |
+| Priority queue, for ranking | [`SuggestionService.cs`](src/SmartX.Api/Patterns/SuggestionService.cs) | `PriorityQueue<Candidate, (double Score, string Id)>` capped at K: the same structure as the critical lane, used to keep the best K and not to hand out the most urgent |
+| HashSet of what is done | [`SuggestionService.cs`](src/SmartX.Api/Patterns/SuggestionService.cs) | `LiveTrigger.Taken`, a `HashSet<ActionKey>` of the actions taken since a trigger fired, so "already done" is one lookup |
+| Backdated events, decay from event time | [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `DecayedCount.Add` fades the amount forward when it is older than the count; `Replay` pairs a history with itself in a window of its own |
+| Seeded, labelled history | [`SeededHistory.cs`](src/SmartX.Api/Patterns/SeededHistory.cs) | a pure function of the clock and the options; every event is `EventSource.Seeded` |
+| Least squares and R² | [`TrustForecaster.cs`](src/SmartX.Api/Patterns/TrustForecaster.cs) | the line, the fit, the bars a forecast has to clear, and the check that a fall is not flattening |
+| The sorted history store doing analysis | [`InsightService.cs`](src/SmartX.Api/Patterns/InsightService.cs) | `GetRange` for each node's trust samples, which `TrustSampler` stores as `HistoryKind.TrustSample` |
+| Not training on its own advice | [`SuggestionService.cs`](src/SmartX.Api/Patterns/SuggestionService.cs), [`PatternEngine.cs`](src/SmartX.Api/Patterns/PatternEngine.cs) | `Accept` and `TakeAcceptance` mark an action `FromSuggestion`; the engine weights it by `AcceptedSuggestionWeight`, zero |
 | Dictionary and HashSet | [`TrustEngine.cs`](src/SmartX.Api/Trust/TrustEngine.cs) | `_nodes`, keyed by MAC for O(1) lookup per packet, and `_degraded`, where each failing node appears once |
 | The ingestion pipeline, stage by stage | [`TelemetryEndpoints.cs`](src/SmartX.Api/Endpoints/TelemetryEndpoints.cs) | `IngestBatchAsync`, with each stage numbered in comments, and `TryCreatePacket` |
 | Polymorphic JSON | [`ITelemetryPacket.cs`](src/SmartX.Shared/Packets/ITelemetryPacket.cs) | `[JsonDerivedType]` over the packet types |
@@ -1474,6 +1738,8 @@ setting.
 | `Patterns:RearmMargin` | `0.05` | How far back past a level a reading must come before it can fire again (hysteresis). |
 | `Patterns:GeneralZoneDepth` | `1` | The depth in the zone tree that devices are grouped under at the general level. |
 
+| `Patterns:AcceptedSuggestionWeight` | `0` | What an action counts for when the operator did it by accepting a suggestion, against 1 for one of their own. Zero stops the engine training on its own advice. |
+
 ### API: `Investigations`
 
 | Setting | Default | What it does |
@@ -1482,6 +1748,52 @@ setting.
 | `Investigations:MaxReadings` | `60` | The most readings kept in one, the latest in its window. |
 | `Investigations:DismissFactor` | `0.85` | What a node's weight for a failure is multiplied by each time a fault caused by it is dismissed. |
 | `Investigations:SensitivityFloor` | `0.5` | The lowest the scale can reach. Detection can be dulled and never switched off. |
+
+### API: `Suggestions`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Suggestions:MaxSuggestions` | `5` | How many are kept: the top K of the ranking. |
+| `Suggestions:LiftWeight` / `ConfidenceWeight` / `SeverityWeight` / `RecencyWeight` | `0.35` / `0.25` / `0.25` / `0.15` | The weights of the ranking formula. Normalised, so only their balance matters. |
+| `Suggestions:LiftCap` | `10` | The lift at which the lift term is full. |
+| `Suggestions:Severity:ThresholdCrossing` / `AlertRaised` / `Degrading` / `CriticalReading` / `Fault` | `0.4` / `0.6` / `0.6` / `0.9` / `1.0` | How severe each kind of trigger is, from 0 to 1. |
+| `Suggestions:MaxLiveTriggers` | `500` | The most live triggers held. Bounds the cost of a recomputation. |
+| `Suggestions:MaxDevicesPerGeneralSuggestion` | `3` | How many devices a "similar devices" pattern is turned into. |
+| `Suggestions:SweepInterval` | `00:00:05` | How often live triggers are checked for having aged out. |
+| `Suggestions:NotUsefulFactor` | `0.85` | What a pattern's weight is multiplied by each time "Not useful" is pressed. |
+| `Suggestions:NotUsefulFloor` | `0.5` | The lowest the weight can go. |
+| `Suggestions:MaxDismissedRetained` | `20` | How many dismissed suggestions are kept so the mark can be taken back. |
+| `Suggestions:AcceptanceExpiry` | `00:00:30` | How long an accepted suggestion waits for the action it announced. |
+
+### API: `Forecast`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Forecast:Enabled` | `true` | Whether trust is sampled and forecast at all. |
+| `Forecast:Horizon` | `00:15:00` | How far ahead a projected fault is worth announcing. |
+| `Forecast:Lookback` | `00:04:00` | How much recent history the line is fitted to. |
+| `Forecast:MinSamples` | `8` | The fewest samples a line is fitted to. |
+| `Forecast:MinRSquared` | `0.8` | How much of the samples' movement the line must explain before it is believed. |
+| `Forecast:MinFallPerMinute` | `0.005` | How steep the fall must be, in trust per minute. |
+| `Forecast:MinRecentFallRatio` | `0.5` | How much of the whole window's rate the last third must still show, for the fall to count as continuing. |
+| `Forecast:SampleInterval` | `00:00:10` | How often a node's trust score is stored. |
+| `Forecast:Interval` | `00:00:05` | How often the forecast runs over every node. |
+| `Forecast:EtaChange` | `00:00:45` | How far a projected time can move before it is announced again. |
+| `Forecast:CurrentHold` | `00:00:30` | How long a problem that is only an alert stays listed after it clears. |
+
+### API: `SeededHistory`
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `SeededHistory:Enabled` | `false` (`true` in Docker) | Whether to replay the synthetic operator history at start-up. |
+| `SeededHistory:Days` | `5` | How far back it reaches. |
+| `SeededHistory:RandomSeed` | `7312` | The seed, so the same configuration is always the same history. |
+| `SeededHistory:BriefTriggers` / `BriefResponses` | `8` / `7` | How often Moisture Sensor B dropped, and how often Pump A was opened and turned on after it. |
+| `SeededHistory:OtherHabitTriggers` | `6` | How often each of the other two habits happened. |
+| `SeededHistory:PumpARounds` / `PumpAScheduledRuns` | `48` / `40` | Pump A opened on rounds and turned on on a schedule, so lift is a ratio and not infinity. |
+| `SeededHistory:RandomOpens` / `UnansweredTriggers` | `80` / `30` | Background noise. |
+| `SeededHistory:ConstantOpenEvery` | `00:04:00` | How often the one device that is always open is opened, for a day and a half. |
+| `SeededHistory:WaitForDevices` | `00:03:00` | How long to wait for the devices the habits are about to register before replaying what can be. |
 
 ### API: `Realtime`
 
@@ -1525,7 +1837,7 @@ Bound by `SmartX.DeviceSimulator`, from `src/SmartX.DeviceSimulator/appsettings.
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `Simulator:ApiBaseUrl` | `http://localhost:5266` (`http://api:8080` in Docker) | Where the API is. |
-| `Simulator:DeviceCount` | `48` | How many of the demo devices to run, from the top of the list. |
+| `Simulator:DeviceCount` | `55` | How many of the demo devices to run, from the top of the list. |
 | `Simulator:Mix` | `Demo` | `Demo` gives each device its own scenario, for a spread of bands. `Nominal` starts every device healthy. |
 | `Simulator:Scenarios:<mac>` | none | Starts one device in a named scenario, on top of the mix. A MAC contains colons, which can't be in an environment variable name, so write it with underscores: `Simulator__Scenarios__B8_27_EB_10_00_01=Critical`. |
 | `Simulator:BackfillDuration` | `00:10:00` | How much history is posted on first start. `00:00:00` turns backfill off. |
@@ -1590,7 +1902,7 @@ These go in `.env`:
 | `SMARTX_ATTACHMENT_KEY` | the development key | Becomes `Attachments__EncryptionKey` for the API. Compose refuses to start without it. |
 | `SMARTX_ZONE_HIERARCHY` | `Demo` | Becomes `Zones__Hierarchy` for the API. |
 | `SMARTX_QUEUE_DEPTH` | `10000` | Becomes `Ingestion__MaxQueueDepth`. |
-| `SMARTX_DEVICE_COUNT` | `48` | Becomes `Simulator__DeviceCount`. |
+| `SMARTX_DEVICE_COUNT` | `55` | Becomes `Simulator__DeviceCount`. |
 | `SMARTX_SCENARIO_MIX` | `Demo` | Becomes `Simulator__Mix`: `Demo` or `Nominal`. |
 | `SMARTX_BACKFILL` | `00:10:00` | Becomes `Simulator__BackfillDuration`. |
 | `SMARTX_RATE` | `1` | Becomes `Simulator__ReportingRateMultiplier`: how many times faster than normal the fleet reports. |
@@ -1598,6 +1910,7 @@ These go in `.env`:
 | `SMARTX_PROCESS_DELAY` | `00:00:00` | Becomes `Ingestion__SimulatedGatewayCost`: the simulated per-reading cost of a constrained gateway; see [the Command Stream page](#seeing-a-critical-reading-overtake-the-standard-queue). |
 | `SMARTX_PATTERN_WINDOW` | `00:10:00` | Becomes `Patterns__Window`. A short one, such as `00:01:00`, lets the pattern example be shown in minutes. |
 | `SMARTX_PATTERN_HALFLIFE` | `7.00:00:00` | Becomes `Patterns__HalfLife`. |
+| `SMARTX_SEED_HISTORY` | `true` | Becomes `SeededHistory__Enabled`. `false` leaves the suggestion engine knowing only what it has observed. |
 | `SMARTX_CLIENT_PORT` | `8080` | Host port for the client. Open this one in the browser. |
 | `SMARTX_API_PORT` | `5266` | Host port for the API, for `curl` and the scenario endpoint. |
 
@@ -1704,7 +2017,12 @@ This demonstrates the *encryption mechanism*, not production key management.
 | `GET` | `/api/alerts/stats` | Raised, suppressed and cleared totals, and how many are active and acknowledged |
 | `GET` | `/api/devices/search` | Devices matching every filter given: `?q=`, `?category=`, `?actuatorKind=`, `?zone=` (includes every sub-zone), `?band=`, `?alert=`. `404` for an unknown zone, `400` for an unknown value |
 | `GET` | `/api/activity` | What operators did, searches and commands, with the alerts active at the time. `?from=`, `?to=` |
-| `POST` | `/api/activity/selection` | `{ "macAddress" }`: the operator opened a device. `204`, or `404` for a device that is not registered |
+| `POST` | `/api/activity/selection` | `{ "macAddress", "suggestionId"? }`: the operator opened a device, and the suggestion they followed if they did. `204`, or `404` for a device that is not registered |
+| `GET` | `/api/suggestions` | The ranked suggestions, the insights and the recently dismissed, with the sequence they are as of. The same as `/api/realtime/suggestions` |
+| `POST` | `/api/suggestions/{id}/dismiss` | "Not useful": the suggestion goes and its pattern's weight is lowered within a floor. Answers with the state afterwards. `404` if it is not held |
+| `DELETE` | `/api/suggestions/{id}/dismiss` | Takes it back: the weight is restored exactly. `404` |
+| `GET` | `/api/insights` | Anticipated faults, soonest first, then what is wrong now, most severe first |
+| `GET` | `/api/realtime/suggestions` | The suggestions topic's snapshot, as of a sequence number |
 | `GET` | `/api/patterns` | Learned associations, best first, with support, confidence, lift and the level. `?trigger=`, `?mac=`, `?level=Specific|General`, `?includeWeak=true`, `?limit=`. The thresholds in force come back with them |
 | `GET` | `/api/patterns/for/{mac}` | What tends to follow each kind of trigger seen on this device, from the device's own history where it has enough and from its kind in its zone where not, saying which. `404` |
 | `GET` | `/api/investigations` | Investigations, newest first. `?status=Open|Resolved`, `?limit=` |

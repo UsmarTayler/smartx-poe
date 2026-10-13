@@ -1,0 +1,78 @@
+@implements IAsyncDisposable
+@inject ISuggestionFeed Feed
+@inject SuggestionActions Actions
+@inject CommandStreamOptions Options
+@inject TimeProvider Time
+
+@* A compact strip of the best suggestions on the trust panel, so they are visible from the first page too. The same suggestions and
+   the same click as the Command Stream's panel, in a smaller space: what and why, and the one action. Nothing here is a second
+   source of truth; the feed is the one the Command Stream uses. *@
+@if (State.IsLoaded && State.Suggestions.Count > 0)
+{
+    <MudPaper Outlined="true" Class="pa-3 mb-4" role="region" aria-label="Suggested Actions">
+        <div class="smartx-stream__header">
+            <MudText Typo="Typo.subtitle1" HtmlTag="h2">Suggested Actions</MudText>
+            <a class="smartx-insight__link" href="command-stream">See evidence and more on the Command Stream</a>
+        </div>
+
+        @if (_message is not null)
+        {
+            <MudAlert Severity="@(_failed ? Severity.Warning : Severity.Success)" Dense="true" Variant="Variant.Outlined" Class="mt-2" role="status">@_message</MudAlert>
+        }
+
+        <ol class="smartx-suggestions smartx-suggestions--strip" aria-label="Top suggested actions" aria-live="polite">
+            @foreach (var suggestion in State.Suggestions.Take(Shown))
+            {
+                <SuggestionCard @key="suggestion.Id"
+                                Suggestion="suggestion"
+                                Compact="true"
+                                IsNew="SuggestionPresentation.IsNew(State.Arrivals, suggestion.Id, Time.GetUtcNow(), Options.ArrivalHighlight)"
+                                Busy="_busy.Contains(suggestion.Id)"
+                                OnAccept="AcceptAsync" />
+            }
+        </ol>
+    </MudPaper>
+}
+
+@code {
+    private const int Shown = 3;
+
+    private readonly HashSet<string> _busy = new(StringComparer.Ordinal);
+    private string? _message;
+    private bool _failed;
+
+    private SuggestionFeedState State => Feed.Current;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Feed.Updated += OnFeedChanged;
+
+        await Feed.StartAsync();
+    }
+
+    private void OnFeedChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private async Task AcceptAsync(Suggestion suggestion)
+    {
+        _busy.Add(suggestion.Id);
+
+        try
+        {
+            var outcome = await Actions.AcceptAsync(suggestion);
+
+            _message = outcome.Message;
+            _failed = !outcome.Succeeded;
+        }
+        finally
+        {
+            _busy.Remove(suggestion.Id);
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Feed.Updated -= OnFeedChanged;
+
+        await Feed.StopAsync();
+    }
+}

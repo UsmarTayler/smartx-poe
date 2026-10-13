@@ -18,7 +18,9 @@ public interface IOperatorApi
     Task<ApiResult<SensorTimeline>> GetTimelineAsync(
         string macAddress, DateTimeOffset from, DateTimeOffset to, int maxPoints, CancellationToken cancellationToken = default);
 
-    Task<ApiResult<Command>> IssueCommandAsync(string macAddress, CommandAction action, double? level, CancellationToken cancellationToken = default);
+    /// <param name="suggestionId">The suggestion the operator accepted by sending this, when they did.</param>
+    Task<ApiResult<Command>> IssueCommandAsync(
+        string macAddress, CommandAction action, double? level, string? suggestionId = null, CancellationToken cancellationToken = default);
 
     Task<ApiResult<ZonePreview>> PreviewZoneAsync(string zoneId, CommandAction action, double? level, CancellationToken cancellationToken = default);
 
@@ -38,7 +40,21 @@ public interface IOperatorApi
     Task<ApiResult<IReadOnlyList<ActivityEntry>>> GetActivityAsync(CancellationToken cancellationToken = default);
 
     /// <summary>Reports that the operator opened a device. Null on success, otherwise why it failed.</summary>
-    Task<ApiProblem?> RecordSelectionAsync(string macAddress, CancellationToken cancellationToken = default);
+    /// <param name="macAddress">The device.</param>
+    /// <param name="suggestionId">The suggestion the operator accepted by opening it, when they did.</param>
+    Task<ApiProblem?> RecordSelectionAsync(string macAddress, string? suggestionId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Marks a suggestion "Not useful".</summary>
+    Task<ApiResult<SuggestionsUpdate>> DismissSuggestionAsync(string id, CancellationToken cancellationToken = default);
+
+    /// <summary>Takes a "Not useful" back.</summary>
+    Task<ApiResult<SuggestionsUpdate>> RestoreSuggestionAsync(string id, CancellationToken cancellationToken = default);
+
+    /// <summary>The investigations that are still open.</summary>
+    Task<ApiResult<IReadOnlyList<InvestigationDetails>>> GetOpenInvestigationsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Gives a verdict on an investigation.</summary>
+    Task<ApiResult<InvestigationDetails>> GiveVerdictAsync(Guid id, VerdictRequest request, CancellationToken cancellationToken = default);
 }
 
 /// <summary><see cref="IOperatorApi"/> over <see cref="SmartXApiClient"/>.</summary>
@@ -51,8 +67,9 @@ public sealed class OperatorApi(SmartXApiClient api, ApiConnection connection) :
         string macAddress, DateTimeOffset from, DateTimeOffset to, int maxPoints, CancellationToken cancellationToken = default) =>
         Reported(api.GetTimelineAsync(macAddress, from, to, maxPoints, cancellationToken));
 
-    public Task<ApiResult<Command>> IssueCommandAsync(string macAddress, CommandAction action, double? level, CancellationToken cancellationToken = default) =>
-        Reported(api.IssueCommandAsync(new IssueCommandRequest(macAddress, action, level), cancellationToken));
+    public Task<ApiResult<Command>> IssueCommandAsync(
+        string macAddress, CommandAction action, double? level, string? suggestionId = null, CancellationToken cancellationToken = default) =>
+        Reported(api.IssueCommandAsync(new IssueCommandRequest(macAddress, action, level, suggestionId), cancellationToken));
 
     public Task<ApiResult<ZonePreview>> PreviewZoneAsync(string zoneId, CommandAction action, double? level, CancellationToken cancellationToken = default) =>
         Reported(api.PreviewZoneCommandAsync(zoneId, action, level, cancellationToken));
@@ -79,9 +96,21 @@ public sealed class OperatorApi(SmartXApiClient api, ApiConnection connection) :
     public Task<ApiResult<IReadOnlyList<ActivityEntry>>> GetActivityAsync(CancellationToken cancellationToken = default) =>
         Reported(api.GetActivityAsync(cancellationToken: cancellationToken));
 
-    public async Task<ApiProblem?> RecordSelectionAsync(string macAddress, CancellationToken cancellationToken = default)
+    public Task<ApiResult<SuggestionsUpdate>> DismissSuggestionAsync(string id, CancellationToken cancellationToken = default) =>
+        Reported(api.DismissSuggestionAsync(id, cancellationToken));
+
+    public Task<ApiResult<SuggestionsUpdate>> RestoreSuggestionAsync(string id, CancellationToken cancellationToken = default) =>
+        Reported(api.RestoreSuggestionAsync(id, cancellationToken));
+
+    public Task<ApiResult<IReadOnlyList<InvestigationDetails>>> GetOpenInvestigationsAsync(CancellationToken cancellationToken = default) =>
+        Reported(api.GetOpenInvestigationsAsync(cancellationToken));
+
+    public Task<ApiResult<InvestigationDetails>> GiveVerdictAsync(Guid id, VerdictRequest request, CancellationToken cancellationToken = default) =>
+        Reported(api.GiveVerdictAsync(id, request, cancellationToken));
+
+    public async Task<ApiProblem?> RecordSelectionAsync(string macAddress, string? suggestionId = null, CancellationToken cancellationToken = default)
     {
-        var problem = await api.RecordSelectionAsync(macAddress, cancellationToken);
+        var problem = await api.RecordSelectionAsync(macAddress, suggestionId, cancellationToken);
 
         connection.Report(problem is not { IsUnreachable: true });
 

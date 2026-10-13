@@ -260,6 +260,38 @@ public sealed class FakeSnapshots : IRealtimeSnapshots
 
     public Func<StreamSnapshot> Stream { get; set; } = () => new StreamSnapshot(0, []);
 
+    public Func<SuggestionsUpdate> Suggestions { get; set; } =
+        () => new SuggestionsUpdate(0, [], [], [], ClientRealtimeKit.Start);
+
+    private TaskCompletionSource? _suggestionGate;
+    private int _suggestionCalls;
+
+    public int SuggestionCalls => Volatile.Read(ref _suggestionCalls);
+
+    /// <summary>The next suggestions snapshot's response is held until the returned action is called.</summary>
+    public Action HoldNextSuggestions()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _suggestionGate = gate;
+
+        return () => gate.TrySetResult();
+    }
+
+    public async Task<ApiResult<SuggestionsUpdate>> GetSuggestionsAsync(CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _suggestionCalls);
+
+        var content = Suggestions();
+        var gate = Interlocked.Exchange(ref _suggestionGate, null);
+
+        if (gate is not null)
+        {
+            await gate.Task.WaitAsync(cancellationToken);
+        }
+
+        return ApiResult<SuggestionsUpdate>.Success(content);
+    }
+
     public volatile bool FailTrust;
     public volatile bool FailAlerts;
 
@@ -437,6 +469,8 @@ public sealed class ClientRig : IAsyncDisposable
 
     public PipelineFeed Pipeline { get; private set; } = null!;
 
+    public SuggestionFeed Suggestions { get; private set; } = null!;
+
     public PollingTrustFeed Polling { get; private set; } = null!;
 
     /// <summary>A rig whose hub is reachable unless told otherwise.</summary>
@@ -461,6 +495,7 @@ public sealed class ClientRig : IAsyncDisposable
         rig.Commands = new CommandFeed(rig.Connection, rig.Snapshots, TimeProvider.System, rig.Options);
         rig.Stream = new TelemetryStream(rig.Connection, rig.Snapshots, TimeProvider.System, rig.Options);
         rig.Pipeline = new PipelineFeed(rig.Connection, rig.Snapshots, TimeProvider.System, rig.Options);
+        rig.Suggestions = new SuggestionFeed(rig.Connection, rig.Snapshots, TimeProvider.System, rig.Options);
 
         return rig;
     }
@@ -493,6 +528,7 @@ public sealed class ClientRig : IAsyncDisposable
         await Commands.DisposeAsync();
         await Stream.DisposeAsync();
         await Pipeline.DisposeAsync();
+        await Suggestions.DisposeAsync();
         await Polling.DisposeAsync();
         await Connection.DisposeAsync();
     }

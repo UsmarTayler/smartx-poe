@@ -151,7 +151,7 @@ internal sealed class DeviceFleet(
             time.GetUtcNow() - started);
     }
 
-    private async Task<int> BackfillDeviceAsync(SimulatedDevice device, DateTimeOffset now, CancellationToken cancellationToken)
+    internal async Task<int> BackfillDeviceAsync(SimulatedDevice device, DateTimeOffset now, CancellationToken cancellationToken)
     {
         DateTimeOffset timestamp;
         DateTimeOffset onset;
@@ -167,7 +167,10 @@ internal sealed class DeviceFleet(
 
         while (timestamp <= now && !cancellationToken.IsCancellationRequested)
         {
-            var scenario = timestamp < onset ? SimulationScenario.Nominal : device.Scenario;
+            // A probe that is fouling is replayed as healthy. Its fouling is a cycle that takes minutes to play out, and played at
+            // the speed the backfill runs it would be over before the fleet had started: the history would say the probe had already
+            // failed, and there would be no fall left to watch.
+            var scenario = timestamp < onset || device.Scenario == SimulationScenario.Fouling ? SimulationScenario.Nominal : device.Scenario;
 
             if (scenario == SimulationScenario.Disconnect)
             {

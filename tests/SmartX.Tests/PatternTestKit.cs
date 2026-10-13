@@ -27,6 +27,13 @@ internal sealed class FakeDirectory : IDeviceDirectory
     }
 
     public bool TryDescribe(string macAddress, out DeviceProfile profile) => _profiles.TryGetValue(macAddress, out profile!);
+
+    public IReadOnlyList<DeviceProfile> Similar(string deviceClass, string generalZoneId) =>
+    [
+        .. _profiles.Values
+            .Where(other => other.Class == deviceClass && other.GeneralZoneId == generalZoneId)
+            .OrderBy(other => other.MacAddress, StringComparer.Ordinal),
+    ];
 }
 
 /// <summary>An engine that records what it is told, for tests of the things that feed it.</summary>
@@ -40,9 +47,38 @@ internal sealed class RecordingEngine : IPatternEngine
 
     public int TriggersInWindow => Triggers.Count;
 
-    public void RecordTrigger(TriggerEvent trigger) => Triggers.Add(trigger);
+    public long LearnedVersion => Actions.Count;
 
-    public void RecordAction(OperatorAction action) => Actions.Add(action);
+    public void RecordTrigger(TriggerEvent trigger)
+    {
+        Triggers.Add(trigger);
+        TriggerRecorded?.Invoke(trigger);
+    }
+
+    public void RecordAction(OperatorAction action)
+    {
+        Actions.Add(action);
+        ActionRecorded?.Invoke(action);
+    }
+
+    public void Replay(IEnumerable<HistoricEvent> history)
+    {
+        foreach (var item in history)
+        {
+            if (item.Trigger is { } trigger)
+            {
+                Triggers.Add(trigger);
+            }
+            else if (item.Action is { } action)
+            {
+                Actions.Add(action);
+            }
+        }
+    }
+
+    public event Action<TriggerEvent>? TriggerRecorded;
+
+    public event Action<OperatorAction>? ActionRecorded;
 
     public IReadOnlyList<PatternAssociation> Associations(PatternQuery query, DateTimeOffset now) => [];
 

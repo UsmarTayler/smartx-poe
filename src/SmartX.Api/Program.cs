@@ -144,10 +144,42 @@ builder.Services
 builder.Services.AddSingleton<DeviceDirectory>();
 builder.Services.AddSingleton<IDeviceDirectory>(services => services.GetRequiredService<DeviceDirectory>());
 builder.Services.AddSingleton<IPatternEngine, PatternEngine>();
+
+// The history replayed at start-up so the engine is not empty on a first run. Off unless asked for; the Docker stack asks.
+builder.Services
+    .AddOptions<SeededHistoryOptions>()
+    .Bind(builder.Configuration.GetSection(SeededHistoryOptions.SectionName))
+    .Validate(options => !SeededHistoryValidation.Problems(options).Any(), "The SeededHistory section is not valid.")
+    .ValidateOnStart();
+builder.Services.AddSingleton<PatternSeeder>();
+builder.Services.AddHostedService(services => services.GetRequiredService<PatternSeeder>());
+
 builder.Services.AddSingleton<ReadingTriggerDetector>();
 builder.Services.AddHostedService<PatternEventBridge>();
 builder.Services.AddSingleton<InvestigationService>();
 builder.Services.AddHostedService(services => services.GetRequiredService<InvestigationService>());
+
+// Suggestions: the delivery half of the engine. It ranks what the patterns say to do about the triggers that are live now, and
+// withdraws it when it is done. Insights are the devices to look at before anyone searches: what is wrong now and what is
+// projected to be, from a line fitted to the trust samples the sampler stores in the history. None of it references SignalR.
+builder.Services
+    .AddOptions<SuggestionOptions>()
+    .Bind(builder.Configuration.GetSection(SuggestionOptions.SectionName))
+    .Validate(options => !SuggestionOptionsValidation.Problems(options).Any(), "The Suggestions section is not valid.")
+    .ValidateOnStart();
+builder.Services
+    .AddOptions<ForecastOptions>()
+    .Bind(builder.Configuration.GetSection(ForecastOptions.SectionName))
+    .Validate(options => !ForecastOptionsValidation.Problems(options).Any(), "The Forecast section is not valid.")
+    .ValidateOnStart();
+
+builder.Services.AddSingleton<SuggestionService>();
+builder.Services.AddSingleton<ISuggestionService>(services => services.GetRequiredService<SuggestionService>());
+builder.Services.AddHostedService(services => services.GetRequiredService<SuggestionService>());
+builder.Services.AddSingleton<TrustSampler>();
+builder.Services.AddHostedService(services => services.GetRequiredService<TrustSampler>());
+builder.Services.AddSingleton<InsightService>();
+builder.Services.AddHostedService(services => services.GetRequiredService<InsightService>());
 
 // Real-time push. The domain raises events and knows nothing of SignalR; the broadcaster is the one subscriber
 // that forwards them to the hub. See RealtimeBroadcaster for what is batched, coalesced and immediate.
@@ -222,6 +254,7 @@ api.MapHistoryEndpoints();
 api.MapAlertEndpoints();
 api.MapSearchEndpoints();
 api.MapPatternEndpoints();
+api.MapSuggestionEndpoints();
 api.MapRealtimeEndpoints();
 
 // The hub is mapped on the app and not on the /api group: it is a different kind of endpoint, with its own path,

@@ -39,6 +39,7 @@ internal sealed class PatternEventBridge(
     IPatternEngine patterns,
     DeviceDirectory directory,
     IZoneStore zones,
+    ISuggestionService suggestions,
     TimeProvider time) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -99,7 +100,13 @@ internal sealed class PatternEventBridge(
     {
         if (change == CommandEvent.Issued && !command.IsRestore)
         {
-            patterns.RecordAction(new OperatorAction(OperatorActionKind.Command, command.MacAddress, command.Action.ToString(), time.GetUtcNow()));
+            var action = command.Action.ToString();
+
+            // If the operator sent this by accepting a suggestion, say so: the engine counts that at a reduced weight, because an
+            // action taken on the system's advice is not evidence of a habit.
+            var accepted = suggestions.TakeAcceptance(OperatorActionKind.Command, command.MacAddress, action);
+
+            patterns.RecordAction(new OperatorAction(OperatorActionKind.Command, command.MacAddress, action, time.GetUtcNow(), FromSuggestion: accepted));
         }
     }
 }

@@ -42,8 +42,8 @@ internal sealed record HistoryEntry
     /// <summary>The key this entry is stored under.</summary>
     public HistoryKey Key => new(Timestamp, Sequence);
 
-    /// <summary>True for everything except a reading.</summary>
-    public bool IsEvent => Kind != HistoryKind.Reading;
+    /// <summary>True for everything except a reading and a trust sample, which are measurements and not things that happened.</summary>
+    public bool IsEvent => Kind is not (HistoryKind.Reading or HistoryKind.TrustSample);
 
     /// <summary>A reading as it was accepted.</summary>
     public static HistoryEntry FromReading(long sequence, ITelemetryPacket packet)
@@ -65,6 +65,16 @@ internal sealed record HistoryEntry
         };
     }
 
+    /// <summary>A node's trust score at a moment.</summary>
+    public static HistoryEntry FromTrustSample(long sequence, DateTimeOffset timestamp, string macAddress, double score) => new()
+    {
+        Sequence = sequence,
+        Timestamp = timestamp,
+        MacAddress = macAddress,
+        Kind = HistoryKind.TrustSample,
+        Value = score,
+    };
+
     /// <summary>An event of any non-reading kind.</summary>
     public static HistoryEntry FromEvent(
         long sequence,
@@ -73,9 +83,9 @@ internal sealed record HistoryEntry
         HistoryKind kind,
         HistoryEventDetails details)
     {
-        if (kind == HistoryKind.Reading)
+        if (kind is HistoryKind.Reading or HistoryKind.TrustSample)
         {
-            throw new ArgumentException("A reading is not an event. Use FromReading.", nameof(kind));
+            throw new ArgumentException("A reading or a trust sample is not an event. Use FromReading or FromTrustSample.", nameof(kind));
         }
 
         return new HistoryEntry

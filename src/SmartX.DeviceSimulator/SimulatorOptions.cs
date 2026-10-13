@@ -27,7 +27,7 @@ public sealed class SimulatorOptions
 
     /// <summary>How many of the demo devices to run, from the top of the fleet list.</summary>
     /// <remarks>Lower it to watch a handful of devices, or leave it to run the whole forty.</remarks>
-    public int DeviceCount { get; set; } = 48;
+    public int DeviceCount { get; set; } = 55;
 
     /// <summary>How much history to post on first start, so the dashboard is not empty.</summary>
     /// <remarks>

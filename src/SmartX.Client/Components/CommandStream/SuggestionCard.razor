@@ -1,0 +1,89 @@
+@* One suggested action: what to do, why it is being suggested, what the pattern rests on, where it came from, and one click to do
+   it. "Not useful" lowers the pattern's weight, within a floor, and can be taken back. A suggestion that has just arrived is
+   outlined and says "New" in words, so the highlight is never colour alone, and it does not move anything on the page. *@
+<li class="@CssClass" aria-label="@($"Suggested action: {Suggestion.What}")">
+    <div class="smartx-suggestion__head">
+        <MudIcon Icon="@Icons.Material.Filled.Lightbulb" Size="Size.Small" aria-hidden="true" />
+        <strong class="smartx-suggestion__what">@Suggestion.What</strong>
+
+        @if (IsNew)
+        {
+            <span class="smartx-suggestion__new">
+                <MudIcon Icon="@Icons.Material.Filled.NewReleases" Size="Size.Small" aria-hidden="true" />
+                <span>New</span>
+            </span>
+        }
+
+        @if (Suggestion.Weight < 1)
+        {
+            <span class="smartx-suggestion__weight" title="Marked not useful before, so this pattern ranks lower than it otherwise would.">
+                weight @Suggestion.Weight.ToString("P0")
+            </span>
+        }
+    </div>
+
+    <p class="smartx-suggestion__why"><span class="mud-text-secondary">Why</span> @Suggestion.Why at @ReadingFormatter.Time(Suggestion.TriggeredAt).</p>
+
+    <p class="smartx-suggestion__evidence"><span class="mud-text-secondary">Evidence</span> @Suggestion.Evidence.Summary</p>
+
+    <p class="smartx-suggestion__level">
+        <MudIcon Icon="@LevelIcon" Size="Size.Small" aria-hidden="true" />
+        <span class="mud-text-secondary">@Suggestion.LevelNote</span>
+    </p>
+
+    @if (Latency is { } latency)
+    {
+        <p class="smartx-suggestion__latency mud-text-secondary">@latency</p>
+    }
+
+    <div class="smartx-suggestion__actions">
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Disabled="Busy"
+                   StartIcon="@(Suggestion.Action.Kind == SuggestedActionKind.Command ? Icons.Material.Filled.PlayArrow : Icons.Material.Filled.OpenInNew)"
+                   OnClick="() => OnAccept.InvokeAsync(Suggestion)"
+                   aria-label="@($"{Suggestion.Action.Label}, suggested because {Suggestion.Why}")">
+            @Suggestion.Action.Label
+        </MudButton>
+
+        @if (!Compact)
+        {
+            <MudButton Variant="Variant.Text" Size="Size.Small" Disabled="Busy" StartIcon="@Icons.Material.Filled.ThumbDownOffAlt"
+                       OnClick="() => OnNotUseful.InvokeAsync(Suggestion)"
+                       aria-label="@($"Not useful: {Suggestion.What}")">
+                Not useful
+            </MudButton>
+        }
+    </div>
+</li>
+
+@code {
+    [Parameter, EditorRequired]
+    public Suggestion Suggestion { get; set; } = default!;
+
+    /// <summary>When this suggestion arrived by a push, if it did. Highlighted while recent.</summary>
+    [Parameter]
+    public DateTimeOffset? ArrivedAt { get; set; }
+
+    /// <summary>Whether to highlight it as new.</summary>
+    [Parameter]
+    public bool IsNew { get; set; }
+
+    /// <summary>Whether something is being done to it, so it cannot be clicked twice.</summary>
+    [Parameter]
+    public bool Busy { get; set; }
+
+    /// <summary>The compact form for the trust page: what and why, and the one click.</summary>
+    [Parameter]
+    public bool Compact { get; set; }
+
+    [Parameter]
+    public EventCallback<Suggestion> OnAccept { get; set; }
+
+    [Parameter]
+    public EventCallback<Suggestion> OnNotUseful { get; set; }
+
+    private string CssClass => IsNew ? "smartx-suggestion smartx-suggestion--new" : "smartx-suggestion";
+
+    private string LevelIcon => Suggestion.Level == PatternLevel.Specific ? Icons.Material.Filled.DeviceHub : Icons.Material.Filled.Hub;
+
+    private string? Latency => IsNew && ArrivedAt is { } at ? SuggestionPresentation.Latency(Suggestion, at) : null;
+}

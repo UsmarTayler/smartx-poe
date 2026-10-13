@@ -18,6 +18,8 @@
 
 <PillarCards />
 
+<SuggestionStrip />
+
 @if (!Snapshot.IsLoaded && Snapshot.Problem is { } problem)
 {
     <ApiErrorState Problem="problem" OnRetry="RefreshAsync" />

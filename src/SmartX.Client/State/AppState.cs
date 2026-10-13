@@ -18,6 +18,13 @@ public enum TimelineRange
     TwentyFourHours
 }
 
+/// <summary>A stretch of time to show a device's timeline over, instead of the last few minutes or hours.</summary>
+/// <param name="MacAddress">The device it is for.</param>
+/// <param name="From">The start.</param>
+/// <param name="To">The end.</param>
+/// <param name="Label">Why it is being shown: "the decay window of the investigation".</param>
+public sealed record TimelineFocus(string MacAddress, DateTimeOffset From, DateTimeOffset To, string Label);
+
 /// <summary>Facts about a <see cref="TimelineRange"/>.</summary>
 public static class TimelineRanges
 {
@@ -93,6 +100,9 @@ public sealed class AppState
     /// <summary>How far back the timeline chart looks.</summary>
     public TimelineRange TimelineRange { get; private set; } = TimelineRange.OneHour;
 
+    /// <summary>A stretch of time the open device's timeline is focused on, or null to follow the range.</summary>
+    public TimelineFocus? TimelineFocus { get; private set; }
+
     /// <summary>Whether the recent activity list is open.</summary>
     public bool ActivityExpanded { get; private set; }
 
@@ -110,13 +120,60 @@ public sealed class AppState
 
     public void MarkRefreshed(DateTimeOffset at) => Set(LastRefresh, at, value => LastRefresh = value);
 
-    public void SelectStreamDevice(string? macAddress) => Set(StreamDevice, macAddress, value => StreamDevice = value);
+    public void SelectStreamDevice(string? macAddress)
+    {
+        // A focus belongs to one device, and ends when another is chosen or this one is closed.
+        if (TimelineFocus is not null && TimelineFocus.MacAddress != macAddress)
+        {
+            TimelineFocus = null;
+        }
+
+        Set(StreamDevice, macAddress, value => StreamDevice = value);
+    }
 
     public void SetStreamFilters(DeviceSearchFilters filters) => Set(StreamFilters, filters, value => StreamFilters = value);
 
     public void SetStreamPaused(bool paused) => Set(StreamPaused, paused, value => StreamPaused = value);
 
-    public void SetTimelineRange(TimelineRange range) => Set(TimelineRange, range, value => TimelineRange = value);
+    public void SetTimelineRange(TimelineRange range)
+    {
+        // Choosing a range is choosing to follow time again, so a focus on a past stretch is let go.
+        var hadFocus = TimelineFocus is not null;
+
+        TimelineFocus = null;
+
+        if (TimelineRange != range)
+        {
+            TimelineRange = range;
+            Changed?.Invoke();
+        }
+        else if (hadFocus)
+        {
+            Changed?.Invoke();
+        }
+    }
+
+    /// <summary>Opens a device and points its timeline at a stretch of time, such as an investigation's decay window.</summary>
+    public void FocusTimeline(TimelineFocus focus)
+    {
+        ArgumentNullException.ThrowIfNull(focus);
+
+        StreamDevice = focus.MacAddress;
+        TimelineFocus = focus;
+        Changed?.Invoke();
+    }
+
+    /// <summary>Goes back to following the range.</summary>
+    public void ClearTimelineFocus()
+    {
+        if (TimelineFocus is null)
+        {
+            return;
+        }
+
+        TimelineFocus = null;
+        Changed?.Invoke();
+    }
 
     public void SetActivityExpanded(bool expanded) => Set(ActivityExpanded, expanded, value => ActivityExpanded = value);
 

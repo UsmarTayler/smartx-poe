@@ -30,4 +30,7 @@ public interface ITelemetryClient
 
     /// <summary>Readings accepted since the last flush, as one message.</summary>
     Task ReadingsArrived(ReadingsBatch batch);
+
+    /// <summary>The suggestions and insights, whole, because something about them changed. Never sent for a reading.</summary>
+    Task SuggestionsUpdated(SuggestionsUpdate update);
 }

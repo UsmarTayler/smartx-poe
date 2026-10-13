@@ -9,7 +9,8 @@ public sealed record DemoDevice(SensorRegistrationRequest Registration, Simulati
 }
 
 /// <summary>
-/// The fleet the device simulator runs: forty-eight devices across the demo deployment.
+/// The fleet the device simulator runs: fifty-five devices across the demo deployment, the last seven of them a
+/// hydroponics bay.
 /// </summary>
 /// <remarks>
 /// Lives in SmartX.Shared because the simulator is a separate program that may not reference the API, and
@@ -29,6 +30,7 @@ public static class DemoDevices
     private const string Kilowatts = "kW";
     private const string Percent = "%";
     private const string OnOff = "state";
+    private const string Conductivity = "mS/cm";
 
     /// <summary>Every device in the demo fleet, with the scenario it starts in.</summary>
     public static IReadOnlyList<DemoDevice> All { get; } =
@@ -84,7 +86,40 @@ public static class DemoDevices
         Device(0x2E, "Meeting Room Lights", "sub-zone-j", "GW-B2", SensorCategory.Actuator, Percent, 0, 100, TelemetryPayloadKind.Integer, 5, SimulationScenario.Nominal, ActuatorKind.Dimmer),
         Device(0x2F, "Warehouse Lights", "zone-4", "GW-B1", SensorCategory.Actuator, Percent, 0, 100, TelemetryPayloadKind.Integer, 5, SimulationScenario.Nominal, ActuatorKind.Dimmer),
         Device(0x30, "Dock Fan Relay", "zone-4", "GW-B1", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal, ActuatorKind.Relay),
+
+        // The hydroponics bay, added with the suggestion engine. Named after the brief's own example, "Pump A right after
+        // Moisture Sensor B drops below 20%", so the demonstration matches the wording an assessor reads. Moisture is
+        // registered 0 to 100 %, which makes the engine's 20 % watch level literally 20 %.
+        Device(0x31, "Moisture Sensor A", "zone-6", "GW-B3", SensorCategory.Environmental, Percent, 0, 100, TelemetryPayloadKind.Real, 5, SimulationScenario.Nominal),
+        Device(0x32, "Moisture Sensor B", "zone-6", "GW-B3", SensorCategory.Environmental, Percent, 0, 100, TelemetryPayloadKind.Real, 5, SimulationScenario.DryOut),
+        Device(0x33, "Nutrient EC Sensor", "zone-6", "GW-B3", SensorCategory.Environmental, Conductivity, 0, 5, TelemetryPayloadKind.Real, 5, SimulationScenario.Fouling),
+        Device(0x34, "Pump A", "zone-6", "GW-B3", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal, ActuatorKind.Pump),
+        Device(0x35, "Pump B", "zone-6", "GW-B3", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal, ActuatorKind.Pump),
+        Device(0x36, "Grow Light", "zone-6", "GW-B3", SensorCategory.Actuator, Percent, 0, 100, TelemetryPayloadKind.Integer, 5, SimulationScenario.Nominal, ActuatorKind.Dimmer),
+        Device(0x37, "Drain Valve", "zone-6", "GW-B3", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal, ActuatorKind.Valve),
     ];
+
+    /// <summary>The address of a hydroponics device, for the seeded operator history and the tests that name them.</summary>
+    public static string Mac(byte suffix) => $"B8:27:EB:10:00:{suffix:X2}";
+
+    /// <summary>The bay's devices by the names the brief uses.</summary>
+    public static class Hydroponics
+    {
+        /// <summary>The moisture sensor that dries out and recovers, so it crosses 20 % on a loop.</summary>
+        public static string MoistureSensorB => Mac(0x32);
+
+        public static string MoistureSensorA => Mac(0x31);
+
+        public static string NutrientEcSensor => Mac(0x33);
+
+        public static string PumpA => Mac(0x34);
+
+        public static string PumpB => Mac(0x35);
+
+        public static string GrowLight => Mac(0x36);
+
+        public static string DrainValve => Mac(0x37);
+    }
 
     /// <summary>Builds one device's registration request.</summary>
     private static DemoDevice Device(

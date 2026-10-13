@@ -32,5 +32,12 @@ public enum HistoryKind
     Search,
 
     /// <summary>An operator opened a device in the Command Stream.</summary>
-    Selection
+    Selection,
+
+    /// <summary>A node's trust score at a moment. A series of them is what the forecast fits a line to.</summary>
+    /// <remarks>
+    /// Kept beside the node's readings, in its own time order, and not in the mesh-wide event stream: like a reading it is
+    /// a measurement, and there are far more of them than there are events. See <c>TrustSampler</c>.
+    /// </remarks>
+    TrustSample
 }
