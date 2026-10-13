@@ -144,6 +144,16 @@ builder.Services
 builder.Services.AddSingleton<DeviceDirectory>();
 builder.Services.AddSingleton<IDeviceDirectory>(services => services.GetRequiredService<DeviceDirectory>());
 builder.Services.AddSingleton<IPatternEngine, PatternEngine>();
+
+// The history replayed at start-up so the engine is not empty on a first run. Off unless asked for; the Docker stack asks.
+builder.Services
+    .AddOptions<SeededHistoryOptions>()
+    .Bind(builder.Configuration.GetSection(SeededHistoryOptions.SectionName))
+    .Validate(options => !SeededHistoryValidation.Problems(options).Any(), "The SeededHistory section is not valid.")
+    .ValidateOnStart();
+builder.Services.AddSingleton<PatternSeeder>();
+builder.Services.AddHostedService(services => services.GetRequiredService<PatternSeeder>());
+
 builder.Services.AddSingleton<ReadingTriggerDetector>();
 builder.Services.AddHostedService<PatternEventBridge>();
 builder.Services.AddSingleton<InvestigationService>();
