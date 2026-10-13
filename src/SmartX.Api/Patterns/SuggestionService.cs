@@ -131,7 +131,9 @@ internal sealed class SuggestionService : BackgroundService, ISuggestionService
 
     // Dismissed suggestions, newest last, bounded. The ids are also kept so a dismissed suggestion is not offered again.
     private readonly List<Dismissal> _dismissals = [];
-    private readonly HashSet<string> _dismissedIds = new(StringComparer.Ordinal);
+    // What each dismissed suggestion's trigger was when it was dismissed, by id. A suggestion is hidden while its trigger is no
+    // newer than that: the same trigger firing again is a new occurrence and is offered again, with the pattern's weight lowered.
+    private readonly Dictionary<string, DateTimeOffset> _dismissedAt = new(StringComparer.Ordinal);
 
     // Acceptances waiting for the action they announced: kind, device, command, and when they lapse.
     private readonly Dictionary<(OperatorActionKind Kind, string Mac, string Command), DateTimeOffset> _accepted = [];
@@ -186,9 +188,21 @@ internal sealed class SuggestionService : BackgroundService, ISuggestionService
                 _live.RemoveAt(0);
             }
 
-            var live = new LiveTrigger(++_nextTrigger, trigger);
+            // The same sensor crossing the same level again, with nothing done about the last time, is the same incident and not a
+            // second one: a reading that hovers about a level fires more than once, and a suggestion that was replaced by an
+            // identical one each time would flash "New" for ever. The existing entry takes the later time.
+            var live = _live.Find(existing => existing.Taken.Count == 0 && existing.Key == trigger.Key());
 
-            _live.Add(live);
+            if (live is null)
+            {
+                live = new LiveTrigger(++_nextTrigger, trigger);
+                _live.Add(live);
+            }
+            else
+            {
+                live.Event = trigger;
+                live.EmptyAtVersion = -1;
+            }
 
             // Most triggers have no pattern, and a trigger with none cannot change what is suggested. Asking once says so, and the
             // rest of the live triggers are not walked for it. The sweep brings the ranking up to date as triggers age.
@@ -304,15 +318,26 @@ internal sealed class SuggestionService : BackgroundService, ISuggestionService
 
             var before = _weights.GetValueOrDefault(candidate.Pattern, 1);
             var after = Math.Max(_options.NotUsefulFloor, before * _options.NotUsefulFactor);
+            var original = before;
+
+            // Dismissed before, on an earlier occurrence: the two are one entry that remembers where it began, so taking it back
+            // gives back everything both took, and the list never shows one suggestion twice.
+            var earlier = _dismissals.FindIndex(dismissal => dismissal.Id == id);
+
+            if (earlier >= 0)
+            {
+                original = _dismissals[earlier].Before;
+                _dismissals.RemoveAt(earlier);
+            }
 
             _weights[candidate.Pattern] = after;
-            _dismissedIds.Add(id);
-            _dismissals.Add(new Dismissal(id, candidate.Pattern, candidate.Suggestion with { Weight = after }, _time.GetUtcNow(), before, after));
+            _dismissedAt[id] = candidate.Suggestion.TriggeredAt;
+            _dismissals.Add(new Dismissal(id, candidate.Pattern, candidate.Suggestion with { Weight = after }, _time.GetUtcNow(), original, after));
 
             while (_dismissals.Count > _options.MaxDismissedRetained)
             {
                 // Forgetting the oldest only forgets that it can be taken back. What it took stays taken, bounded by the floor.
-                _dismissedIds.Remove(_dismissals[0].Id);
+                _dismissedAt.Remove(_dismissals[0].Id);
                 _dismissals.RemoveAt(0);
             }
 
@@ -355,7 +380,7 @@ internal sealed class SuggestionService : BackgroundService, ISuggestionService
             }
 
             _dismissals.RemoveAt(index);
-            _dismissedIds.Remove(id);
+            _dismissedAt.Remove(id);
             changed = RecomputeLocked(force: true);
         }
 
@@ -464,7 +489,7 @@ internal sealed class SuggestionService : BackgroundService, ISuggestionService
 
         foreach (var candidate in best.Values)
         {
-            if (_dismissedIds.Contains(candidate.Suggestion.Id))
+            if (IsDismissed(candidate.Suggestion))
             {
                 continue;
             }
@@ -484,11 +509,13 @@ internal sealed class SuggestionService : BackgroundService, ISuggestionService
             ranked[index] = top.Dequeue();
         }
 
-        var previous = _state.Suggestions.Select(suggestion => suggestion.Id).ToList();
-        var sameOrder = previous.SequenceEqual(ranked.Select(candidate => candidate.Suggestion.Id), StringComparer.Ordinal);
+        // Same suggestions, in the same order, about the same occurrences. A trigger firing again changes the time a suggestion is
+        // about and is worth saying, though it is not a new suggestion.
+        var sameOrder = _state.Suggestions.Select(suggestion => (suggestion.Id, suggestion.TriggeredAt))
+            .SequenceEqual(ranked.Select(candidate => (candidate.Suggestion.Id, candidate.Suggestion.TriggeredAt)));
 
         // Every candidate, dismissed or not, so a dismissal can find the suggestion it was asked about and a restore can bring it back.
-        _candidates = best.Where(pair => !_dismissedIds.Contains(pair.Value.Suggestion.Id))
+        _candidates = best.Where(pair => !IsDismissed(pair.Value.Suggestion))
             .ToDictionary(pair => pair.Value.Suggestion.Id, pair => pair.Value, StringComparer.Ordinal);
 
         var dismissed = _dismissals
@@ -544,7 +571,7 @@ internal sealed class SuggestionService : BackgroundService, ISuggestionService
             var action = BuildAction(kind, command, target);
             var triggerRoom = _devices.TryDescribe(live.Event.MacAddress, out var triggerProfile) ? triggerProfile.Room : live.Event.MacAddress;
             var identity = $"{action.Kind}:{action.MacAddress}:{action.Command}";
-            var id = Identify(live.Id, identity);
+            var id = Identify($"{live.Event.Kind}|{live.Event.MacAddress}|{live.Event.Detail}", identity);
 
             var suggestion = new Suggestion(
                 id,
@@ -683,8 +710,15 @@ internal sealed class SuggestionService : BackgroundService, ISuggestionService
         }
     }
 
-    /// <summary>A short stable id for one suggestion about one occurrence of a trigger. Hashed so it is safe in a URL.</summary>
-    private static string Identify(long trigger, string identity) =>
+    private bool IsDismissed(Suggestion suggestion) =>
+        _dismissedAt.TryGetValue(suggestion.Id, out var at) && suggestion.TriggeredAt <= at;
+
+    /// <summary>
+    /// A short id for one suggestion: what it is about (this sensor crossing this level) and what it says to do. The same for every
+    /// occurrence, so a trigger that fires again does not make a new suggestion, and a client can tell new from repeated. Hashed so it
+    /// is safe in a URL.
+    /// </summary>
+    private static string Identify(string trigger, string identity) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{trigger}|{identity}")))[..16].ToLowerInvariant();
 
     public override void Dispose()
@@ -701,7 +735,10 @@ internal sealed class SuggestionService : BackgroundService, ISuggestionService
     {
         public long Id { get; } = id;
 
-        public TriggerEvent Event { get; } = trigger;
+        public TriggerEvent Event { get; set; } = trigger;
+
+        /// <summary>What it is about, apart from when: the sensor, the kind of trigger and which one.</summary>
+        public (TriggerKind Kind, string Mac, string Detail) Key => Event.Key();
 
         /// <summary>The engine's learned version when this trigger last had no qualified pattern, or -1 if it has not been found without one.</summary>
         public long EmptyAtVersion { get; set; } = -1;
@@ -731,6 +768,9 @@ internal sealed class SuggestionService : BackgroundService, ISuggestionService
 /// <summary>The words and numbers that go with suggestions and insights.</summary>
 internal static class SuggestionWording
 {
+    /// <summary>What a trigger is about, apart from when it happened.</summary>
+    public static (TriggerKind Kind, string Mac, string Detail) Key(this TriggerEvent trigger) => (trigger.Kind, trigger.MacAddress, trigger.Detail);
+
     /// <summary>What to say on a button for a command, or null for one that cannot be sent without more input.</summary>
     public static string? Verb(CommandAction action) => action switch
     {

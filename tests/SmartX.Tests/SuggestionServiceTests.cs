@@ -567,24 +567,29 @@ public class SuggestionServiceTests
     }
 
     [Fact]
-    public void Taking_back_a_dismissal_that_hit_the_floor_gives_back_only_what_it_took()
+    public void Taking_back_a_dismissal_that_hit_the_floor_gives_back_exactly_what_was_taken_and_no_more()
     {
         var kit = Seeded(options => options.NotUsefulFloor = 0.8);
 
-        // The first takes 0.15, the second only 0.05, because the floor stops it.
+        // The first takes 0.15, the second only 0.05, because the floor stops it: 0.2 in all.
         kit.Trigger(MoistB);
-        var first = Open(kit).Id;
-        kit.Service.Dismiss(first);
+        var id = Open(kit).Id;
+        kit.Service.Dismiss(id);
         kit.Advance(TimeSpan.FromMinutes(11));
         kit.Trigger(MoistB);
-        var second = Open(kit).Id;
-        kit.Service.Dismiss(second);
+        kit.Service.Dismiss(Open(kit).Id);
 
-        kit.Service.Restore(second);
+        var record = Assert.Single(kit.Service.Current.Dismissed, found => found.Suggestion.What == "Open Pump A");
+
+        Assert.Equal(1.0, record.WeightBefore);
+        Assert.Equal(0.8, record.WeightAfter, precision: 6);
+
+        kit.Service.Restore(id);
         kit.Advance(TimeSpan.FromMinutes(11));
         kit.Trigger(MoistB);
 
-        Assert.Equal(0.85, Open(kit).Weight, precision: 6);
+        // Back to exactly what it was, and not above it.
+        Assert.Equal(1.0, Open(kit).Weight, precision: 6);
     }
 
     [Fact]
@@ -599,16 +604,75 @@ public class SuggestionServiceTests
     [Fact]
     public void The_dismissed_list_is_bounded()
     {
-        var kit = Seeded(options => options.MaxDismissedRetained = 2);
+        var kit = Kit.Create(options => options.MaxDismissedRetained = 2);
+        kit.Engine.Replay([.. Habit(MoistB, PumpA, times: 5), .. Habit(MoistB, PumpB, times: 5, alsoTurnOn: false)]);
+        kit.Trigger(MoistB);
 
-        for (var round = 0; round < 4; round++)
+        // Four different suggestions, each dismissed: the list keeps the last two.
+        foreach (var id in kit.Suggestions.Select(found => found.Id).ToList())
+        {
+            kit.Service.Dismiss(id);
+        }
+
+        Assert.Equal(2, kit.Service.Current.Dismissed.Count);
+    }
+
+    [Fact]
+    public void Dismissing_the_same_suggestion_on_two_occurrences_is_one_entry_and_taking_it_back_gives_back_both()
+    {
+        var kit = Seeded();
+
+        for (var round = 0; round < 2; round++)
         {
             kit.Trigger(MoistB);
             kit.Service.Dismiss(Open(kit).Id);
             kit.Advance(TimeSpan.FromMinutes(11));
         }
 
-        Assert.Equal(2, kit.Service.Current.Dismissed.Count);
+        var record = Assert.Single(kit.Service.Current.Dismissed, found => found.Suggestion.What == "Open Pump A");
+
+        Assert.Equal(1.0, record.WeightBefore);
+        Assert.Equal(0.7225, record.WeightAfter, precision: 6);
+
+        kit.Service.Restore(record.Suggestion.Id);
+        kit.Trigger(MoistB);
+
+        Assert.Equal(1.0, Open(kit).Weight);
+    }
+
+    [Fact]
+    public void A_trigger_that_fires_again_before_anything_is_done_is_the_same_suggestion_with_the_later_time()
+    {
+        var kit = Seeded();
+        kit.Trigger(MoistB);
+        var first = Open(kit);
+
+        kit.Advance(TimeSpan.FromMinutes(2));
+        kit.Trigger(MoistB);
+
+        var second = Open(kit);
+
+        // The same id, so a client does not see a new suggestion, and the time it is about has moved on.
+        Assert.Equal(first.Id, second.Id);
+        Assert.Equal(T0 + TimeSpan.FromMinutes(2), second.TriggeredAt);
+    }
+
+    [Fact]
+    public void A_dismissed_suggestion_stays_hidden_until_its_trigger_fires_again()
+    {
+        var kit = Seeded();
+        kit.Trigger(MoistB);
+        var id = Open(kit).Id;
+
+        kit.Service.Dismiss(id);
+        kit.Advance(TimeSpan.FromMinutes(1));
+        kit.Service.Sweep();
+
+        Assert.DoesNotContain(kit.Suggestions, found => found.Id == id);
+
+        kit.Trigger(MoistB);
+
+        Assert.Contains(kit.Suggestions, found => found.Id == id);
     }
 
     [Fact]

@@ -149,6 +149,7 @@ public class SeededHistoryTests
             options.UnansweredTriggers = 0;
             options.RandomOpens = 0;
             options.PumpARounds = 0;
+            options.PumpAScheduledRuns = 0;
             options.ConstantOpenEvery = TimeSpan.FromDays(10);
         });
 

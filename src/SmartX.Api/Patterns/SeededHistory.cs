@@ -48,6 +48,10 @@ public sealed class SeededHistoryOptions
     /// </remarks>
     public int PumpARounds { get; set; } = 48;
 
+    /// <summary>How many times Pump A was turned on on a schedule, nothing having happened.</summary>
+    /// <remarks>The same reason as <see cref="PumpARounds"/>, for the command: a pump that is also run on a timetable is not turned on only when a sensor drops.</remarks>
+    public int PumpAScheduledRuns { get; set; } = 40;
+
     /// <summary>How many threshold crossings happened that nobody responded to.</summary>
     public int UnansweredTriggers { get; set; } = 30;
 
@@ -76,7 +80,7 @@ internal static class SeededHistoryValidation
             yield return "SeededHistory:BriefResponses must be between 0 and BriefTriggers, and BriefTriggers at least 1.";
         }
 
-        if (options.OtherHabitTriggers < 0 || options.RandomOpens < 0 || options.UnansweredTriggers < 0 || options.PumpARounds < 0)
+        if (options.OtherHabitTriggers < 0 || options.RandomOpens < 0 || options.UnansweredTriggers < 0 || options.PumpARounds < 0 || options.PumpAScheduledRuns < 0)
         {
             yield return "SeededHistory counts cannot be negative.";
         }
@@ -195,6 +199,11 @@ internal static class SeededHistory
         for (var index = 0; index < options.PumpARounds; index++)
         {
             history.Add(View(PumpA, RandomTime(now, options, random)));
+        }
+
+        for (var index = 0; index < options.PumpAScheduledRuns; index++)
+        {
+            history.Add(Command(PumpA, CommandAction.PumpOn, RandomTime(now, options, random)));
         }
 
         // The device that is opened all the time: every few minutes for a day and a half. After any trigger it follows with
