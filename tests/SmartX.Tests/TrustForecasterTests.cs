@@ -173,6 +173,62 @@ public class TrustForecasterTests
         Assert.Null(TrustForecaster.Forecast(Series(12, start: 0.55, perMinute: -0.2), Threshold, Options));
     }
 
+    /// <summary>A node that was steady for a while and then began to fall: a flat stretch, then a straight fall.</summary>
+    private static List<(DateTimeOffset, double)> HockeyStick(int flat, int falling, double perMinute)
+    {
+        List<(DateTimeOffset, double)> samples = [];
+
+        for (var index = 0; index < flat; index++)
+        {
+            samples.Add((T0 + TimeSpan.FromSeconds(index * 10), 0.85));
+        }
+
+        for (var index = 1; index <= falling; index++)
+        {
+            samples.Add((T0 + TimeSpan.FromSeconds((flat + index) * 10), 0.85 + perMinute * index * 10 / 60));
+        }
+
+        return samples;
+    }
+
+    [Fact]
+    public void A_fall_that_starts_after_a_flat_stretch_is_forecast_from_its_straight_part()
+    {
+        var samples = HockeyStick(flat: 20, falling: 12, perMinute: -0.1);
+
+        // Over the whole window the line is a poor fit: that is the flat part dragging it.
+        Assert.True(TrustForecaster.Fit(samples)!.Value.RSquared < Options.MinRSquared);
+
+        var forecast = TrustForecaster.Forecast(samples, 0.5, Options);
+
+        Assert.NotNull(forecast);
+
+        // Truth: 0.85 - 0.1 x 2 minutes = 0.65 at the last sample, and 0.15 more to go at 0.1 a minute.
+        Assert.InRange(forecast.Value.TimeToFault.TotalMinutes, 1.3, 1.8);
+    }
+
+    [Fact]
+    public void A_flat_stretch_with_no_fall_after_it_is_still_nothing()
+    {
+        Assert.Null(TrustForecaster.Forecast(HockeyStick(flat: 32, falling: 0, perMinute: 0), 0.5, Options));
+    }
+
+    [Fact]
+    public void A_fall_that_has_only_just_begun_is_not_forecast_from_fewer_samples_than_the_minimum()
+    {
+        // Two samples of fall after a long flat stretch: not enough to say it is a trend, whatever the line through them looks like.
+        Assert.Null(TrustForecaster.Forecast(HockeyStick(flat: 30, falling: 2, perMinute: -0.15), 0.5, Options));
+    }
+
+    [Fact]
+    public void A_forecast_already_raised_is_kept_at_looser_bars_through_the_forecast_entry_point()
+    {
+        var samples = Series(20, start: 0.7, perMinute: -0.03, wobble: 0.02);
+
+        Assert.Null(TrustForecaster.Forecast(samples, Threshold, Options));
+        Assert.NotNull(TrustForecaster.Forecast(samples, Threshold, Options, raised: true));
+    }
+
     [Fact]
     public void A_forecast_raised_at_the_full_bars_survives_looser_ones_and_a_fresh_one_does_not()
     {
@@ -202,13 +258,25 @@ public class TrustForecasterTests
     }
 
     [Fact]
-    public void A_fall_that_is_flattening_is_not_forecast_because_a_line_would_overshoot_it()
+    public void A_fall_that_has_flattened_is_not_forecast_from_the_fast_part_that_is_over()
     {
-        // Fast at first and then nearly flat: the whole-window line still slopes down and fits tolerably.
-        var samples = Bent(early: -0.12, late: -0.01);
+        // Fast at first and then nearly flat: the whole-window line still slopes down and fits tolerably, and would say
+        // "about two minutes". The recent stretch is flat, which is the truth now, and it is below the steepness bar.
+        var samples = Bent(early: -0.12, late: -0.002);
 
-        Assert.Null(TrustForecaster.Forecast(samples, 0.5, Options));
         Assert.True(TrustForecaster.Fit(samples)!.Value.RecentFallPerMinute < TrustForecaster.Fit(samples)!.Value.FallPerMinute * 0.5);
+        Assert.Null(TrustForecaster.Forecast(samples, 0.5, Options));
+    }
+
+    [Fact]
+    public void A_fall_that_has_slowed_but_not_stopped_is_forecast_at_the_slower_rate()
+    {
+        var samples = Bent(early: -0.12, late: -0.02);
+        var forecast = TrustForecaster.Forecast(samples, 0.5, Options);
+
+        // What it is doing now, not what it did a few minutes ago: minutes away, and not the two the early rate would give.
+        Assert.NotNull(forecast);
+        Assert.True(forecast.Value.TimeToFault > TimeSpan.FromMinutes(4), $"{forecast.Value.TimeToFault}");
     }
 
     [Fact]

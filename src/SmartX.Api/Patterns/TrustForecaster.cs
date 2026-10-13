@@ -244,21 +244,67 @@ internal static class TrustForecaster
         return new TrendFit(slope, intercept, rSquared, samples.Count, samples[^1].At - origin);
     }
 
-    /// <summary>Projects a fit to the moment it reaches the fault threshold, if it is going to and the fit is worth believing.</summary>
+    /// <summary>Projects the most recent straight stretch of the samples to the moment it reaches the fault threshold.</summary>
     /// <param name="samples">The samples, oldest first.</param>
     /// <param name="faultThreshold">The score below which a node is in Fault.</param>
     /// <param name="options">What a forecast has to satisfy.</param>
+    /// <param name="raised">Whether an insight for this node is already up, in which case it is held to looser bars so it does not flap.</param>
     /// <returns>The forecast, or null when there is nothing worth announcing.</returns>
-    public static TrendForecast? Forecast(IReadOnlyList<(DateTimeOffset At, double Score)> samples, double faultThreshold, ForecastOptions options)
+    /// <remarks>
+    /// <b>The longest recent stretch that is straight.</b> A node that has been fine for a few minutes and then starts to fall is not on
+    /// one straight line: the flat part and the fall make a hockey stick, and a line through both fits badly for as long as the
+    /// flat part is in the window, which is exactly the time an operator would like to know. So the whole window is tried, and then
+    /// the most recent three quarters, a half and a third of it (never fewer than the minimum samples). Of those that clear every
+    /// bar, the forecast is the longest whose fit is within 0.02 of the best, so a fall that has been going on for the whole window
+    /// is judged on the whole window, and a fall that has only just begun is judged on the part that is falling and not on the part
+    /// that was flat, which would make it look slower than it is.
+    /// </remarks>
+    public static TrendForecast? Forecast(
+        IReadOnlyList<(DateTimeOffset At, double Score)> samples,
+        double faultThreshold,
+        ForecastOptions options,
+        bool raised = false)
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        if (samples.Count < options.MinSamples || Fit(samples) is not { } fit)
+        var count = samples.Count;
+        var minimumSamples = raised ? Math.Max(3, options.MinSamples / 2) : options.MinSamples;
+
+        // Longest first, so on a tie the longest wins.
+        List<TrendForecast> found = [];
+
+        foreach (var length in new[] { count, count * 3 / 4, count / 2, count / 3 }.Distinct())
+        {
+            if (length < minimumSamples)
+            {
+                continue;
+            }
+
+            var window = length == count ? samples : [.. samples.Skip(count - length)];
+
+            if (Fit(window) is not { } fit)
+            {
+                continue;
+            }
+
+            var forecast = raised
+                ? Project(fit, window[^1].At - window[0].At, window[^1].At, faultThreshold, options.MinRSquared / 2, options.MinFallPerMinute / 2, options.Horizon * 1.25, options.MinRecentFallRatio)
+                : Project(fit, window[^1].At - window[0].At, window[^1].At, faultThreshold, options.MinRSquared, options.MinFallPerMinute, options.Horizon, options.MinRecentFallRatio);
+
+            if (forecast is { } accepted)
+            {
+                found.Add(accepted);
+            }
+        }
+
+        if (found.Count == 0)
         {
             return null;
         }
 
-        return Project(fit, samples[^1].At - samples[0].At, samples[^1].At, faultThreshold, options.MinRSquared, options.MinFallPerMinute, options.Horizon, options.MinRecentFallRatio);
+        var best = found.Max(forecast => forecast.Fit.RSquared);
+
+        return found.First(forecast => forecast.Fit.RSquared >= best - 0.02);
     }
 
     /// <summary>

@@ -288,33 +288,23 @@ internal sealed class InsightService : BackgroundService
             var span = samples[^1].Timestamp - samples[0].Timestamp;
             var raisedBefore = false;
 
+            _logger.LogDebug(
+                "Forecast for {Mac}: {Samples} samples over {Span:0} s, score {Score:0.000}, falling {Fall:0.0000} a minute (recent {Recent:0.0000}), R2 {RSquared:0.000}.",
+                node.MacAddress,
+                samples.Count,
+                span.TotalSeconds,
+                node.Score,
+                fit.FallPerMinute,
+                fit.RecentFallPerMinute,
+                fit.RSquared);
+
             lock (_gate)
             {
                 raisedBefore = _anticipated.ContainsKey(node.MacAddress);
             }
 
             // Raised at the full bars and withdrawn at looser ones, so a fit at the edge does not flap.
-            var forecast = raisedBefore
-                ? TrustForecaster.Project(
-                    fit,
-                    span,
-                    samples[^1].Timestamp,
-                    _trustOptions.FaultThreshold,
-                    _options.MinRSquared / 2,
-                    _options.MinFallPerMinute / 2,
-                    _options.Horizon * 1.25,
-                    _options.MinRecentFallRatio)
-                : samples.Count >= _options.MinSamples
-                    ? TrustForecaster.Project(
-                        fit,
-                        span,
-                        samples[^1].Timestamp,
-                        _trustOptions.FaultThreshold,
-                        _options.MinRSquared,
-                        _options.MinFallPerMinute,
-                        _options.Horizon,
-                        _options.MinRecentFallRatio)
-                    : null;
+            var forecast = TrustForecaster.Forecast(samples, _trustOptions.FaultThreshold, _options, raisedBefore);
 
             if (forecast is { } projected)
             {

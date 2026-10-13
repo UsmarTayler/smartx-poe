@@ -245,8 +245,10 @@ public class InsightServiceTests : IAsyncLifetime
             }
         }
 
-        // A few passes while it is still dropping, and none once it is settling. Not the ten minutes a straight line would hold it for.
-        Assert.True(raised < 20, $"The insight was up for {raised} passes.");
+        // While it is still dropping a straight line says it is falling, and that is true for those minutes: a forecast cannot know the
+        // fall will level off. It is up for the drop, about three minutes of passes here, withdrawn once the fall slows, and nowhere near the
+        // quarter of an hour a line through the whole drop would have held it for.
+        Assert.True(raised is > 0 and < 60, $"The insight was up for {raised} passes.");
         Assert.Null(Anticipated());
     }
 
