@@ -661,6 +661,45 @@ public class SuggestionServiceTests
     }
 
     [Fact]
+    public void A_trigger_that_only_moves_a_suggestions_time_is_announced_at_most_once_a_second()
+    {
+        var kit = Seeded();
+        kit.Trigger(MoistB);
+        var announced = kit.Changes;
+
+        // A sensor hovering about its level fires again and again. Nothing about the suggestion has changed but when.
+        for (var round = 0; round < 20; round++)
+        {
+            kit.Advance(TimeSpan.FromMilliseconds(40));
+            kit.Trigger(MoistB);
+        }
+
+        Assert.Equal(announced, kit.Changes);
+
+        // The state still moved on, and it is announced once a second has passed.
+        kit.Advance(TimeSpan.FromSeconds(1));
+        kit.Trigger(MoistB);
+
+        Assert.Equal(announced + 1, kit.Changes);
+        Assert.Equal(kit.Clock.GetUtcNow(), Open(kit).TriggeredAt);
+    }
+
+    [Fact]
+    public void A_held_back_time_change_is_announced_by_the_next_sweep_even_if_nothing_else_happens()
+    {
+        var kit = Seeded();
+        kit.Trigger(MoistB);
+        kit.Advance(TimeSpan.FromMilliseconds(100));
+        kit.Trigger(MoistB);
+        var announced = kit.Changes;
+
+        kit.Advance(TimeSpan.FromSeconds(2));
+        kit.Service.Sweep();
+
+        Assert.Equal(announced + 1, kit.Changes);
+    }
+
+    [Fact]
     public void A_dismissed_suggestion_stays_hidden_until_its_trigger_fires_again()
     {
         var kit = Seeded();

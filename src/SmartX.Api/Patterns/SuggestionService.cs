@@ -148,6 +148,14 @@ internal sealed class SuggestionService : BackgroundService, ISuggestionService
 
     private readonly bool _inline;
 
+    // What clients were last told, so a change held back for a moment is still a change from it.
+    private List<string> _announcedIds = [];
+    private List<DateTimeOffset> _announcedTimes = [];
+    private DateTimeOffset _announcedAt = DateTimeOffset.MinValue;
+
+    // The soonest a suggestion's time moving, and nothing else, is announced again.
+    private static readonly TimeSpan TimeRefresh = TimeSpan.FromSeconds(1);
+
     private const int InboxCapacity = 20_000;
 
     private SuggestionState _state;
@@ -575,10 +583,12 @@ internal sealed class SuggestionService : BackgroundService, ISuggestionService
             ranked[index] = top.Dequeue();
         }
 
-        // Same suggestions, in the same order, about the same occurrences. A trigger firing again changes the time a suggestion is
-        // about and is worth saying, though it is not a new suggestion.
-        var sameOrder = _state.Suggestions.Select(suggestion => (suggestion.Id, suggestion.TriggeredAt))
-            .SequenceEqual(ranked.Select(candidate => (candidate.Suggestion.Id, candidate.Suggestion.TriggeredAt)));
+        // What was last announced is what is compared with, not what was held a moment ago: a change that was held back (see below)
+        // is still a change from what clients were told, and is announced when its turn comes.
+        var ids = ranked.Select(candidate => candidate.Suggestion.Id).ToList();
+        var times = ranked.Select(candidate => candidate.Suggestion.TriggeredAt).ToList();
+        var sameOrder = ids.SequenceEqual(_announcedIds, StringComparer.Ordinal);
+        var sameTimes = times.SequenceEqual(_announcedTimes);
 
         // Every candidate, dismissed or not, so a dismissal can find the suggestion it was asked about and a restore can bring it back.
         _candidates = best.Where(pair => !IsDismissed(pair.Value.Suggestion))
@@ -594,7 +604,22 @@ internal sealed class SuggestionService : BackgroundService, ISuggestionService
 
         _state = new SuggestionState([.. ranked.Select(candidate => candidate.Suggestion)], dismissed, now);
 
-        return force || !sameOrder || dismissedChanged;
+        // A suggestion appearing, going or moving is announced at once. A trigger that fires again, which moves a suggestion's time and
+        // nothing else, is announced at most once a second: a sensor hovering about its level can fire many times a second at a high
+        // reporting rate, and a message for each would be thousands of whole-list messages carrying nothing but a later time.
+        var material = force || !sameOrder || dismissedChanged;
+        var timeOnly = !material && !sameTimes && now - _announcedAt >= TimeRefresh;
+
+        if (material || timeOnly)
+        {
+            _announcedIds = ids;
+            _announcedTimes = times;
+            _announcedAt = now;
+
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>The concrete things an association says to do about one live trigger, scored and explained.</summary>

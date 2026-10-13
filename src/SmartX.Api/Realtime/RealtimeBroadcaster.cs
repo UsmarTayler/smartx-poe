@@ -257,6 +257,8 @@ internal sealed class RealtimeBroadcaster : BackgroundService
         Enqueue(() => SendCommandAsync(command, commandEvent));
     }
 
+    private int _suggestionsQueued;
+
     private void OnSuggestionsChanged()
     {
         if (!_subscriptions.Has(RealtimeTopics.Suggestions))
@@ -264,7 +266,12 @@ internal sealed class RealtimeBroadcaster : BackgroundService
             return;
         }
 
-        Enqueue(SendSuggestionsAsync);
+        // One message waiting is enough: it is built from the state when it is sent, so anything that changes before then is in it.
+        // A burst of changes is one message and not one each.
+        if (Interlocked.Exchange(ref _suggestionsQueued, 1) == 0)
+        {
+            Enqueue(SendSuggestionsAsync);
+        }
     }
 
     private void OnReadingProcessed(ProcessedReading reading)
@@ -342,6 +349,9 @@ internal sealed class RealtimeBroadcaster : BackgroundService
 
     private async Task SendSuggestionsAsync()
     {
+        // Cleared before the state is read, so a change made after the read but before the send queues a message of its own.
+        Interlocked.Exchange(ref _suggestionsQueued, 0);
+
         // Read, then numbered, then sent. Each message is the whole picture, so two changes close together are two messages
         // that agree with the state at the moment each was read, and the later one always wins.
         var update = BuildSuggestions(0);
