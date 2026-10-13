@@ -40,8 +40,10 @@ public static class SmartXTheme
             PrimaryContrastText = "#FFFFFF",
             Secondary = "#52606D",
             Info = "#2F5D8A",
-            Success = "#0CA30C",
-            Warning = "#FAB219",
+            // Darker than the dark theme's: the brighter green and amber are fine on a dark surface and fail 4.5:1 as text on
+            // a light one (outlined chips and alerts draw their text in these colours).
+            Success = "#0A7A0A",
+            Warning = "#8A5A00",
             Error = "#D03B3B",
             Background = "#F6F7F9",
             BackgroundGray = "#EDEFF2",
