@@ -1,0 +1,172 @@
+@inject IOperatorApi Api
+@inject AppState AppState
+
+@* One investigation: a node's fall into fault, gathered where an operator can act on it. What it shows is what they would otherwise
+   go and find: when it began to decay, what the trust engine blames, the alerts on it, and what operators did last time. The
+   verdict changes what detection does about this node and can be changed again: Dismiss makes this node a little less sensitive
+   to what caused the fault, within a floor, and changing the verdict gives that back. Opening the investigation points the device's
+   timeline at the decay window, which is where the cause is. *@
+<article id="@($"investigation-{Investigation.Id}")" class="smartx-investigation" aria-label="@($"Investigation of {Investigation.Room}")">
+    <div class="smartx-investigation__head">
+        <MudIcon Icon="@Icons.Material.Filled.Search" Size="Size.Small" aria-hidden="true" />
+        <strong>@Investigation.Room</strong>
+        <span class="smartx-mono mud-text-secondary">@Investigation.MacAddress[^5..]</span>
+
+        <span class="smartx-status" style="--smartx-status: @(Open ? "#d03b3b" : "#6b6a66")">
+            <MudIcon Icon="@(Open ? Icons.Material.Filled.PriorityHigh : Icons.Material.Filled.CheckCircle)" Size="Size.Small" aria-hidden="true" />
+            <span>@(Open ? "Open" : "Resolved")</span>
+        </span>
+    </div>
+
+    <dl class="smartx-investigation__facts">
+        <div><dt>Fell into fault</dt><dd>@ReadingFormatter.Time(Investigation.OpenedAt), trust @Investigation.Score.ToString("0.00")</dd></div>
+        <div><dt>Decay window</dt><dd>@SuggestionPresentation.Window(Investigation)</dd></div>
+        <div><dt>The trust engine blames</dt><dd>@SuggestionPresentation.Blamed(Investigation.CausedBy)</dd></div>
+        <div><dt>Reason</dt><dd>@Investigation.Reason</dd></div>
+        <div>
+            <dt>Alerts when it opened</dt>
+            <dd>
+                @if (Investigation.ActiveAlerts.Count == 0)
+                {
+                    <span>none</span>
+                }
+                else
+                {
+                    @string.Join(", ", Investigation.ActiveAlerts.Select(alert => AlertKindStyle.For(alert.Kind).Label))
+                }
+            </dd>
+        </div>
+        <div><dt>Readings in the window</dt><dd>@Investigation.ReadingCount.ToString("N0")</dd></div>
+    </dl>
+
+    @if (SuggestionPresentation.Precedent(Investigation.Precedent) is { } precedent)
+    {
+        <p class="smartx-investigation__precedent"><span class="mud-text-secondary">Precedent</span> @precedent</p>
+    }
+
+    @if (Investigation.Verdict is not null)
+    {
+        <p class="smartx-investigation__verdict" role="status">
+            <MudIcon Icon="@Icons.Material.Filled.Gavel" Size="Size.Small" aria-hidden="true" />
+            <span>@SuggestionPresentation.Verdict(Investigation)</span>
+            @if (Investigation.VerdictAt is { } at)
+            {
+                <span class="mud-text-secondary">at @ReadingFormatter.Time(at)</span>
+            }
+        </p>
+
+        @if (SuggestionPresentation.SensitivityNote(Investigation) is { } note)
+        {
+            <p class="mud-text-secondary smartx-investigation__note">@note</p>
+        }
+    }
+
+    <div class="smartx-investigation__actions" role="group" aria-label="@($"Verdict on {Investigation.Room}")">
+        <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.QueryStats" OnClick="Investigate"
+                   aria-label="@($"Show the decay window of {Investigation.Room} on its timeline")">Show decay window</MudButton>
+
+        <MudButton Size="Size.Small" Variant="@(Investigation.Verdict == Verdict.Confirm ? Variant.Filled : Variant.Outlined)" Color="Color.Primary" Disabled="_busy"
+                   StartIcon="@Icons.Material.Filled.Check" OnClick="() => GiveAsync(Verdict.Confirm, null)"
+                   aria-pressed="@(Investigation.Verdict == Verdict.Confirm ? "true" : "false")">Confirm</MudButton>
+
+        <MudButton Size="Size.Small" Variant="@(Investigation.Verdict == Verdict.Dismiss ? Variant.Filled : Variant.Outlined)" Color="Color.Primary" Disabled="_busy"
+                   StartIcon="@Icons.Material.Filled.Block" OnClick="() => GiveAsync(Verdict.Dismiss, null)"
+                   aria-pressed="@(Investigation.Verdict == Verdict.Dismiss ? "true" : "false")">Dismiss</MudButton>
+
+        <MudButton Size="Size.Small" Variant="@(Investigation.Verdict == Verdict.Relabel ? Variant.Filled : Variant.Outlined)" Color="Color.Primary" Disabled="_busy"
+                   StartIcon="@Icons.Material.Filled.Label" OnClick="() => _relabelling = !_relabelling"
+                   aria-expanded="@(_relabelling ? "true" : "false")"
+                   aria-pressed="@(Investigation.Verdict == Verdict.Relabel ? "true" : "false")">Relabel</MudButton>
+    </div>
+
+    <p class="smartx-investigation__help mud-text-secondary">
+        Confirm: a real fault. Dismiss: a false alarm, so this node becomes a little less sensitive to what caused it, never below half. Relabel: a real problem with a different cause.
+    </p>
+
+    @if (_relabelling)
+    {
+        <div class="smartx-investigation__relabel">
+            <label for="@($"cause-{Investigation.Id}")">What was the cause?</label>
+            <select id="@($"cause-{Investigation.Id}")" class="smartx-select" @onchange="OnCauseChanged">
+                <option value="" selected="@(_cause is null)">Choose a cause</option>
+                @foreach (var cause in Enum.GetValues<FaultCause>())
+                {
+                    <option value="@cause" selected="@(_cause == cause)">@(char.ToUpperInvariant(SuggestionPresentation.Cause(cause)[0]) + SuggestionPresentation.Cause(cause)[1..])</option>
+                }
+            </select>
+
+            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" Disabled="_busy || _cause is null"
+                       OnClick="() => GiveAsync(Verdict.Relabel, _cause)">Apply relabel</MudButton>
+            <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="() => _relabelling = false">Cancel</MudButton>
+        </div>
+    }
+
+    @if (_problem is not null)
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="mt-2" role="alert">@_problem</MudAlert>
+    }
+</article>
+
+@code {
+    // A little either side of the window, so the chart shows the node being fine before it decayed and the moment it crossed.
+    private static readonly TimeSpan Padding = TimeSpan.FromMinutes(1);
+
+    private bool _busy;
+    private bool _relabelling;
+    private FaultCause? _cause;
+    private string? _problem;
+
+    [Parameter, EditorRequired]
+    public InvestigationDetails Investigation { get; set; } = default!;
+
+    /// <summary>Raised with the investigation as it is after a verdict, so whatever lists it can show the new state.</summary>
+    [Parameter]
+    public EventCallback<InvestigationDetails> OnChanged { get; set; }
+
+    private bool Open => Investigation.Status == InvestigationStatus.Open;
+
+    protected override void OnParametersSet()
+    {
+        // Relabelling again starts from the cause that was given.
+        if (_cause is null && Investigation.Cause is { } given)
+        {
+            _cause = given;
+        }
+    }
+
+    private void OnCauseChanged(ChangeEventArgs args) =>
+        _cause = Enum.TryParse<FaultCause>(args.Value?.ToString(), out var parsed) ? parsed : null;
+
+    /// <summary>Opens the device and points its timeline at the decay window.</summary>
+    private void Investigate()
+    {
+        AppState.FocusTimeline(new TimelineFocus(
+            Investigation.MacAddress,
+            Investigation.WindowStart - Padding,
+            Investigation.WindowEnd + Padding,
+            $"the decay window of the investigation into {Investigation.Room}"));
+
+        // Opening a device is what the pattern analysis learns from.
+        _ = Api.RecordSelectionAsync(Investigation.MacAddress);
+    }
+
+    private async Task GiveAsync(Verdict verdict, FaultCause? cause)
+    {
+        _busy = true;
+        _problem = null;
+
+        var result = await Api.GiveVerdictAsync(Investigation.Id, new VerdictRequest(verdict, cause));
+
+        _busy = false;
+
+        if (result.IsSuccess)
+        {
+            _relabelling = false;
+            await OnChanged.InvokeAsync(result.Value);
+        }
+        else
+        {
+            _problem = result.Problem.Message;
+        }
+    }
+}

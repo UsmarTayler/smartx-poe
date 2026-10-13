@@ -5,15 +5,18 @@
 <PageTitle>Command Stream · Smart-X</PageTitle>
 
 <PageHeader Title="Real-Time Command Stream"
-            Subtitle="Watch readings arrive, find a device, send it a command, and undo what you sent." />
+            Subtitle="What to do and what to look at first, then watch readings arrive, find a device, send it a command, and undo what you sent." />
 
 @* A container query and not a media query decides the columns. The page sits beside a drawer on wide screens, so the
    room the dashboard has is not the width of the window, and a media query would call a 1280 px window "desktop" while
    the content is only about a thousand pixels wide. The regions are laid out by the width they actually get: one column
-   when stacked (alerts, pipeline, device search, stream, then undo and activity), two from about 560 px, three from about
-   900 px. *@
+   when stacked (suggestions, insights, investigations, alerts, pipeline, device search, stream, then undo and activity), two
+   from about 560 px, three from about 900 px. What to do and what to look at are first, because they are what the page is for. *@
 <div class="smartx-cs-host">
     <div class="smartx-cs">
+        <div class="smartx-cs__area smartx-cs__area--suggestions"><SuggestedActionsPanel /></div>
+        <div class="smartx-cs__area smartx-cs__area--insights"><InsightsPanel /></div>
+        <div class="smartx-cs__area smartx-cs__area--investigations"><InvestigationsPanel /></div>
         <div class="smartx-cs__area smartx-cs__area--pipeline"><PipelineStrip /></div>
         <div class="smartx-cs__area smartx-cs__area--alerts"><AlertsPanel /></div>
         <div class="smartx-cs__area smartx-cs__area--device"><DevicePanel /></div>

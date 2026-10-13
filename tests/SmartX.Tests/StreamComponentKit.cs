@@ -26,12 +26,20 @@ public sealed class FakeOperatorApi : IOperatorApi
     private readonly ConcurrentQueue<(string Zone, CommandAction Action)> _zonePreviews = new();
     private readonly ConcurrentQueue<(string Zone, CommandAction Action)> _zoneIssues = new();
     private readonly ConcurrentQueue<string> _selections = new();
+    private readonly ConcurrentQueue<(string Mac, CommandAction Action, string? SuggestionId)> _suggested = new();
+    private readonly ConcurrentQueue<(string Mac, string? SuggestionId)> _suggestedSelections = new();
+    private readonly ConcurrentQueue<string> _dismissals = new();
+    private readonly ConcurrentQueue<string> _restorations = new();
+    private readonly ConcurrentQueue<(Guid Id, VerdictRequest Request)> _verdicts = new();
     private int _undoCalls;
     private int _timelineCalls;
 
     public Func<DeviceSearchFilters, DeviceSearchResponse> Search { get; set; } = filters => new DeviceSearchResponse(filters, 0, []);
 
     public Func<string, SensorTimeline> Timeline { get; set; } = StreamKit.EmptyTimeline;
+
+    /// <summary>When set, issuing a command fails with this, as the gateway refusing it would.</summary>
+    public ApiProblem? IssueProblem { get; set; }
 
     public Func<string, CommandAction, double?, Command> Issue { get; set; } =
         (mac, action, level) => StreamKit.Cmd(mac, ActuatorKind.Valve, action, CommandState.Pending);
@@ -41,6 +49,17 @@ public sealed class FakeOperatorApi : IOperatorApi
 
     public Func<string, CommandAction, double?, CompositeCommandResult> IssueZone { get; set; } =
         (zone, action, level) => new CompositeCommandResult(Guid.NewGuid(), zone, action, [], CompositeStatus.InProgress);
+
+    public Func<IReadOnlyList<InvestigationDetails>> OpenInvestigations { get; set; } = () => [];
+
+    public Func<Guid, VerdictRequest, ApiResult<InvestigationDetails>> Verdict { get; set; } =
+        (id, request) => ApiResult<InvestigationDetails>.Failure(new ApiProblem(404, "Not used by this test"));
+
+    public Func<string, ApiResult<SuggestionsUpdate>> Dismiss { get; set; } =
+        id => ApiResult<SuggestionsUpdate>.Success(new SuggestionsUpdate(0, [], [], [], StreamKit.T0));
+
+    public Func<string, ApiResult<SuggestionsUpdate>> Restore { get; set; } =
+        id => ApiResult<SuggestionsUpdate>.Success(new SuggestionsUpdate(0, [], [], [], StreamKit.T0));
 
     public Func<IReadOnlyList<UndoStackEntry>> Stack { get; set; } = () => [];
 
@@ -55,6 +74,18 @@ public sealed class FakeOperatorApi : IOperatorApi
     public IReadOnlyList<(string Zone, CommandAction Action)> ZoneIssues => [.. _zoneIssues];
 
     public IReadOnlyList<string> Selections => [.. _selections];
+
+    /// <summary>The commands that were sent by accepting a suggestion, with the suggestion's id.</summary>
+    public IReadOnlyList<(string Mac, CommandAction Action, string? SuggestionId)> SuggestedCommands => [.. _suggested];
+
+    /// <summary>The selections that were made by accepting a suggestion, with the suggestion's id.</summary>
+    public IReadOnlyList<(string Mac, string? SuggestionId)> SuggestedSelections => [.. _suggestedSelections];
+
+    public IReadOnlyList<string> Dismissals => [.. _dismissals];
+
+    public IReadOnlyList<string> Restorations => [.. _restorations];
+
+    public IReadOnlyList<(Guid Id, VerdictRequest Request)> Verdicts => [.. _verdicts];
 
     public int UndoCalls => Volatile.Read(ref _undoCalls);
 
@@ -75,11 +106,19 @@ public sealed class FakeOperatorApi : IOperatorApi
         return Task.FromResult(ApiResult<SensorTimeline>.Success(Timeline(macAddress)));
     }
 
-    public Task<ApiResult<Command>> IssueCommandAsync(string macAddress, CommandAction action, double? level, CancellationToken cancellationToken = default)
+    public Task<ApiResult<Command>> IssueCommandAsync(
+        string macAddress, CommandAction action, double? level, string? suggestionId = null, CancellationToken cancellationToken = default)
     {
         _commands.Enqueue((macAddress, action, level));
 
-        return Task.FromResult(ApiResult<Command>.Success(Issue(macAddress, action, level)));
+        if (suggestionId is not null)
+        {
+            _suggested.Enqueue((macAddress, action, suggestionId));
+        }
+
+        return Task.FromResult(IssueProblem is { } problem
+            ? ApiResult<Command>.Failure(problem)
+            : ApiResult<Command>.Success(Issue(macAddress, action, level)));
     }
 
     public Task<ApiResult<ZonePreview>> PreviewZoneAsync(string zoneId, CommandAction action, double? level, CancellationToken cancellationToken = default)
@@ -119,11 +158,40 @@ public sealed class FakeOperatorApi : IOperatorApi
     public Task<ApiResult<IReadOnlyList<ActivityEntry>>> GetActivityAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult(ApiResult<IReadOnlyList<ActivityEntry>>.Success([]));
 
-    public Task<ApiProblem?> RecordSelectionAsync(string macAddress, CancellationToken cancellationToken = default)
+    public Task<ApiProblem?> RecordSelectionAsync(string macAddress, string? suggestionId = null, CancellationToken cancellationToken = default)
     {
         _selections.Enqueue(macAddress);
 
+        if (suggestionId is not null)
+        {
+            _suggestedSelections.Enqueue((macAddress, suggestionId));
+        }
+
         return Task.FromResult<ApiProblem?>(null);
+    }
+
+    public Task<ApiResult<SuggestionsUpdate>> DismissSuggestionAsync(string id, CancellationToken cancellationToken = default)
+    {
+        _dismissals.Enqueue(id);
+
+        return Task.FromResult(Dismiss(id));
+    }
+
+    public Task<ApiResult<SuggestionsUpdate>> RestoreSuggestionAsync(string id, CancellationToken cancellationToken = default)
+    {
+        _restorations.Enqueue(id);
+
+        return Task.FromResult(Restore(id));
+    }
+
+    public Task<ApiResult<IReadOnlyList<InvestigationDetails>>> GetOpenInvestigationsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(ApiResult<IReadOnlyList<InvestigationDetails>>.Success(OpenInvestigations()));
+
+    public Task<ApiResult<InvestigationDetails>> GiveVerdictAsync(Guid id, VerdictRequest request, CancellationToken cancellationToken = default)
+    {
+        _verdicts.Enqueue((id, request));
+
+        return Task.FromResult(Verdict(id, request));
     }
 }
 
@@ -237,6 +305,10 @@ public abstract class StreamComponentTests : IAsyncLifetime
         Services.AddSingleton<ICommandFeed>(Rig.Commands);
         Services.AddSingleton<ITelemetryStream>(Rig.Stream);
         Services.AddSingleton<IPipelineFeed>(Rig.Pipeline);
+        // On the fake clock, so a test can say when a highlight ends. The rig's own feed is on the real one.
+        Suggestions = new SuggestionFeed(Rig.Connection, Rig.Snapshots, Time, Rig.Options);
+        Services.AddSingleton<ISuggestionFeed>(Suggestions);
+        Services.AddSingleton(new SuggestionActions(Api, Rig.State));
         Services.AddSingleton<IChartSizing>(new FixedChartSizing());
         Services.AddSingleton<IDeviceFeedFactory>(new DeviceFeedFactory(Rig.Connection, Rig.Snapshots, TimeProvider.System, Rig.Options));
 
@@ -250,6 +322,8 @@ public abstract class StreamComponentTests : IAsyncLifetime
     }
 
     protected ClientRig Rig { get; }
+
+    protected SuggestionFeed Suggestions { get; }
 
     protected IRenderedComponent<TComponent> Render<TComponent>(Action<ComponentParameterCollectionBuilder<TComponent>>? parameters = null)
         where TComponent : Microsoft.AspNetCore.Components.IComponent => _context.Render(parameters);
@@ -287,10 +361,12 @@ public abstract class StreamComponentTests : IAsyncLifetime
         await Rig.Trust.StartAsync();
         await Rig.Alerts.StartAsync();
         await Rig.Commands.StartAsync();
+        await Suggestions.StartAsync();
 
         await ClientRig.UntilAsync(
-            () => Rig.Trust.Current.IsLoaded && Rig.Alerts.Current.IsLoaded && Rig.Commands.Current.IsLoaded,
+            () => Rig.Trust.Current.IsLoaded && Rig.Alerts.Current.IsLoaded && Rig.Commands.Current.IsLoaded && Suggestions.Current.IsLoaded,
             "the feeds' snapshots");
+        await ListeningAsync(Rig, RealtimeMethods.SuggestionsUpdated);
         await ListeningAsync(Rig, RealtimeMethods.CommandChanged);
     }
 
@@ -336,6 +412,7 @@ public abstract class StreamComponentTests : IAsyncLifetime
     {
         await _context.DisposeAsync();
         await Stream.DisposeAsync();
+        await Suggestions.DisposeAsync();
         await Rig.DisposeAsync();
     }
 }

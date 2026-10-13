@@ -1,0 +1,151 @@
+@implements IAsyncDisposable
+@inject ISuggestionFeed Feed
+@inject IOperatorApi Api
+@inject AppState AppState
+@inject CommandStreamOptions Options
+@inject TimeProvider Time
+
+@* Automated Insights: the devices to look at before anyone searches for them. First what is projected to go wrong, with its time,
+   then what is already wrong. A projection is a straight line fitted to a node's recent trust and is only raised when the fit
+   is good and the fall is steep enough; the working is one click away. Every state has a word and an icon as well as a colour. *@
+<MudPaper Outlined="true" Class="pa-3" role="region" aria-label="Automated Insights">
+    <div class="smartx-stream__header">
+        <MudText Typo="Typo.h6" HtmlTag="h2">Automated Insights</MudText>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">Anticipated faults first, then what is wrong now.</MudText>
+    </div>
+
+    @if (!State.IsLoaded && State.Problem is not null)
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="mt-2" role="status">
+            Insights are not available: @State.Problem.Message
+        </MudAlert>
+    }
+    else if (!State.IsLoaded)
+    {
+        <div aria-hidden="true"><MudSkeleton Height="56px" Class="mt-2" /><MudSkeleton Height="56px" Class="mt-2" /></div>
+    }
+    else if (State.Insights.Count == 0)
+    {
+        <EmptyState Icon="@Icons.Material.Outlined.Insights"
+                    Title="Nothing needs attention"
+                    Text="Waiting for a node's trust to start falling, or for an alert. A device appears here before you would have searched for it." />
+    }
+    else
+    {
+        <ul class="smartx-insights" aria-label="Insights, anticipated first" aria-live="polite">
+            @foreach (var insight in State.Insights)
+            {
+                var anticipated = insight.Kind == InsightKind.Anticipated;
+                var colour = anticipated ? "#fab219" : "#d03b3b";
+                var icon = anticipated ? Icons.Material.Filled.TrendingDown : Icons.Material.Filled.ReportProblem;
+                var word = anticipated ? "Anticipated" : "Now";
+
+                <li class="@(IsNew(insight.Id) ? "smartx-insight smartx-insight--new" : "smartx-insight")" @key="insight.Id" style="--smartx-status: @colour">
+                    <div class="smartx-insight__head">
+                        <span class="smartx-status" style="--smartx-status: @colour">
+                            <MudIcon Icon="@icon" Size="Size.Small" aria-hidden="true" />
+                            <span>@word</span>
+                        </span>
+                        <strong>@insight.Headline</strong>
+                        @if (IsNew(insight.Id))
+                        {
+                            <span class="smartx-suggestion__new">
+                                <MudIcon Icon="@Icons.Material.Filled.NewReleases" Size="Size.Small" aria-hidden="true" />
+                                <span>New</span>
+                            </span>
+                        }
+                    </div>
+
+                    <p class="smartx-insight__detail">@SuggestionPresentation.Countdown(insight, Time.GetUtcNow())</p>
+
+                    @if (!anticipated && insight.Reasons.Count > 1)
+                    {
+                        <ul class="smartx-insight__reasons">
+                            @foreach (var reason in insight.Reasons)
+                            {
+                                <li>@reason</li>
+                            }
+                        </ul>
+                    }
+                    else if (anticipated)
+                    {
+                        <details class="smartx-insight__working">
+                            <summary>How this was worked out</summary>
+                            <ul>
+                                @foreach (var reason in insight.Reasons)
+                                {
+                                    <li>@reason</li>
+                                }
+                            </ul>
+                        </details>
+                    }
+
+                    <div class="smartx-insight__actions">
+                        <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.OpenInNew"
+                                   OnClick="() => Open(insight)" aria-label="@($"Open {insight.Room}")">Open @insight.Room</MudButton>
+
+                        @if (insight.InvestigationId is { } investigation)
+                        {
+                            <a class="smartx-insight__link" href="#investigation-@investigation">Review the investigation</a>
+                        }
+                    </div>
+                </li>
+            }
+        </ul>
+    }
+</MudPaper>
+
+@code {
+    private ITimer? _tick;
+    private ITimer? _highlightTimer;
+
+    private SuggestionFeedState State => Feed.Current;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Feed.Updated += OnFeedChanged;
+
+        // The countdown is worked out on this page from the moment the server projected, so it has to be drawn again as time
+        // passes, and a quiet page would otherwise keep saying "about 6 minutes" for ten.
+        _tick = Time.CreateTimer(_ => _ = InvokeAsync(StateHasChanged), null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
+        ScheduleHighlightEnd();
+
+        await Feed.StartAsync();
+    }
+
+    private bool IsNew(string id) => SuggestionPresentation.IsNew(State.Arrivals, id, Time.GetUtcNow(), Options.ArrivalHighlight);
+
+    private void OnFeedChanged()
+    {
+        ScheduleHighlightEnd();
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void ScheduleHighlightEnd()
+    {
+        _highlightTimer?.Dispose();
+        _highlightTimer = null;
+
+        if (SuggestionPresentation.HighlightEnds(State.Arrivals, Time.GetUtcNow(), Options.ArrivalHighlight) is { } remaining)
+        {
+            _highlightTimer = Time.CreateTimer(_ => _ = InvokeAsync(StateHasChanged), null, remaining + TimeSpan.FromMilliseconds(50), Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private void Open(Insight insight)
+    {
+        AppState.SelectStreamDevice(insight.MacAddress);
+
+        // A deliberate click on a device, which is what the pattern analysis learns from. Not awaited, for the reason the device list gives.
+        _ = Api.RecordSelectionAsync(insight.MacAddress);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Feed.Updated -= OnFeedChanged;
+        _tick?.Dispose();
+        _highlightTimer?.Dispose();
+
+        await Feed.StopAsync();
+    }
+}

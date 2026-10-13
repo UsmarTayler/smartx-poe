@@ -1,0 +1,143 @@
+@implements IAsyncDisposable
+@inject ISuggestionFeed Feed
+@inject SuggestionActions Actions
+@inject CommandStreamOptions Options
+@inject TimeProvider Time
+
+@* Suggested Actions: what the system thinks the operator is likely to want to do now, before they search for it. Ranked, each with
+   what to do, why, what the pattern rests on and where it came from, and one click. Seeded evidence says it is seeded. The list
+   changes by push, without a reload, and a new arrival is outlined and says "New" for a few seconds. When there is nothing to
+   suggest the panel says what it is waiting for, so an empty panel does not look like a broken one. *@
+<MudPaper Outlined="true" Class="pa-3" role="region" aria-label="Suggested Actions">
+    <div class="smartx-stream__header">
+        <MudText Typo="Typo.h6" HtmlTag="h2">Suggested Actions</MudText>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">Ranked by how much more likely than usual, how reliable, how severe and how recent.</MudText>
+    </div>
+
+    @if (_message is not null)
+    {
+        <MudAlert Severity="@(_failed ? Severity.Warning : Severity.Success)" Dense="true" Variant="Variant.Outlined" Class="mt-2" role="status">@_message</MudAlert>
+    }
+
+    @if (State.Problem is not null && !State.IsLoaded)
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="mt-2" role="status">
+            Suggestions are not available: @State.Problem.Message
+        </MudAlert>
+    }
+    else if (!State.IsLoaded)
+    {
+        <div aria-hidden="true"><MudSkeleton Height="96px" Class="mt-2" /><MudSkeleton Height="96px" Class="mt-2" /></div>
+    }
+    else if (State.Suggestions.Count == 0)
+    {
+        <EmptyState Icon="@Icons.Material.Outlined.Lightbulb"
+                    Title="Nothing to suggest right now"
+                    Text="Waiting for a trigger: a reading crossing a watch level, an alert being raised, or a node's trust falling. A suggestion appears here the moment one fires." />
+    }
+    else
+    {
+        <ol class="smartx-suggestions" aria-label="Suggested actions, best first" aria-live="polite">
+            @foreach (var suggestion in State.Suggestions)
+            {
+                <SuggestionCard @key="suggestion.Id"
+                                Suggestion="suggestion"
+                                IsNew="IsNew(suggestion.Id)"
+                                ArrivedAt="ArrivedAt(suggestion.Id)"
+                                Busy="_busy.Contains(suggestion.Id)"
+                                OnAccept="AcceptAsync"
+                                OnNotUseful="NotUsefulAsync" />
+            }
+        </ol>
+    }
+
+    @if (State.Dismissed.Count > 0)
+    {
+        <details class="smartx-suggestions__dismissed mt-3">
+            <summary>Marked not useful (@State.Dismissed.Count)</summary>
+            <ul>
+                @foreach (var dismissed in State.Dismissed.Take(DismissedShown))
+                {
+                    <li @key="dismissed.Suggestion.Id">
+                        <span>@dismissed.Suggestion.What <span class="mud-text-secondary">· weight now @dismissed.WeightAfter.ToString("P0")</span></span>
+                        <MudButton Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Undo"
+                                   OnClick="() => UndoAsync(dismissed.Suggestion)"
+                                   aria-label="@($"Take back: not useful, {dismissed.Suggestion.What}")">Take back</MudButton>
+                    </li>
+                }
+            </ul>
+        </details>
+    }
+</MudPaper>
+
+@code {
+    private const int DismissedShown = 5;
+
+    private readonly HashSet<string> _busy = new(StringComparer.Ordinal);
+    private ITimer? _highlightTimer;
+    private string? _message;
+    private bool _failed;
+
+    private SuggestionFeedState State => Feed.Current;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Feed.Updated += OnFeedChanged;
+        ScheduleHighlightEnd();
+
+        await Feed.StartAsync();
+    }
+
+    private bool IsNew(string id) => SuggestionPresentation.IsNew(State.Arrivals, id, Time.GetUtcNow(), Options.ArrivalHighlight);
+
+    private DateTimeOffset? ArrivedAt(string id) => State.Arrivals.TryGetValue(id, out var at) ? at : null;
+
+    private void OnFeedChanged()
+    {
+        ScheduleHighlightEnd();
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>Draws the page again when the newest highlight runs out, so a card stops being "New" without anything else happening.</summary>
+    private void ScheduleHighlightEnd()
+    {
+        _highlightTimer?.Dispose();
+        _highlightTimer = null;
+
+        if (SuggestionPresentation.HighlightEnds(State.Arrivals, Time.GetUtcNow(), Options.ArrivalHighlight) is { } remaining)
+        {
+            _highlightTimer = Time.CreateTimer(_ => _ = InvokeAsync(StateHasChanged), null, remaining + TimeSpan.FromMilliseconds(50), Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private async Task AcceptAsync(Suggestion suggestion) => await RunAsync(suggestion, Actions.AcceptAsync);
+
+    private async Task NotUsefulAsync(Suggestion suggestion) => await RunAsync(suggestion, Actions.NotUsefulAsync);
+
+    private async Task UndoAsync(Suggestion suggestion) => await RunAsync(suggestion, Actions.UndoAsync);
+
+    private async Task RunAsync(Suggestion suggestion, Func<Suggestion, Task<SuggestionOutcome>> action)
+    {
+        _busy.Add(suggestion.Id);
+
+        try
+        {
+            var outcome = await action(suggestion);
+
+            _message = outcome.Message;
+            _failed = !outcome.Succeeded;
+        }
+        finally
+        {
+            _busy.Remove(suggestion.Id);
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Feed.Updated -= OnFeedChanged;
+        _highlightTimer?.Dispose();
+
+        await Feed.StopAsync();
+    }
+}
