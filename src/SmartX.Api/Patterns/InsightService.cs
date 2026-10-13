@@ -119,6 +119,9 @@ internal sealed class InsightService : BackgroundService
 
     private readonly Lock _gate = new();
     private readonly Dictionary<string, Anticipation> _anticipated = new(StringComparer.Ordinal);
+    // Problems that were only alerts and have just cleared, kept on the list for a little while. See ForecastOptions.CurrentHold.
+    private readonly Lock _holdGate = new();
+    private readonly Dictionary<string, (Insight Insight, DateTimeOffset At)> _held = new(StringComparer.Ordinal);
     private IReadOnlyList<Insight> _current = [];
     private IReadOnlyList<Insight> _published = [];
 
@@ -420,7 +423,52 @@ internal sealed class InsightService : BackgroundService
                 builder.InvestigationId));
         }
 
+        HoldRecentlyCleared(insights, now);
+
         return [.. insights.OrderByDescending(insight => insight.Severity).ThenBy(insight => insight.Since).ThenBy(insight => insight.MacAddress, StringComparer.Ordinal).Take(_options.MaxCurrentInsights)];
+    }
+
+    /// <summary>Keeps a problem that was only an alert on the list for a while after it clears, and forgets it when the time is up.</summary>
+    private void HoldRecentlyCleared(List<Insight> insights, DateTimeOffset now)
+    {
+        if (_options.CurrentHold <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        lock (_holdGate)
+        {
+            var present = new HashSet<string>(insights.Select(insight => insight.MacAddress), StringComparer.Ordinal);
+
+            foreach (var insight in insights)
+            {
+                if (insight.Band != TrustBand.Fault && insight.InvestigationId is null)
+                {
+                    _held[insight.MacAddress] = (insight, now);
+                }
+                else
+                {
+                    _held.Remove(insight.MacAddress);
+                }
+            }
+
+            foreach (var (mac, held) in _held.ToList())
+            {
+                if (present.Contains(mac))
+                {
+                    continue;
+                }
+
+                if (now - held.At < _options.CurrentHold)
+                {
+                    insights.Add(held.Insight);
+                }
+                else
+                {
+                    _held.Remove(mac);
+                }
+            }
+        }
     }
 
     private static string Headline(Builder builder, TrustBand band)

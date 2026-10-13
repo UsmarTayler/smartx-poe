@@ -385,7 +385,7 @@ public class InsightServiceTests : IAsyncLifetime
     }
 
     [Fact]
-    public void A_cleared_alert_is_no_longer_listed()
+    public void A_cleared_alert_leaves_the_list_once_it_has_been_quiet_for_the_hold()
     {
         var key = new AlertKey(MoistC, AlertKind.OutOfRange);
         _mesh.Alerts.Raise(key, "out");
@@ -393,9 +393,48 @@ public class InsightServiceTests : IAsyncLifetime
         Assert.NotNull(Current(MoistC));
 
         _mesh.Alerts.Clear(key);
+        _clock.Advance(TimeSpan.FromSeconds(31));
         _insights.Pass();
 
         Assert.Null(Current(MoistC));
+    }
+
+    [Fact]
+    public void A_problem_that_was_only_an_alert_stays_listed_for_a_while_after_it_clears_so_the_list_does_not_flicker()
+    {
+        var key = new AlertKey(MoistC, AlertKind.OutOfRange);
+        _mesh.Alerts.Raise(key, "out");
+        _insights.Pass();
+        var before = _changes;
+
+        _mesh.Alerts.Clear(key);
+        _clock.Advance(TimeSpan.FromSeconds(10));
+        _insights.Pass();
+
+        Assert.NotNull(Current(MoistC));
+
+        // Raised again inside the hold: the same insight, nothing announced.
+        _mesh.Alerts.Raise(key, "out");
+        _insights.Pass();
+
+        Assert.NotNull(Current(MoistC));
+        Assert.Equal(before, _changes);
+    }
+
+    [Fact]
+    public void A_node_in_fault_is_not_held_after_it_recovers()
+    {
+        Healthy();
+        FailUntilFault();
+
+        for (var index = 0; index < 400 && Band(MoistB) == TrustBand.Fault; index++)
+        {
+            Record(TrustOutcome.Success);
+        }
+
+        _insights.Pass();
+
+        Assert.Null(Current());
     }
 
     [Fact]

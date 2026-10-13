@@ -73,6 +73,15 @@ public sealed class ForecastOptions
     /// <remarks>The projection is recomputed every pass and drifts with every sample. A countdown that is re-sent every five seconds is noise.</remarks>
     public TimeSpan EtaChange { get; set; } = TimeSpan.FromSeconds(45);
 
+    /// <summary>How long a problem that is only an alert stays listed after the alert clears.</summary>
+    /// <remarks>
+    /// A sensor that sends the odd wrong reading raises an alert, clears it a few good readings later, and raises it again, so a list
+    /// that follows it exactly would have the device appear and disappear every few seconds. Held for a little while after it clears,
+    /// it appears once, stays, and goes when it has really been quiet. A node in Fault, or with an open investigation, is not held:
+    /// those end because something happened, not because a count ran out.
+    /// </remarks>
+    public TimeSpan CurrentHold { get; set; } = TimeSpan.FromSeconds(30);
+
     /// <summary>The most current problems listed. The most severe are kept.</summary>
     public int MaxCurrentInsights { get; set; } = 25;
 
@@ -110,7 +119,7 @@ internal static class ForecastOptionsValidation
             yield return "Forecast:MinRecentFallRatio must be between 0 and 1.";
         }
 
-        if (options.EtaChange < TimeSpan.Zero || options.MaxCurrentInsights < 1 || options.MaxAnticipatedInsights < 1)
+        if (options.EtaChange < TimeSpan.Zero || options.CurrentHold < TimeSpan.Zero || options.MaxCurrentInsights < 1 || options.MaxAnticipatedInsights < 1)
         {
             yield return "Forecast:EtaChange cannot be negative and the insight limits must be at least 1.";
         }
