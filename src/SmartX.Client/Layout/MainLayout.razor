@@ -51,10 +51,14 @@
         <NavMenu />
     </MudDrawer>
 
+    @* MudMainContent renders a div, so the page's one main landmark is declared here. Without it a screen reader's "jump to main
+       content" has nowhere to go, and every control on the page sits outside any landmark. *@
     <MudMainContent>
-        <MudContainer MaxWidth="MaxWidth.Large" Class="py-6 px-3 px-sm-6">
-            @Body
-        </MudContainer>
+        <main>
+            <MudContainer MaxWidth="MaxWidth.Large" Class="py-6 px-3 px-sm-6">
+                @Body
+            </MudContainer>
+        </main>
     </MudMainContent>
 </MudLayout>
 
