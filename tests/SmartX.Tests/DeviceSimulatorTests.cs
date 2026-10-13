@@ -330,6 +330,32 @@ public class DeviceSimulatorTests
     }
 
     [Fact]
+    public async Task A_fouling_probe_is_backfilled_as_healthy_so_its_fall_is_still_to_come()
+    {
+        using var api = DemoApi();
+        var http = api.CreateClient();
+        var fleet = new DeviceFleet(
+            Gateway(http),
+            Microsoft.Extensions.Options.Options.Create(new SimulatorOptions()),
+            TimeProvider.System,
+            new NoopHostLifetime(),
+            NullLogger<DeviceFleet>.Instance);
+
+        await fleet.RegisterFleetForTestAsync();
+
+        var probe = fleet.DevicesForTest.Single(device => device.Scenario == SimulationScenario.Fouling);
+        var posted = await fleet.BackfillDeviceAsync(probe, DateTimeOffset.UtcNow, CancellationToken.None);
+
+        await ApiTestHost.DrainAsync(http, expectedProcessed: posted);
+
+        var trust = (await http.GetFromJsonAsync<List<NodeTrustSnapshot>>("/api/trust"))!.Single(node => node.MacAddress == probe.MacAddress);
+
+        Assert.True(posted > 50);
+        Assert.Equal(0, trust.RecentFailures);
+        Assert.NotEqual(TrustBand.Fault, trust.Band);
+    }
+
+    [Fact]
     public async Task A_gateway_restart_is_recovered_from_by_registering_the_whole_fleet_including_silent_devices()
     {
         // The gateway keeps its device list in memory, so a restart wipes it while the fleet is still running.

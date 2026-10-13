@@ -186,7 +186,21 @@ internal sealed class SuggestionService : BackgroundService, ISuggestionService
                 _live.RemoveAt(0);
             }
 
-            _live.Add(new LiveTrigger(++_nextTrigger, trigger));
+            var live = new LiveTrigger(++_nextTrigger, trigger);
+
+            _live.Add(live);
+
+            // Most triggers have no pattern, and a trigger with none cannot change what is suggested. Asking once says so, and the
+            // rest of the live triggers are not walked for it. The sweep brings the ranking up to date as triggers age.
+            var version = _patterns.LearnedVersion;
+
+            if (_patterns.Predict(trigger.Kind, trigger.Detail, trigger.MacAddress, _time.GetUtcNow()).Associations.Count == 0)
+            {
+                live.EmptyAtVersion = version;
+
+                return;
+            }
+
             changed = RecomputeLocked();
         }
 
