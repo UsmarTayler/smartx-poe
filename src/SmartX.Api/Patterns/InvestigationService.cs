@@ -66,6 +66,12 @@ internal sealed class InvestigationService(
     private readonly List<Record> _ordered = [];
     private readonly Dictionary<Guid, Record> _byId = [];
 
+    /// <summary>
+    /// Raised when an investigation opens, resolves, or is given a verdict. Outside the service's lock, so a subscriber may
+    /// ask the service a question. For whatever shows investigations live, which this class does not know exists.
+    /// </summary>
+    public event Action? Changed;
+
     public Task StartAsync(CancellationToken cancellationToken)
     {
         trust.FaultEntered += OnFaultEntered;
@@ -95,6 +101,15 @@ internal sealed class InvestigationService(
         }
 
         return [.. snapshot.Select(Details)];
+    }
+
+    /// <summary>The open investigations, without the detail a page of one needs. For a list that only has to say which devices.</summary>
+    public IReadOnlyList<(Guid Id, string MacAddress, DateTimeOffset OpenedAt)> Open()
+    {
+        lock (_gate)
+        {
+            return [.. _ordered.Where(record => record.Status == InvestigationStatus.Open).Select(record => (record.Id, record.Mac, record.OpenedAt))];
+        }
     }
 
     /// <summary>One investigation.</summary>
@@ -157,6 +172,7 @@ internal sealed class InvestigationService(
 
         // The operator did something about a fault, which is exactly what the pattern engine exists to learn.
         patterns.RecordAction(new OperatorAction(OperatorActionKind.Verdict, record.Mac, request.Verdict.ToString(), now));
+        Changed?.Invoke();
 
         return new VerdictResult(VerdictOutcome.Recorded, Details(record), null);
     }
@@ -206,11 +222,14 @@ internal sealed class InvestigationService(
                 _ordered.RemoveAt(index);
             }
         }
+
+        Changed?.Invoke();
     }
 
     private void OnFaultCleared(TrustTransition transition)
     {
         var now = time.GetUtcNow();
+        var resolved = false;
 
         lock (_gate)
         {
@@ -220,7 +239,13 @@ internal sealed class InvestigationService(
             {
                 record.Status = InvestigationStatus.Resolved;
                 record.ResolvedAt = now;
+                resolved = true;
             }
+        }
+
+        if (resolved)
+        {
+            Changed?.Invoke();
         }
     }
 
