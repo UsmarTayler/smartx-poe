@@ -8,6 +8,17 @@ New entries are appended at the end using the [template](#entry-template). Part 
 updates made from Parts 1 and 2 feedback. This file is that list, kept while the work happens instead of
 reconstructed afterwards.
 
+## Lecturer feedback on Part 1
+
+> **PLACEHOLDER: to be filled in by the author.** Nothing under this heading has been written yet, and nothing in this file claims
+> to answer the lecturer's feedback. Paste each point of the lecturer's Part 1 feedback here, verbatim, one per row, and say which
+> update below answered it, or that it was not acted on and why. Entries U1 to U12 each name their own source (a review of the
+> code, a test, a live run); none of them is recorded as lecturer feedback, because that has not been supplied.
+
+| # | Feedback, verbatim | Answered by | Notes |
+| --- | --- | --- | --- |
+| 1 | _not yet filled in_ | | |
+
 ## Summary
 
 | # | Date | Area | Change | Commit |
@@ -24,6 +35,14 @@ reconstructed afterwards.
 | [U10](#u10-the-command-log-grew-without-bound) | 2026-10-04 | Commands, history | Move the command log into the retained history store | `d2039dc` |
 | [U11](#u11-one-timing-test-could-fail-a-cold-first-run) | 2026-10-07 | Tests | Keep wall-clock assertions out of the default run | `a06eec1` |
 | [U12](#u12-the-telemetry-page-made-one-request-per-sensor) | 2026-10-08 | Telemetry, client | Load every sensor's recent readings in one request | `21a315e` |
+| [U13](#u13-a-gateway-error-was-shown-as-an-answer) | 2026-10-07 | Client | Treat 502 and 504 from the web server as the API being unreachable | `34ceca0` |
+| [U14](#u14-the-baseline-for-lift-counted-occurrences-not-time) | 2026-10-07 | Patterns | Measure the lift baseline as the time an action's windows cover | `3fb9dc1` |
+| [U15](#u15-the-general-level-compared-a-pump-with-every-pump) | 2026-10-07 | Patterns | Give the general level a baseline per zone | `2c7c61f` |
+| [U16](#u16-one-click-was-learned-as-twelve-for-twelve) | 2026-10-13 | Patterns | Credit an action to the latest trigger of each kind | `ff6dd24` |
+| [U17](#u17-the-forecast-could-not-see-a-fall-that-began-after-a-flat-stretch) | 2026-10-13 | Insights | Forecast from the most recent straight stretch of a trust series | `bbbde6f` |
+| [U18](#u18-suggestions-deadlocked-with-the-device-index) | 2026-10-13 | Suggestions | Take engine events from an inbox so ranking never meets the index lock | `96c4320` |
+| [U19](#u19-compose-would-not-start-without-an-env-file) | 2026-10-13 | Docker | Default the development key so a fresh clone starts with no `.env` | `ae8a4e1` |
+| [U20](#u20-accessibility-findings-in-the-light-theme) | 2026-10-13 | Client | Contrast, names, landmarks and live regions found by an axe pass | `b62dccc`, `5c23e63`, `7b5e0fc`, `3bd34b4`, `718d7e0` |
 
 ---
 
@@ -385,12 +404,206 @@ and that every card still has its readings.
 
 ---
 
+## U13. A gateway error was shown as an answer
+
+**Source:** found in a live run of Prompt 12 (real-time push), with the API stopped behind nginx
+
+**What was wrong.** The client treated a refused connection as "the API is unreachable" and kept the last data on screen. With the
+API down behind nginx, nginx answers `502 Bad Gateway` (or `504`), which is an HTTP response, so the client took it as the API's
+answer and showed "Bad Gateway" in place of the data.
+
+**Why it mattered.** The same fact, said by a different party, produced a different and worse behaviour: the panel lost its last
+known state exactly when an operator most needed it. Navigation and recovery behaviour are assessed.
+
+**What changed.** `SmartXApiClient` maps 502 and 504 to the unreachable result. 503 is deliberately not included, because the API
+itself uses it to say a queue is full. A test covers the gateway error.
+
+- `src/SmartX.Client/Services/SmartXApiClient.cs`
+- `tests/SmartX.Tests/ClientRealtimeTests.cs`
+
+**Commit:** `34ceca0` fix(client): treat 502 and 504 as the API being unreachable
+
+---
+
+## U14. The baseline for lift counted occurrences, not time
+
+**Source:** found by running the brief's example in Docker in Prompt 14, which failed
+
+**What was wrong.** Lift compares how often an action follows a trigger with how likely the action is in any window anyway. The first
+baseline counted how many times the action happened and turned that into a Poisson chance. Three opens of a device in ten seconds
+counted as three occurrences, which inflated "likely anyway".
+
+**Why it mattered.** The example the brief describes came out with a lift of 0.65, below one, so the engine said the trigger made
+no difference and the pattern never qualified. A baseline that depends on how bursty an operator is does not measure the thing it
+claims to.
+
+**What changed.** The baseline is now the share of time that falls within a window of an occurrence of the action. A burst covers one
+window, constant activity covers everything, and an action seen now and then covers a window each time. Both the covered time and the
+watching time fade with the same half-life. The cost, stated in the README: an engine that has watched for only a few windows cannot
+yet show much lift, so it needs hours at the default window. Qualified associations also sort ahead of unqualified ones, because lift
+alone cannot order them once counts fade together.
+
+- `src/SmartX.Api/Patterns/PatternEngine.cs`
+- `src/SmartX.Api/Patterns/PatternOptions.cs`
+- `tests/SmartX.Tests/PatternEngineTests.cs`
+
+**Commit:** `3fb9dc1` fix(patterns): measure the baseline for lift as the time an action's windows cover
+
+---
+
+## U15. The general level compared a pump with every pump
+
+**Source:** found by the same Docker run as U14, after it
+
+**What was wrong.** The engine learns at two levels: a specific device, and a general kind of device ("a pump"). The general
+baseline was how often any pump in the mesh was opened. A pump opened constantly in another zone made every pump look as if it
+followed everything.
+
+**Why it mattered.** A real pattern was hidden (lift 1.07 where it should have been several times that), and the "similar devices"
+suggestion that depends on it would never have appeared where it is useful.
+
+**What changed.** The general action is now a kind of device in a zone ("a pump in Zone 1"), which has its own baseline, built from
+the same recursive zone walk Part 1 uses. The support tolerance moved into `Patterns:SupportTolerance` so it can be configured and
+validated. A general pairing is counted only for an action in the same group as the trigger, which is a stated limit.
+
+- `src/SmartX.Api/Patterns/PatternEngine.cs`
+- `src/SmartX.Api/Patterns/PatternOptions.cs`
+- `tests/SmartX.Tests/PatternEngineTests.cs`
+- `tests/SmartX.Tests/PatternEndpointTests.cs`
+
+**Commit:** `2c7c61f` fix(patterns): give the general level a baseline per zone
+
+---
+
+## U16. One click was learned as twelve for twelve
+
+**Source:** found in a Docker run of Prompt 15: the operator's own click on a device appeared as a habit that had held "12 of 12 times"
+
+**What was wrong.** An action was paired with every trigger still in the window. A noisy sensor had fired twelve times in ten
+minutes, so one click was credited to all twelve firings, and the evidence read twelve out of twelve.
+
+**Why it mattered.** One response to a noisy sensor looked like a perfect habit, so the suggestion ranked far above what the evidence
+supports, and an explanation that says "12 of 12" is a false statement.
+
+**What changed.** An action answers each kind of trigger once: it is credited to the latest firing of each kind in the window. Every
+firing is still counted as a trigger, which is what makes a noisy sensor's confidence low, as it should be. This changed Prompt 14's
+pairing rule, and the engine benchmark was unchanged. Four tests cover it.
+
+- `src/SmartX.Api/Patterns/PatternEngine.cs`
+- `src/SmartX.Client/CommandStream/SuggestionPresentation.cs`
+- `tests/SmartX.Tests/PatternReplayTests.cs`
+
+**Commit:** `ff6dd24` fix(patterns): credit an action to the latest trigger of each kind
+
+---
+
+## U17. The forecast could not see a fall that began after a flat stretch
+
+**Source:** found by running the forecast against a simulated fouling probe in the Docker stack, in Prompt 15
+
+**What was wrong.** The first forecast fitted one line to the whole four-minute window of a node's trust samples. A node that is fine
+and then starts to fall is a hockey stick, and one line through both parts fits badly (R² 0.04 to 0.5) for as long as the flat part
+is in the window, which is exactly when an operator wants to know. It showed nothing for the first minutes of every fall.
+
+**Why it mattered.** The point of the feature is to flag a node before it faults. The tests passed because their series were straight
+lines from the first sample, which real nodes are not.
+
+**What changed.** The forecaster tries the whole window and its most recent three quarters, half and third (never fewer than the
+minimum samples), and of those that clear every bar it takes the longest whose fit is within 0.02 of the best. A steady fall is judged
+on the whole window and a fall that has only just begun on the part that is falling. A flat series, too few samples, a flattening
+fall and a reversal are tested, and a host test drives the real sampler. A straight line still cannot know that a fall will level
+off, which is stated in the README.
+
+- `src/SmartX.Api/Patterns/TrustForecaster.cs`
+- `src/SmartX.Api/Patterns/InsightService.cs`
+- `tests/SmartX.Tests/TrustForecasterTests.cs`
+- `tests/SmartX.Tests/TrustSamplingHostTests.cs`
+
+**Commit:** `bbbde6f` feat(insights): forecast from the most recent straight stretch of a trust series
+
+---
+
+## U18. Suggestions deadlocked with the device index
+
+**Source:** found in the Docker stack in Prompt 15: `/api/suggestions` stopped answering, and the forecast never appeared there although it did in tests and in a local run
+
+**What was wrong.** The suggestion service handled the pattern engine's events on whichever thread raised them. The alert set raises
+its changes inside the lock it shares with the device index, and an alert is a trigger, so the engine could be told something while
+that lock was held. Ranking asks the index about devices while holding the service's own lock. Two threads took the two locks in
+opposite orders and both waited for ever.
+
+**Why it mattered.** It hung a request endpoint, and only under real concurrency, which the single-threaded tests never produced.
+
+**What changed.** The handlers only post the event to an inbox and return holding nothing, and one loop works through it, so no
+thread holds one lock while asking for the other. Tests run the service inline (`processInline`) for determinism, and a regression test
+has one thread raise 3,000 triggers from inside the index's lock while another ranks 3,000 times: a deadlock is a test that does not
+finish. The same sweep serialised a stale write in the insight service, where a refresh could publish an older picture after a
+newer pass.
+
+- `src/SmartX.Api/Patterns/SuggestionService.cs`
+- `src/SmartX.Api/Patterns/InsightService.cs`
+- `tests/SmartX.Tests/SuggestionServiceTests.cs`
+
+**Commit:** `96c4320` fix(suggestions): take events from an inbox so ranking never meets the index lock
+
+---
+
+## U19. Compose would not start without an env file
+
+**Source:** the final-pass fresh-clone check in Prompt 16: a clone with no `.env`, as a marker would have
+
+**What was wrong.** `docker-compose.yml` required `SMARTX_ATTACHMENT_KEY` and stopped with "copy .env.example to .env" when it was
+missing. `.env` is gitignored, so on a clone the first `docker compose up` always failed. It had only ever worked here because a
+local `.env` existed.
+
+**Why it mattered.** The brief asks for explicit instructions that work, and a marker's first command is the one they judge by.
+
+**What changed.** Compose defaults the key to the development key already published in the README and `.env.example`. That adds no
+exposure, since the key is already public, and the API already logs a warning when it is used outside Development. `.env` is now
+optional, and the README quick start says so. Everything else in compose already had a default.
+
+- `docker-compose.yml`
+- `.env.example`
+
+**Commit:** `ae8a4e1` fix(docker): start without a .env by defaulting the development key
+
+---
+
+## U20. Accessibility findings in the light theme
+
+**Source:** one axe-core pass per route in the light theme (Playwright, Edge), in Prompt 16
+
+**What was wrong.** Serious or critical: success and warning text failed 4.5:1 contrast on a light surface (the Open and active-alert
+chips); accessible names did not contain the visible text on the trust rows (55) and the "Show decay window" buttons, which breaks
+voice control; device rows were buttons with `role="listitem"` and `aria-pressed`, which ARIA does not allow. Moderate: no `<main>`
+landmark, an unlabelled `<nav>`, zoom disabled in the viewport meta, a heading level skipped on the telemetry card, no `h1` on the
+not-found page. The live regions for suggestions, insights and alerts were created together with their first item, so a screen reader
+would not announce it, and pinned critical readings had no live region at all.
+
+**Why it mattered.** Navigation and accessibility are assessed, and the live regions are how "new suggestions and alerts appear
+without a reload" reaches someone who cannot see them.
+
+**What changed.** Darker success and warning in the light palette only; names that mirror the visible text; the list item as a wrapper
+around the button; a `<main>`, a nav label, zoom allowed; the heading fixes; and always-rendered `aria-live` wrappers (polite for
+suggestions, insights and alerts, assertive for pinned critical readings, with `aria-relevant="additions"` so a ticking counter is not
+re-read). The live stream of every reading stays `aria-live="off"` on purpose. Six tests hold the live regions, the name and the
+roles in place. One finding is left: a second `<nav>` inside MudBlazor's own nav group (moderate, in the library's markup).
+
+- `src/SmartX.Client/Theme/SmartXTheme.cs`
+- `src/SmartX.Client/Layout/MainLayout.razor`, `NavMenu.razor`, `wwwroot/index.html`
+- `src/SmartX.Client/Components/**` (the trust row, the device panel, the investigation card and the four live-region panels)
+- `tests/SmartX.Tests/AccessibilityTests.cs`
+
+**Commits:** `b62dccc` colour, `5c23e63` names and roles, `7b5e0fc` landmarks and zoom, `3bd34b4` live regions, `718d7e0` headings
+
+---
+
 ## Entry template
 
 ```markdown
-## U13. Short title of the problem
+## U21. Short title of the problem
 
-**Source:** where the feedback came from (lecturer feedback on Part 1, code review, testing)
+**Source:** how it was found: lecturer feedback on Part 1, code review, a test, a live run
 
 **What was wrong.** The behaviour or code as it was, specifically enough to find it.
 
