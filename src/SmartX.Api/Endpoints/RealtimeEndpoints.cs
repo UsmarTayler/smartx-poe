@@ -35,6 +35,7 @@ internal static class RealtimeEndpoints
         realtime.MapGet("/commands", Commands).WithName("GetCommandSnapshot");
         realtime.MapGet("/pipeline", Pipeline).WithName("GetPipelineSnapshot");
         realtime.MapGet("/stream", Stream).WithName("GetStreamSnapshot");
+        realtime.MapGet("/suggestions", Suggestions).WithName("GetSuggestionsSnapshot");
         realtime.MapGet("/device/{mac}", DeviceAsync).WithName("GetDeviceSnapshot");
 
         return api;
@@ -70,6 +71,8 @@ internal static class RealtimeEndpoints
     }
 
     private static IResult Stream(RealtimeBroadcaster broadcaster) => Results.Ok(broadcaster.GetStreamSnapshot());
+
+    private static IResult Suggestions(RealtimeBroadcaster broadcaster) => Results.Ok(broadcaster.GetSuggestionsSnapshot());
 
     /// <summary>One device's recent readings with the sequence of its <c>device:{mac}</c> topic.</summary>
     /// <remarks>

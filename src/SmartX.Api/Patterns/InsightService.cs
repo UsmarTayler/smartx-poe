@@ -21,7 +21,7 @@ namespace SmartX.Api.Patterns;
 /// domain events, so nothing is missed between construction and start.
 /// </para>
 /// </remarks>
-internal sealed class TrustSampler : IDisposable
+internal sealed class TrustSampler : IHostedService, IDisposable
 {
     private readonly ITrustEngine _trust;
     private readonly IHistoryStore _history;
@@ -65,6 +65,12 @@ internal sealed class TrustSampler : IDisposable
             _history.Append(HistoryEntry.FromTrustSample(_arrival.Next(), snapshot.EvaluatedAt, macAddress, snapshot.Score));
         }
     }
+
+    // Hosted only so that the host builds it when it starts: it subscribes in its constructor, and a singleton nobody asks for is
+    // never built.
+    public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     public void Dispose() => _trust.NodeEvaluated -= OnEvaluated;
 }

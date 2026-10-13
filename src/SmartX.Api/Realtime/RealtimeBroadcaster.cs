@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using SmartX.Api.Alerts;
 using SmartX.Api.Commands;
 using SmartX.Api.Ingestion;
+using SmartX.Api.Patterns;
 using SmartX.Api.Trust;
 using SmartX.Shared;
 
@@ -47,6 +48,12 @@ namespace SmartX.Api.Realtime;
 /// ticks up, that is a counter and not news, so those are coalesced like trust.
 /// </description></item>
 /// <item><description>
+/// <b>Suggestions and insights are immediate, and never per reading.</b> They are recomputed when something that
+/// changes them happens (a trigger, an action, a dismissal, a trend crossing the forecast bar) and announced when the
+/// set or order changed. A new suggestion is the point of the system, and a delay for a batch would be a delay to the
+/// operator. Each message carries the whole list, so a lost one is replaced by the next.
+/// </description></item>
+/// <item><description>
 /// <b>Pipeline statistics are periodic</b>, once a second, because they are a gauge.
 /// </description></item>
 /// </list>
@@ -67,6 +74,8 @@ internal sealed class RealtimeBroadcaster : BackgroundService
     private readonly AlertTracker _alerts;
     private readonly CommandService _commands;
     private readonly ProcessedReadings _processed;
+    private readonly ISuggestionService _suggestions;
+    private readonly InsightService _insights;
     private readonly TelemetryIngestionQueue _queue;
     private readonly IHubContext<TelemetryHub, ITelemetryClient> _hub;
     private readonly RealtimeSubscriptions _subscriptions;
@@ -103,6 +112,8 @@ internal sealed class RealtimeBroadcaster : BackgroundService
         AlertTracker alerts,
         CommandService commands,
         ProcessedReadings processed,
+        ISuggestionService suggestions,
+        InsightService insights,
         TelemetryIngestionQueue queue,
         IHubContext<TelemetryHub, ITelemetryClient> hub,
         RealtimeSubscriptions subscriptions,
@@ -114,6 +125,8 @@ internal sealed class RealtimeBroadcaster : BackgroundService
         _alerts = alerts;
         _commands = commands;
         _processed = processed;
+        _suggestions = suggestions;
+        _insights = insights;
         _queue = queue;
         _hub = hub;
         _subscriptions = subscriptions;
@@ -133,6 +146,8 @@ internal sealed class RealtimeBroadcaster : BackgroundService
         _alerts.Changed += OnAlertChanged;
         _commands.Changed += OnCommandChanged;
         _processed.Processed += OnReadingProcessed;
+        _suggestions.Changed += OnSuggestionsChanged;
+        _insights.Changed += OnSuggestionsChanged;
     }
 
     // ---- sequence numbers and snapshots --------------------------------------------------------------------
@@ -166,6 +181,23 @@ internal sealed class RealtimeBroadcaster : BackgroundService
         var sequence = SequenceOf(RealtimeTopics.Stream);
 
         return new StreamSnapshot(sequence, [.. _latest.Values.OrderBy(reading => reading.MacAddress, StringComparer.Ordinal)]);
+    }
+
+    /// <summary>The suggestions topic's sequence and what the suggestions and insights are, read in that order.</summary>
+    public SuggestionsUpdate GetSuggestionsSnapshot()
+    {
+        // The sequence first, then the state, as for every snapshot: a message numbered at or below it was built from state
+        // that is already in what is read next.
+        var sequence = SequenceOf(RealtimeTopics.Suggestions);
+
+        return BuildSuggestions(sequence);
+    }
+
+    private SuggestionsUpdate BuildSuggestions(long sequence)
+    {
+        var state = _suggestions.Current;
+
+        return new SuggestionsUpdate(sequence, state.Suggestions, _insights.Current, state.Dismissed, _time.GetUtcNow());
     }
 
     private long NextSequence(string topic)
@@ -223,6 +255,16 @@ internal sealed class RealtimeBroadcaster : BackgroundService
         }
 
         Enqueue(() => SendCommandAsync(command, commandEvent));
+    }
+
+    private void OnSuggestionsChanged()
+    {
+        if (!_subscriptions.Has(RealtimeTopics.Suggestions))
+        {
+            return;
+        }
+
+        Enqueue(SendSuggestionsAsync);
     }
 
     private void OnReadingProcessed(ProcessedReading reading)
@@ -296,6 +338,16 @@ internal sealed class RealtimeBroadcaster : BackgroundService
         var update = new AlertUpdate(NextSequence(RealtimeTopics.Alerts), upserted, cleared, stats);
 
         await _hub.Clients.Group(RealtimeTopics.Alerts).AlertsUpdated(update);
+    }
+
+    private async Task SendSuggestionsAsync()
+    {
+        // Read, then numbered, then sent. Each message is the whole picture, so two changes close together are two messages
+        // that agree with the state at the moment each was read, and the later one always wins.
+        var update = BuildSuggestions(0);
+        update = update with { Sequence = NextSequence(RealtimeTopics.Suggestions) };
+
+        await _hub.Clients.Group(RealtimeTopics.Suggestions).SuggestionsUpdated(update);
     }
 
     private async Task SendCommandAsync(Command command, CommandEvent commandEvent)
@@ -589,6 +641,8 @@ internal sealed class RealtimeBroadcaster : BackgroundService
         _alerts.Changed -= OnAlertChanged;
         _commands.Changed -= OnCommandChanged;
         _processed.Processed -= OnReadingProcessed;
+        _suggestions.Changed -= OnSuggestionsChanged;
+        _insights.Changed -= OnSuggestionsChanged;
 
         base.Dispose();
     }

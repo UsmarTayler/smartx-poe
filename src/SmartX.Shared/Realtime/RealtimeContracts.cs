@@ -28,6 +28,9 @@ public static class RealtimeTopics
     /// <summary>Every accepted reading across the mesh. Batched.</summary>
     public const string Stream = "stream";
 
+    /// <summary>Suggested actions and automated insights. Immediate when something new appears, and never per reading.</summary>
+    public const string Suggestions = "suggestions";
+
     /// <summary>The prefix of a per-device topic, followed by the device's MAC address.</summary>
     public const string DevicePrefix = "device:";
 
@@ -38,7 +41,7 @@ public static class RealtimeTopics
     public static bool IsDevice(string topic) => topic.StartsWith(DevicePrefix, StringComparison.Ordinal);
 
     /// <summary>The topics every client may join by name.</summary>
-    public static IReadOnlyList<string> Fixed { get; } = [Trust, Alerts, Commands, Pipeline, Stream];
+    public static IReadOnlyList<string> Fixed { get; } = [Trust, Alerts, Commands, Pipeline, Stream, Suggestions];
 }
 
 /// <summary>
@@ -58,6 +61,7 @@ public static class RealtimeMethods
     public const string CommandChanged = nameof(CommandChanged);
     public const string PipelineUpdated = nameof(PipelineUpdated);
     public const string ReadingsArrived = nameof(ReadingsArrived);
+    public const string SuggestionsUpdated = nameof(SuggestionsUpdated);
 
     // Client to server.
     public const string Subscribe = nameof(Subscribe);

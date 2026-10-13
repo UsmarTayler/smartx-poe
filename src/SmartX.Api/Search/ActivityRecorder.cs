@@ -33,6 +33,7 @@ internal sealed class ActivityRecorder(
     AlertTracker alerts,
     TimeProvider time,
     IPatternEngine patterns,
+    ISuggestionService suggestions,
     IOptions<PatternOptions> patternOptions)
 {
     /// <summary>Records a search that ran, and tells the pattern engine when it was narrow enough to be about particular devices.</summary>
@@ -86,7 +87,10 @@ internal sealed class ActivityRecorder(
             HistoryKind.Selection,
             new HistoryEventDetails($"Opened {room}", ActiveAlerts: alerts.ActiveKeys())));
 
-        patterns.RecordAction(new OperatorAction(OperatorActionKind.Viewed, macAddress, string.Empty, now));
+        // Opening a device that a suggestion pointed at is following advice, which the engine counts at a reduced weight.
+        var accepted = suggestions.TakeAcceptance(OperatorActionKind.Viewed, macAddress, string.Empty);
+
+        patterns.RecordAction(new OperatorAction(OperatorActionKind.Viewed, macAddress, string.Empty, now, FromSuggestion: accepted));
     }
 
     private static string Describe(DeviceSearchFilters filters, int resultCount)

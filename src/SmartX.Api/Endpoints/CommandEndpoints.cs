@@ -1,4 +1,5 @@
 using SmartX.Api.Commands;
+using SmartX.Api.Patterns;
 using SmartX.Api.Storage;
 using SmartX.Shared;
 
@@ -40,6 +41,7 @@ internal static class CommandEndpoints
         IssueCommandRequest request,
         ISensorRegistry registry,
         CommandService commands,
+        ISuggestionService suggestions,
         CancellationToken cancellationToken)
     {
         if (await registry.FindAsync(request.MacAddress, cancellationToken) is not { } sensor)
@@ -48,6 +50,13 @@ internal static class CommandEndpoints
                 statusCode: StatusCodes.Status404NotFound,
                 title: "Sensor not registered",
                 detail: $"No sensor is registered with MAC address '{request.MacAddress}'.");
+        }
+
+        // A command sent by accepting a suggestion goes down exactly this path, validation and all. The only difference is that the
+        // suggestion is told first, so the engine can count the command as advice followed and not as a habit.
+        if (request.SuggestionId is { } suggestionId)
+        {
+            suggestions.Accept(suggestionId);
         }
 
         var issue = commands.Issue(sensor, request.Action, request.Level);

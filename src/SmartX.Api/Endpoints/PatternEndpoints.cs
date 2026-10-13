@@ -135,7 +135,7 @@ internal static class PatternEndpoints
     }
 
     /// <summary>Records that an operator opened a device. The client sends it on a deliberate click, so each one is real.</summary>
-    private static IResult RecordSelection(SelectionRequest request, DeviceDirectory devices, ActivityRecorder activity)
+    private static IResult RecordSelection(SelectionRequest request, DeviceDirectory devices, ActivityRecorder activity, ISuggestionService suggestions)
     {
         if (request is null
             || !MacAddressValidator.TryNormalise(request.MacAddress, out var mac)
@@ -145,6 +145,12 @@ internal static class PatternEndpoints
                 statusCode: StatusCodes.Status404NotFound,
                 title: "Device not found",
                 detail: "No sensor is registered with that address.");
+        }
+
+        // Registered before the selection is recorded, so the recorder can tell this one was made by following a suggestion.
+        if (request.SuggestionId is { } suggestionId)
+        {
+            suggestions.Accept(suggestionId);
         }
 
         activity.RecordSelection(mac, profile.Room);

@@ -220,4 +220,5 @@ public sealed record VerdictRequest(Verdict Verdict, FaultCause? Cause = null);
 
 /// <summary>An operator opening a device, as the client reports it.</summary>
 /// <param name="MacAddress">The device that was opened.</param>
-public sealed record SelectionRequest(string MacAddress);
+/// <param name="SuggestionId">The suggestion the operator accepted by opening it, when they did.</param>
+public sealed record SelectionRequest(string MacAddress, string? SuggestionId = null);
