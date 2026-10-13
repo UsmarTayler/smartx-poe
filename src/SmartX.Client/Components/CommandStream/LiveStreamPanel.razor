@@ -38,6 +38,8 @@
         }
     </MudText>
 
+    @* Assertive, because a critical reading is the one thing on this page that should interrupt. It is bounded: a reading is pinned once, and the lane it took is the priority lane, so this is not the firehose below, which is aria-live="off" on purpose. *@
+    <div aria-live="assertive" aria-relevant="additions">
     @if (_pinned.Count > 0)
     {
         <ul class="smartx-pinned" aria-label="Critical readings">
@@ -62,6 +64,7 @@
             }
         </ul>
     }
+    </div>
 
     @if (_rows.Count == 0)
     {

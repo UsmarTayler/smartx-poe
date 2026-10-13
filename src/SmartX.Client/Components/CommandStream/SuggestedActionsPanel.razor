@@ -19,6 +19,8 @@
         <MudAlert Severity="@(_failed ? Severity.Warning : Severity.Success)" Dense="true" Variant="Variant.Outlined" Class="mt-2" role="status">@_message</MudAlert>
     }
 
+    @* A live region has to be in the page before its content arrives, or a screen reader will not announce what is added to it: so this wrapper is always rendered, and the list, the empty state and the loading state come and go inside it. "additions" announces a new item once and stays quiet while an existing one's numbers tick. *@
+    <div aria-live="polite" aria-relevant="additions">
     @if (State.Problem is not null && !State.IsLoaded)
     {
         <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="mt-2" role="status">
@@ -37,7 +39,7 @@
     }
     else
     {
-        <ol class="smartx-suggestions" aria-label="Suggested actions, best first" aria-live="polite">
+        <ol class="smartx-suggestions" aria-label="Suggested actions, best first">
             @foreach (var suggestion in State.Suggestions)
             {
                 <SuggestionCard @key="suggestion.Id"
@@ -50,6 +52,7 @@
             }
         </ol>
     }
+    </div>
 
     @if (State.Dismissed.Count > 0)
     {
