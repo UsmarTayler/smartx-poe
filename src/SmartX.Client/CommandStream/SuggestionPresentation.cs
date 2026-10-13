@@ -13,8 +13,12 @@ namespace SmartX.Client.CommandStream;
 /// </remarks>
 public static class SuggestionPresentation
 {
-    /// <summary>The longest gap between a trigger and a suggestion arriving that is worth saying. Past it the clocks are more likely wrong than the network is slow.</summary>
-    private static readonly TimeSpan LongestLatency = TimeSpan.FromMinutes(2);
+    /// <summary>
+    /// The longest gap between a trigger and a suggestion arriving that is worth saying. Past it the suggestion did not arrive because
+    /// of the trigger: it was ranked below the top few until a place opened, or the clocks disagree, and "arrived 15 s after the
+    /// trigger" would be a statement about the network that is not true.
+    /// </summary>
+    private static readonly TimeSpan LongestLatency = TimeSpan.FromSeconds(5);
 
     /// <summary>How long a suggestion took to reach this page after its trigger, in words, or null when it cannot be said honestly.</summary>
     /// <remarks>
@@ -145,6 +149,6 @@ public static class SuggestionPresentation
     /// <summary>What a dismissal did to detection, in words. Null when it changed nothing.</summary>
     public static string? SensitivityNote(InvestigationDetails investigation) =>
         investigation.SensitivityChange is { } change
-            ? $"Detection of {Blamed(change.Outcome)} on this node is {change.After:0.00} of what it was (it was {change.Before:0.00}). Changing the verdict gives it back."
+            ? $"This node's weight for {Blamed(change.Outcome)} went from {change.Before:0.00} to {change.After:0.00}, so it needs a little more evidence to be called a fault. Changing the verdict gives that back."
             : null;
 }

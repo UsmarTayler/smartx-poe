@@ -179,6 +179,75 @@ public class PatternReplayTests
         Assert.Empty(All(engine, T0));
     }
 
+    // ---- one action answers a kind of trigger once ------------------------------------------------------------------
+
+    [Fact]
+    public void One_action_after_a_sensor_that_fired_twelve_times_is_one_response_and_not_twelve()
+    {
+        var engine = Engine();
+
+        // A sensor hovering about its level fires again and again inside the window, and the operator does one thing.
+        for (var index = 0; index < 12; index++)
+        {
+            engine.RecordTrigger(Low(MoistB, T0 + TimeSpan.FromSeconds(index * 30)));
+        }
+
+        engine.RecordAction(View(PumpA, T0 + TimeSpan.FromMinutes(7)));
+
+        var found = Specific(engine, T0 + TimeSpan.FromMinutes(8));
+
+        Assert.Equal(1, found.Times);
+        Assert.Equal(12, found.TriggerTimes);
+        Assert.False(found.Qualified);
+        Assert.True(found.Confidence < 0.2, $"Confidence was {found.Confidence}.");
+    }
+
+    [Fact]
+    public void The_action_is_credited_to_the_latest_firing_so_a_later_response_to_a_later_firing_still_counts()
+    {
+        var engine = Engine();
+
+        engine.RecordTrigger(Low(MoistB, T0));
+        engine.RecordAction(View(PumpA, T0 + TimeSpan.FromMinutes(1)));
+
+        // The sensor fires again before the first has left the window, and is answered again.
+        engine.RecordTrigger(Low(MoistB, T0 + TimeSpan.FromMinutes(2)));
+        engine.RecordAction(View(PumpA, T0 + TimeSpan.FromMinutes(3)));
+
+        Assert.Equal(2, Specific(engine, T0 + TimeSpan.FromMinutes(4)).Times);
+    }
+
+    [Fact]
+    public void The_same_action_repeated_after_one_firing_is_still_one_response()
+    {
+        var engine = Engine();
+
+        engine.RecordTrigger(Low(MoistB, T0));
+        engine.RecordAction(View(PumpA, T0 + TimeSpan.FromMinutes(1)));
+        engine.RecordAction(View(PumpA, T0 + TimeSpan.FromMinutes(2)));
+        engine.RecordAction(View(PumpA, T0 + TimeSpan.FromMinutes(3)));
+
+        Assert.Equal(1, Specific(engine, T0 + TimeSpan.FromMinutes(4)).Times);
+    }
+
+    [Fact]
+    public void Several_sensors_of_a_kind_in_a_zone_crossing_together_are_one_response_at_the_general_level()
+    {
+        var engine = Engine();
+
+        engine.RecordTrigger(Low(MoistB, T0));
+        engine.RecordTrigger(Low(MoistC, T0 + TimeSpan.FromSeconds(10)));
+        engine.RecordTrigger(Low(MoistE, T0 + TimeSpan.FromSeconds(20)));
+        engine.RecordAction(View(PumpA, T0 + TimeSpan.FromMinutes(1)));
+
+        var general = Assert.Single(
+            All(engine, T0 + TimeSpan.FromMinutes(2), new PatternQuery(MacAddress: MoistE, Level: PatternLevel.General)),
+            found => found.Action.Target.StartsWith("Actuator/Pump", StringComparison.Ordinal));
+
+        Assert.Equal(1, general.Times);
+        Assert.Equal(3, general.TriggerTimes);
+    }
+
     // ---- what an accepted suggestion teaches ------------------------------------------------------------------------
 
     private static PatternEngine WithHabit(Action<PatternOptions>? configure = null)

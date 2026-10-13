@@ -205,6 +205,10 @@ internal sealed class PatternEngine : IPatternEngine
     private readonly Dictionary<string, string> _scopeLabels = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _targetLabels = new(StringComparer.Ordinal);
 
+    // Reused by every action, under the lock: the latest trigger of each kind in the window. See LearnAction.
+    private readonly Dictionary<TriggerKey, TriggerInstance> _latestSpecific = [];
+    private readonly Dictionary<TriggerKey, TriggerInstance> _latestGeneral = [];
+
     private long _nextInstance;
     private long _learnedVersion;
     private int _pairs;
@@ -415,20 +419,35 @@ internal sealed class PatternEngine : IPatternEngine
             _targetLabels.TryAdd(target, $"{profile!.ClassLabel} in {profile.GeneralZoneName}");
         }
 
-        // Every trigger still in the window is a candidate cause. foreach on a Queue<T> uses its struct enumerator,
-        // so the walk allocates nothing.
+        // Every trigger still in the window is a candidate cause, but an action answers each kind of trigger once. A sensor that
+        // fires a dozen times in ten minutes, and an operator who does one thing in that time, is one response to a noisy sensor
+        // and not twelve: crediting the action to every firing would make a single click look like a habit that held twelve times
+        // out of twelve. So the latest firing of each kind is found (the queue is oldest first, so a later one replaces an earlier
+        // one in the scratch dictionary, which is reused so the walk allocates nothing once it is warm) and the action is paired
+        // with those. Every firing is still counted as a trigger, which is what makes the noisy sensor's confidence low, as it should be.
+        _latestSpecific.Clear();
+        _latestGeneral.Clear();
+
         foreach (var instance in _window)
         {
-            Pair(instance, instance.Specific, specific, weight, now, seeded);
+            _latestSpecific[instance.Specific] = instance;
 
             // The general pattern is about a kind of device in the same zone. An action on a device somewhere else
             // is not evidence for it, though it can still be evidence at the specific level.
-            if (general is { } generalAction
-                && instance.General is { } generalTrigger
-                && instance.GeneralZone == profile!.GeneralZoneId)
+            if (general is not null && instance.General is { } generalTrigger && instance.GeneralZone == profile!.GeneralZoneId)
             {
-                Pair(instance, generalTrigger, generalAction, weight, now, seeded);
+                _latestGeneral[generalTrigger] = instance;
             }
+        }
+
+        foreach (var (trigger, instance) in _latestSpecific)
+        {
+            Pair(instance, trigger, specific, weight, now, seeded);
+        }
+
+        foreach (var (trigger, instance) in _latestGeneral)
+        {
+            Pair(instance, trigger, general!.Value, weight, now, seeded);
         }
     }
 

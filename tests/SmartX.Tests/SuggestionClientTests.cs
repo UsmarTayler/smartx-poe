@@ -274,7 +274,7 @@ public class SuggestionPresentationTests
         var suggestion = SuggestionKit.Make("a");
 
         Assert.Null(SuggestionPresentation.Latency(suggestion, suggestion.TriggeredAt.AddSeconds(-1)));
-        Assert.Null(SuggestionPresentation.Latency(suggestion, suggestion.TriggeredAt.AddMinutes(10)));
+        Assert.Null(SuggestionPresentation.Latency(suggestion, suggestion.TriggeredAt.AddSeconds(16)));
     }
 
     [Theory]
@@ -336,9 +336,9 @@ public class SuggestionPresentationTests
 
         var note = SuggestionPresentation.SensitivityNote(investigation);
 
-        Assert.Contains("0.85", note, StringComparison.Ordinal);
+        Assert.Contains("from 1.00 to 0.85", note, StringComparison.Ordinal);
         Assert.Contains("readings outside the registered range", note, StringComparison.Ordinal);
-        Assert.Contains("gives it back", note, StringComparison.Ordinal);
+        Assert.Contains("gives that back", note, StringComparison.Ordinal);
         Assert.Null(SuggestionPresentation.SensitivityNote(SuggestionKit.Investigation(Guid.NewGuid())));
     }
 
