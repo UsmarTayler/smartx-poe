@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using SmartX.Api.Patterns;
+using SmartX.Api.Search;
+using SmartX.Api.Storage;
 using SmartX.Shared;
 using static SmartX.Tests.PatternKit;
 
@@ -39,7 +41,8 @@ public class SuggestionServiceTests
                 Options.Create(suggestionOptions),
                 Options.Create(patternOptions),
                 clock,
-                NullLogger<SuggestionService>.Instance);
+                NullLogger<SuggestionService>.Instance,
+                processInline: true);
 
             var kit = new Kit { Engine = engine, Service = service, Clock = clock };
             service.Changed += () => kit.Changes++;
@@ -799,6 +802,81 @@ public class SuggestionServiceTests
         kit.Trigger(MoistB, "High");
 
         Assert.Contains("rose above 80", Open(kit).Why, StringComparison.Ordinal);
+    }
+
+    // ---- the locks it must not hold together ------------------------------------------------------------------------
+
+    [Fact]
+    public async Task An_event_raised_from_inside_the_device_indexs_lock_cannot_deadlock_with_ranking()
+    {
+        // The alert set raises its changes inside the lock it shares with the device index, and an alert is a trigger, so the engine
+        // can be told something while that lock is held. Ranking asks the index about devices while it holds its own lock. Done on the
+        // thread that raised the event, the two would wait for each other for ever. Here one thread raises triggers from inside the
+        // index's lock while another ranks, many times over; a deadlock is a test that does not finish.
+        var index = new DeviceIndex();
+
+        foreach (var device in DemoDevices.All)
+        {
+            Assert.True(device.Registration.TryCreateRegistration(out var registration, out _));
+            index.Register(registration);
+        }
+
+        var directory = new DeviceDirectory(index, Options.Create(new PatternOptions())) { Catalogue = new SmartX.Shared.ZoneCatalogue(DemoZoneHierarchy.Zones) };
+        var clock = new ManualTimeProvider(T0);
+        var engine = new PatternEngine(Options.Create(new PatternOptions()), directory);
+        var service = new SuggestionService(
+            engine, directory, Options.Create(new SuggestionOptions()), Options.Create(new PatternOptions()), clock, NullLogger<SuggestionService>.Instance);
+
+        engine.Replay(SeededHistory.Build(T0, new SeededHistoryOptions()));
+        await service.StartAsync(CancellationToken.None);
+
+        var freezer = DemoDevices.Mac(0x18);
+
+        var raising = Task.Run(() =>
+        {
+            for (var round = 0; round < 3_000; round++)
+            {
+                lock (index.Gate)
+                {
+                    engine.RecordTrigger(new TriggerEvent(TriggerKind.ThresholdCrossing, freezer, "High", T0.AddMilliseconds(round)));
+                }
+            }
+        });
+
+        var ranking = Task.Run(() =>
+        {
+            for (var round = 0; round < 3_000; round++)
+            {
+                service.Sweep();
+            }
+        });
+
+        await Task.WhenAll(raising, ranking).WaitAsync(TimeSpan.FromSeconds(30));
+
+        await service.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Events_are_worked_through_off_the_callers_thread_when_the_service_is_running()
+    {
+        var directory = Directory();
+        var clock = new ManualTimeProvider(T0);
+        var engine = new PatternEngine(Options.Create(new PatternOptions()), directory);
+        var service = new SuggestionService(
+            engine, directory, Options.Create(new SuggestionOptions()), Options.Create(new PatternOptions()), clock, NullLogger<SuggestionService>.Instance);
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        service.Changed += () => changed.TrySetResult();
+
+        engine.Replay(Habit(MoistB, PumpA, times: 5));
+        await service.StartAsync(CancellationToken.None);
+
+        engine.RecordTrigger(Low(MoistB, T0));
+
+        await changed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Contains(service.Current.Suggestions, found => found.What == "Open Pump A");
+
+        await service.StopAsync(CancellationToken.None);
     }
 
     [Fact]

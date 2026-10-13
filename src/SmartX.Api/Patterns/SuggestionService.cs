@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Threading.Channels;
 using System.Text;
 using Microsoft.Extensions.Options;
 using SmartX.Shared;
@@ -138,6 +139,17 @@ internal sealed class SuggestionService : BackgroundService, ISuggestionService
     // Acceptances waiting for the action they announced: kind, device, command, and when they lapse.
     private readonly Dictionary<(OperatorActionKind Kind, string Mac, string Command), DateTimeOffset> _accepted = [];
 
+    // What the engine has told us and nobody has processed yet. See OnTrigger.
+    private readonly Channel<Action> _inbox = Channel.CreateBounded<Action>(new BoundedChannelOptions(InboxCapacity)
+    {
+        SingleReader = true,
+        FullMode = BoundedChannelFullMode.DropWrite,
+    });
+
+    private readonly bool _inline;
+
+    private const int InboxCapacity = 20_000;
+
     private SuggestionState _state;
     private Dictionary<string, Candidate> _candidates = new(StringComparer.Ordinal);
     private long _nextTrigger;
@@ -148,8 +160,10 @@ internal sealed class SuggestionService : BackgroundService, ISuggestionService
         IOptions<SuggestionOptions> options,
         IOptions<PatternOptions> patternOptions,
         TimeProvider time,
-        ILogger<SuggestionService> logger)
+        ILogger<SuggestionService> logger,
+        bool processInline = false)
     {
+        _inline = processInline;
         _patterns = patterns;
         _devices = devices;
         _options = options.Value;
@@ -177,7 +191,33 @@ internal sealed class SuggestionService : BackgroundService, ISuggestionService
 
     // ---- what the engine tells us -------------------------------------------------------------------------------
 
-    private void OnTrigger(TriggerEvent trigger)
+    // The engine raises these on whatever thread told it, and that thread may be holding a lock of someone else's. The alert set
+    // raises its changes inside the lock it shares with the device index, and an alert is a trigger, so the engine can be told
+    // from inside that lock. Ranking needs that same index (to name a device and to find the pumps in a zone) while it holds this
+    // service's lock. If the two met, one thread would hold the index and wait for this service while the other held this
+    // service and waited for the index, and both would wait for ever. So the handlers only post the event to an inbox and return,
+    // holding nothing, and one loop works through it. A deadlock needs a thread that holds one lock and asks for another; the
+    // thread that raised the event never asks for anything here, and the loop holds no lock of anyone else's.
+    private void OnTrigger(TriggerEvent trigger) => Post(() => ApplyTrigger(trigger));
+
+    private void OnAction(OperatorAction action) => Post(() => ApplyAction(action));
+
+    private void Post(Action work)
+    {
+        if (_inline)
+        {
+            work();
+
+            return;
+        }
+
+        if (!_inbox.Writer.TryWrite(work))
+        {
+            _logger.LogWarning("The suggestion inbox is full ({Capacity}); an event was dropped. The next sweep will catch up.", InboxCapacity);
+        }
+    }
+
+    private void ApplyTrigger(TriggerEvent trigger)
     {
         bool changed;
 
@@ -224,7 +264,7 @@ internal sealed class SuggestionService : BackgroundService, ISuggestionService
         }
     }
 
-    private void OnAction(OperatorAction action)
+    private void ApplyAction(OperatorAction action)
     {
         // A search is weaker than opening a device and does not satisfy "open it".
         if (action.Kind is not (OperatorActionKind.Viewed or OperatorActionKind.Command))
@@ -263,7 +303,33 @@ internal sealed class SuggestionService : BackgroundService, ISuggestionService
 
     // ---- sweeping -----------------------------------------------------------------------------------------------
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
+        Task.WhenAll(RunInboxAsync(stoppingToken), RunSweepAsync(stoppingToken));
+
+    /// <summary>Works through what the engine has told this service, one at a time, in the order it was told.</summary>
+    private async Task RunInboxAsync(CancellationToken stoppingToken)
+    {
+        try
+        {
+            await foreach (var work in _inbox.Reader.ReadAllAsync(stoppingToken))
+            {
+                try
+                {
+                    work();
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    _logger.LogError(exception, "A suggestion could not be worked out. The next event will be tried.");
+                }
+            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // Normal shutdown.
+        }
+    }
+
+    private async Task RunSweepAsync(CancellationToken stoppingToken)
     {
         using var timer = new PeriodicTimer(_options.SweepInterval, _time);
 

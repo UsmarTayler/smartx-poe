@@ -36,7 +36,7 @@ public class SuggestionBenchmarkTests(ITestOutputHelper output)
         var clock = new FakeTimeProvider(T0);
         var engine = new PatternEngine(Options.Create(new PatternOptions()), directory);
         var service = new SuggestionService(
-            engine, directory, Options.Create(new SuggestionOptions()), Options.Create(new PatternOptions()), clock, NullLogger<SuggestionService>.Instance);
+            engine, directory, Options.Create(new SuggestionOptions()), Options.Create(new PatternOptions()), clock, NullLogger<SuggestionService>.Instance, processInline: true);
 
         engine.Replay(SeededHistory.Build(T0, new SeededHistoryOptions()));
 
@@ -97,7 +97,7 @@ public class SuggestionBenchmarkTests(ITestOutputHelper output)
         var clock = new FakeTimeProvider(T0);
         var engine = new PatternEngine(Options.Create(new PatternOptions()), directory);
         var service = new SuggestionService(
-            engine, directory, Options.Create(new SuggestionOptions()), Options.Create(new PatternOptions()), clock, NullLogger<SuggestionService>.Instance);
+            engine, directory, Options.Create(new SuggestionOptions()), Options.Create(new PatternOptions()), clock, NullLogger<SuggestionService>.Instance, processInline: true);
 
         engine.Replay(SeededHistory.Build(T0, new SeededHistoryOptions()));
         engine.RecordTrigger(new TriggerEvent(TriggerKind.ThresholdCrossing, DemoDevices.Hydroponics.MoistureSensorB, "Low", T0));

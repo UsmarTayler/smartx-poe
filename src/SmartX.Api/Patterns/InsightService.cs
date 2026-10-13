@@ -118,6 +118,11 @@ internal sealed class InsightService : BackgroundService
     private readonly ILogger<InsightService> _logger;
 
     private readonly Lock _gate = new();
+
+    // Held for a whole pass or refresh, from reading the world to publishing what was read. Without it a refresh that read the world a
+    // moment ago could publish after a pass that read it later, and put the older picture back. Taken only by the timer and the
+    // refresh worker, never from inside another component's lock, so it adds no order anyone else has to respect.
+    private readonly Lock _passGate = new();
     private readonly Dictionary<string, Anticipation> _anticipated = new(StringComparer.Ordinal);
     // Problems that were only alerts and have just cleared, kept on the list for a little while. See ForecastOptions.CurrentHold.
     private readonly Lock _holdGate = new();
@@ -222,6 +227,14 @@ internal sealed class InsightService : BackgroundService
     /// <summary>One forecast over every node, and a refresh of what is wrong now. Public to the tests and the benchmark.</summary>
     internal void Pass()
     {
+        lock (_passGate)
+        {
+            PassLocked();
+        }
+    }
+
+    private void PassLocked()
+    {
         var now = _time.GetUtcNow();
         var nodes = _trust.Snapshot();
         var forecast = _options.Enabled ? Forecast(nodes, now) : [];
@@ -245,12 +258,16 @@ internal sealed class InsightService : BackgroundService
     /// <summary>Refreshes what is wrong now, without refitting any lines.</summary>
     private void Refresh()
     {
-        var current = Currently(_trust.Snapshot(), _time.GetUtcNow());
         bool changed;
 
-        lock (_gate)
+        lock (_passGate)
         {
-            changed = PublishLocked(current);
+            var current = Currently(_trust.Snapshot(), _time.GetUtcNow());
+
+            lock (_gate)
+            {
+                changed = PublishLocked(current);
+            }
         }
 
         if (changed)
