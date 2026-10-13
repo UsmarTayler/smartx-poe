@@ -303,13 +303,14 @@ carries. The devices come only from the simulator.
 
 | Scenario | Behaviour | What it exercises | Demo fleet |
 | --- | --- | --- | --- |
-| `Nominal` | In-range readings at the registered interval | Successes | 36 devices |
+| `Nominal` | In-range readings at the registered interval | Successes | 35 devices |
 | `Drift` | Readings walk toward the top of the range, then hover across it | Range violations, gradually | 4 |
 | `Spike` | Mostly normal, with occasional values well outside the range | Range violations, intermittently | 4 |
 | `TypeViolation` | Mostly normal, with occasional wrong-typed payloads (`"ERR"`, `21.5` to an integer meter, `1` instead of `true`) | Schema failures | 4 |
 | `Critical` | Occasional extreme but valid readings: a power spike or a moisture crash | The priority queue | 2 |
 | `Disconnect` | Stops reporting entirely | Missed heartbeats | 4 |
 | `DryOut` | A cycle of falling slowly through the sensor's low watch level and recovering, every reading in range | The pattern engine's trigger, with no trust cost | 1 |
+| `Fouling` | A probe going bad: the share of wrong readings climbs from none to all over about seven minutes, holds, then clears | A trust fall steady enough to forecast | 1 |
 
 `Drift`, `Spike`, `Critical` and `DryOut` are about a measurement, and the hydroponics bay (Zone 6, seven devices) is where `DryOut` runs, on Moisture Sensor B. An actuator measures nothing (its
 state is whatever it was last commanded to), so an actuator can only run `Nominal`, `TypeViolation` or

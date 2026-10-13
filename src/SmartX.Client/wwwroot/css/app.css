@@ -477,6 +477,9 @@ h1:focus {
 /* Suggested actions, insights and investigations */
 .smartx-suggestions, .smartx-insights { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 10px; }
 
+/* Bounded, like the alert list: a mesh with many problems must not push everything else off the page. */
+.smartx-insights { max-height: 640px; overflow-y: auto; padding-right: 4px; }
+
 .smartx-suggestion, .smartx-insight, .smartx-investigation {
     border: 1px solid var(--mud-palette-lines-default);
     border-radius: 8px;

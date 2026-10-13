@@ -40,6 +40,14 @@ public sealed class SeededHistoryOptions
     /// <summary>How many devices were opened at random times, as the background of a working day.</summary>
     public int RandomOpens { get; set; } = 80;
 
+    /// <summary>How many times Pump A was opened as part of ordinary rounds, whether or not anything had happened.</summary>
+    /// <remarks>
+    /// What makes the example honest. A pump that was only ever opened after the sensor dropped would follow it a hundred times
+    /// more often than chance, and the evidence would read as a certainty. A pump that is looked at on rounds as well, about ten
+    /// times a day, follows the drop many times more often than chance and not infinitely: the lift is a ratio, and it is shown.
+    /// </remarks>
+    public int PumpARounds { get; set; } = 48;
+
     /// <summary>How many threshold crossings happened that nobody responded to.</summary>
     public int UnansweredTriggers { get; set; } = 30;
 
@@ -68,7 +76,7 @@ internal static class SeededHistoryValidation
             yield return "SeededHistory:BriefResponses must be between 0 and BriefTriggers, and BriefTriggers at least 1.";
         }
 
-        if (options.OtherHabitTriggers < 0 || options.RandomOpens < 0 || options.UnansweredTriggers < 0)
+        if (options.OtherHabitTriggers < 0 || options.RandomOpens < 0 || options.UnansweredTriggers < 0 || options.PumpARounds < 0)
         {
             yield return "SeededHistory counts cannot be negative.";
         }
@@ -182,6 +190,11 @@ internal static class SeededHistory
         for (var index = 0; index < options.RandomOpens; index++)
         {
             history.Add(View(everything[random.Next(everything.Count)], RandomTime(now, options, random)));
+        }
+
+        for (var index = 0; index < options.PumpARounds; index++)
+        {
+            history.Add(View(PumpA, RandomTime(now, options, random)));
         }
 
         // The device that is opened all the time: every few minutes for a day and a half. After any trigger it follows with

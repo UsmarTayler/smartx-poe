@@ -87,6 +87,52 @@ public class HydroponicsBayTests
     }
 
     [Fact]
+    public void The_nutrient_probe_is_the_one_that_fouls()
+    {
+        Assert.Equal(SimulationScenario.Fouling, Device("Nutrient EC Sensor").Scenario);
+        Assert.False(new SimulatedDevice(Device("Pump A")).Supports(SimulationScenario.Fouling));
+    }
+
+    [Theory]
+    [InlineData(0, 0.0)]
+    [InlineData(55, 0.5)]
+    [InlineData(109, 109.0 / 110)]
+    [InlineData(110, 1.0)]
+    [InlineData(139, 1.0)]
+    [InlineData(140, 0.0)]
+    [InlineData(219, 0.0)]
+    public void The_chance_of_a_wrong_reading_climbs_to_certain_holds_and_then_clears(int step, double expected)
+    {
+        Assert.Equal(expected, SimulatedDevice.FoulingChance(step), precision: 9);
+    }
+
+    [Fact]
+    public void A_fouling_probe_goes_wrong_more_and_more_often_over_a_cycle()
+    {
+        var definition = Device("Nutrient EC Sensor");
+        var device = new SimulatedDevice(definition);
+        var random = new Random(11);
+
+        // 220 readings from where it starts, 20 steps into the ramp: count the ones outside 0 to 5 in each fifth.
+        var wrong = new int[5];
+
+        for (var index = 0; index < 200; index++)
+        {
+            var value = device.NextReading(SimulationScenario.Fouling, random).GetDouble();
+
+            if (value is < 0 or > 5)
+            {
+                wrong[index / 40]++;
+            }
+        }
+
+        // Readings 1 to 40 are steps 21 to 60 of the ramp, and 81 to 120 are steps 101 to 140: far more wrong in the later ones.
+        Assert.True(wrong[0] < wrong[2], $"{string.Join(", ", wrong)}");
+        Assert.True(wrong[2] <= 40);
+        Assert.True(wrong[2] > 20);
+    }
+
+    [Fact]
     public void An_actuator_cannot_be_given_the_dry_out_scenario()
     {
         Assert.False(new SimulatedDevice(Device("Pump A")).Supports(SimulationScenario.DryOut));

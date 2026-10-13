@@ -53,6 +53,17 @@ internal sealed class SimulatedDevice(DemoDevice definition)
     // after the sensor starts, and a freshly started stack has a live trigger to show without anyone waiting for it.
     private int _cycle = 30;
 
+    // The fouling scenario is a cycle too: the share of readings that come back wrong climbs from none to all over the ramp,
+    // the probe stays fouled for a while, and then it is cleaned. A ramp of 110 readings is about seven minutes at the EC
+    // sensor's cadence, slow enough for a trend to show before the node is in Fault, and the whole cycle is about fifteen.
+    private const int FoulingCycle = 220;
+    private const int FoulingRamp = 110;
+    private const int FoulingStuck = 30;
+
+    // Twenty readings into the ramp, so a freshly started stack is already on its way down and the forecast has something to show
+    // within a few minutes of starting.
+    private int _foulingStep = 20;
+
     private double _position = 0.5;
 
     // An actuator's state, in the terms commands use: 1 for on or open, 0 for off or closed, a dimmer's level.
@@ -248,6 +259,23 @@ internal sealed class SimulatedDevice(DemoDevice definition)
                 position = CrashesLow ? 0.02 + random.NextDouble() * 0.02 : 0.96 + random.NextDouble() * 0.03;
                 break;
 
+            case SimulationScenario.Fouling:
+                _foulingStep = (_foulingStep + 1) % FoulingCycle;
+
+                if (random.NextDouble() < FoulingChance(_foulingStep))
+                {
+                    // Well clear of the range, as for a spike, so the gateway refuses it.
+                    var wrong = 0.15 + random.NextDouble() * 0.5;
+                    position = random.NextDouble() < 0.5 ? 1 + wrong : -wrong;
+                }
+                else
+                {
+                    _position = Math.Clamp(_position + Jitter(random, 0.03), NominalLow, NominalHigh);
+                    position = _position;
+                }
+
+                break;
+
             case SimulationScenario.DryOut:
                 // A fixed cycle and a little jitter: it is a bed drying out between waterings, not a fault, so every
                 // reading stays inside the range and the node stays trusted.
@@ -263,6 +291,10 @@ internal sealed class SimulatedDevice(DemoDevice definition)
 
         return Value(position);
     }
+
+    /// <summary>The chance that a reading is wrong at a step of the fouling cycle: rising to certain, held there, then none.</summary>
+    internal static double FoulingChance(int step) =>
+        step < FoulingRamp ? (double)step / FoulingRamp : step < FoulingRamp + FoulingStuck ? 1 : 0;
 
     /// <summary>Where a dry-out cycle is at a reading: a straight fall to the bottom, then a straight recovery to the top.</summary>
     private static double DryOutPosition(int index) =>

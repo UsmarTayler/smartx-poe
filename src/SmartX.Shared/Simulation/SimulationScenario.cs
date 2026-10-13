@@ -41,7 +41,17 @@ public enum SimulationScenario
     /// Every reading is inside the registered range, so nothing is refused and the node stays trusted. What it does is fall
     /// through the sensor's low watch level once a cycle, which is the trigger an operator responds to by running a pump.
     /// </remarks>
-    DryOut
+    DryOut,
+
+    /// <summary>
+    /// A probe that is slowly fouling: more and more of its readings come back wrong, until it is cleaned and starts again.
+    /// </summary>
+    /// <remarks>
+    /// Unlike a sensor that fails all at once, its trust falls steadily over several minutes before it reaches Fault, which
+    /// is the shape a forecast can see coming. The wrong readings are out of the registered range, so the gateway refuses
+    /// them and the trust engine counts them, as it would for hardware that was failing.
+    /// </remarks>
+    Fouling
 }
 
 /// <summary>The body of a POST to /api/simulation/{mac}/scenario.</summary>

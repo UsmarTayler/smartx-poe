@@ -92,7 +92,7 @@ public static class DemoDevices
         // registered 0 to 100 %, which makes the engine's 20 % watch level literally 20 %.
         Device(0x31, "Moisture Sensor A", "zone-6", "GW-B3", SensorCategory.Environmental, Percent, 0, 100, TelemetryPayloadKind.Real, 5, SimulationScenario.Nominal),
         Device(0x32, "Moisture Sensor B", "zone-6", "GW-B3", SensorCategory.Environmental, Percent, 0, 100, TelemetryPayloadKind.Real, 5, SimulationScenario.DryOut),
-        Device(0x33, "Nutrient EC Sensor", "zone-6", "GW-B3", SensorCategory.Environmental, Conductivity, 0, 5, TelemetryPayloadKind.Real, 5, SimulationScenario.Nominal),
+        Device(0x33, "Nutrient EC Sensor", "zone-6", "GW-B3", SensorCategory.Environmental, Conductivity, 0, 5, TelemetryPayloadKind.Real, 5, SimulationScenario.Fouling),
         Device(0x34, "Pump A", "zone-6", "GW-B3", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal, ActuatorKind.Pump),
         Device(0x35, "Pump B", "zone-6", "GW-B3", SensorCategory.Actuator, OnOff, 0, 1, TelemetryPayloadKind.State, 5, SimulationScenario.Nominal, ActuatorKind.Pump),
         Device(0x36, "Grow Light", "zone-6", "GW-B3", SensorCategory.Actuator, Percent, 0, 100, TelemetryPayloadKind.Integer, 5, SimulationScenario.Nominal, ActuatorKind.Dimmer),
