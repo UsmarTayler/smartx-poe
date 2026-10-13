@@ -424,7 +424,7 @@ internal sealed class InsightService : BackgroundService
                 builder.Reasons.Max(reason => reason.Severity),
                 band,
                 score,
-                builder.Reasons.Min(reason => reason.Since),
+                SinceOf(builder.Mac, builder.Reasons.Min(reason => reason.Since)),
                 null,
                 null,
                 builder.InvestigationId));
@@ -433,6 +433,23 @@ internal sealed class InsightService : BackgroundService
         HoldRecentlyCleared(insights, now);
 
         return [.. insights.OrderByDescending(insight => insight.Severity).ThenBy(insight => insight.Since).ThenBy(insight => insight.MacAddress, StringComparer.Ordinal).Take(_options.MaxCurrentInsights)];
+    }
+
+    // When each device first appeared in the list of current problems. A fault's own time is when it was last scored, which is
+    // every packet, and a list ordered by it would reshuffle itself on every pass and announce each shuffle.
+    private readonly Dictionary<string, DateTimeOffset> _firstListed = new(StringComparer.Ordinal);
+
+    private DateTimeOffset SinceOf(string mac, DateTimeOffset seen)
+    {
+        lock (_holdGate)
+        {
+            if (!_firstListed.TryGetValue(mac, out var first))
+            {
+                _firstListed[mac] = first = seen;
+            }
+
+            return first;
+        }
     }
 
     /// <summary>Keeps a problem that was only an alert on the list for a while after it clears, and forgets it when the time is up.</summary>
@@ -446,6 +463,12 @@ internal sealed class InsightService : BackgroundService
         lock (_holdGate)
         {
             var present = new HashSet<string>(insights.Select(insight => insight.MacAddress), StringComparer.Ordinal);
+
+            // A device that has gone from the list starts again the next time it comes back.
+            foreach (var mac in _firstListed.Keys.Where(mac => !present.Contains(mac) && !_held.ContainsKey(mac)).ToList())
+            {
+                _firstListed.Remove(mac);
+            }
 
             foreach (var insight in insights)
             {

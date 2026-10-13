@@ -373,6 +373,35 @@ public class InsightServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Two_nodes_in_fault_keep_their_order_while_both_keep_being_scored()
+    {
+        Healthy(mac: MoistB);
+        Healthy(mac: MoistC);
+
+        for (var index = 0; index < 400 && (Band(MoistB) != TrustBand.Fault || Band(MoistC) != TrustBand.Fault); index++)
+        {
+            Record(TrustOutcome.RangeViolation, MoistB);
+            Record(TrustOutcome.RangeViolation, MoistC);
+            _insights.Pass();
+        }
+
+        var order = _insights.Current.Where(insight => insight.Kind == InsightKind.Current).Select(insight => insight.MacAddress).ToList();
+        var before = _changes;
+
+        // Both are scored again and again, which moves the time each was last evaluated and nothing else.
+        for (var index = 0; index < 20; index++)
+        {
+            Record(TrustOutcome.RangeViolation, MoistB);
+            Record(TrustOutcome.RangeViolation, MoistC);
+            _insights.Pass();
+        }
+
+        Assert.Equal(2, order.Count);
+        Assert.Equal(order, _insights.Current.Where(insight => insight.Kind == InsightKind.Current).Select(insight => insight.MacAddress));
+        Assert.Equal(before, _changes);
+    }
+
+    [Fact]
     public void An_acknowledged_alert_counts_for_less()
     {
         var key = new AlertKey(MoistC, AlertKind.OutOfRange);
