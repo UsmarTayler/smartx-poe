@@ -74,6 +74,19 @@ public sealed class PatternOptions
     /// </remarks>
     public double SearchWeight { get; set; } = 0.4;
 
+    /// <summary>What an action counts for when the operator did it by accepting a suggestion, against one for an action of their own.</summary>
+    /// <remarks>
+    /// <b>Zero, because of the self-fulfilling prophecy.</b> If the engine suggests "turn on Pump A", and the operator
+    /// clicks it because it was suggested, counting that click as another time Pump A followed the trigger would make the
+    /// pattern stronger, which makes the suggestion rank higher, which gets it clicked more. The engine would be training on
+    /// its own advice, and a pattern that began as a coincidence would become a habit in the data without anyone having had it.
+    /// An action taken on the system's advice says the operator trusted the system, not that they had the habit, so by default
+    /// it teaches the engine nothing: it is not counted as following the trigger, and not counted as an occurrence of the
+    /// action either, because that would raise the baseline and push lift down. Raise it to let accepted suggestions count
+    /// for part of an action of the operator's own.
+    /// </remarks>
+    public double AcceptedSuggestionWeight { get; set; }
+
     /// <summary>The most devices a search can return and still be read as being about them.</summary>
     /// <remarks>
     /// "Pump A" finds one or two devices, and that is a search for them. A search for everything finds forty-eight, and
@@ -155,6 +168,11 @@ internal static class PatternOptionsValidation
         if (options.SearchWeight is <= 0 or > 1)
         {
             yield return "Patterns:SearchWeight must be above 0 and at most 1.";
+        }
+
+        if (options.AcceptedSuggestionWeight is < 0 or > 1)
+        {
+            yield return "Patterns:AcceptedSuggestionWeight must be between 0 and 1.";
         }
 
         if (options.MaxSearchResultsForAction < 1)

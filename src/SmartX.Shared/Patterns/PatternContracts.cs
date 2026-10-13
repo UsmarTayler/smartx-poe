@@ -71,6 +71,10 @@ public sealed record PatternAction(OperatorActionKind Kind, string Target, strin
 /// <param name="TriggerCount">How many times the trigger happened, decayed.</param>
 /// <param name="Baseline">The chance of the action in any window of the same length, regardless of the trigger.</param>
 /// <param name="Qualified">Whether it has enough support and lift to count as a pattern.</param>
+/// <param name="Times">How many times the action followed the trigger, undecayed: a count a person can read.</param>
+/// <param name="SeededTimes">How many of those were part of the seeded history and not observed.</param>
+/// <param name="TriggerTimes">How many times the trigger happened, undecayed.</param>
+/// <param name="SeededTriggerTimes">How many of those were part of the seeded history.</param>
 public sealed record PatternAssociation(
     PatternTrigger Trigger,
     PatternAction Action,
@@ -80,7 +84,11 @@ public sealed record PatternAssociation(
     double Lift,
     double TriggerCount,
     double Baseline,
-    bool Qualified);
+    bool Qualified,
+    int Times = 0,
+    int SeededTimes = 0,
+    int TriggerTimes = 0,
+    int SeededTriggerTimes = 0);
 
 /// <summary>The thresholds a pattern has to clear, so a client can show them and not guess.</summary>
 /// <param name="Window">How soon after a trigger an action counts as following it.</param>

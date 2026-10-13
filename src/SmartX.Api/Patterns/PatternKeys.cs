@@ -24,19 +24,59 @@ internal readonly record struct TriggerKey(PatternLevel Level, TriggerKind Kind,
 /// <param name="Command">The command's action, or the verdict, or empty.</param>
 internal readonly record struct ActionKey(PatternLevel Level, OperatorActionKind Kind, string Target, string Command);
 
+/// <summary>Where an event the engine learns from came from.</summary>
+/// <remarks>
+/// Kept on every event so that nothing synthetic can pass for something observed. The engine counts the two separately, and
+/// the evidence shown to an operator says how much of it is seeded.
+/// </remarks>
+internal enum EventSource
+{
+    /// <summary>Something that happened while the system was running.</summary>
+    Observed,
+
+    /// <summary>Part of the synthetic history replayed at start-up so the engine is not empty. See <c>PatternSeeder</c>.</summary>
+    Seeded
+}
+
 /// <summary>A trigger as the system reports it, before it has been given its keys.</summary>
 /// <param name="Kind">The sort of trigger.</param>
 /// <param name="MacAddress">The device it happened to.</param>
 /// <param name="Detail">Which one.</param>
 /// <param name="At">When it happened.</param>
-internal readonly record struct TriggerEvent(TriggerKind Kind, string MacAddress, string Detail, DateTimeOffset At);
+/// <param name="Source">Whether it was observed or seeded.</param>
+internal readonly record struct TriggerEvent(
+    TriggerKind Kind,
+    string MacAddress,
+    string Detail,
+    DateTimeOffset At,
+    EventSource Source = EventSource.Observed);
 
 /// <summary>An operator action as the system reports it, before it has been given its keys.</summary>
 /// <param name="Kind">Viewed, searched, command or verdict.</param>
 /// <param name="MacAddress">The device it was about.</param>
 /// <param name="Command">The command's action, or the verdict, or empty.</param>
 /// <param name="At">When it happened.</param>
-internal readonly record struct OperatorAction(OperatorActionKind Kind, string MacAddress, string Command, DateTimeOffset At);
+/// <param name="Source">Whether it was observed or seeded.</param>
+/// <param name="FromSuggestion">
+/// Whether the operator did it by accepting a suggestion. The engine counts that at a reduced weight, because an action taken
+/// on the system's advice is not evidence of the operator's own habit.
+/// </param>
+internal readonly record struct OperatorAction(
+    OperatorActionKind Kind,
+    string MacAddress,
+    string Command,
+    DateTimeOffset At,
+    EventSource Source = EventSource.Observed,
+    bool FromSuggestion = false);
+
+/// <summary>One event in a history to be replayed: a trigger or an action.</summary>
+/// <param name="Trigger">The trigger, or null when this is an action.</param>
+/// <param name="Action">The action, or null when this is a trigger.</param>
+internal readonly record struct HistoricEvent(TriggerEvent? Trigger, OperatorAction? Action)
+{
+    /// <summary>When it happened.</summary>
+    public DateTimeOffset At => Trigger?.At ?? Action!.Value.At;
+}
 
 /// <summary>What the engine needs to know about a device to learn about it at both levels.</summary>
 /// <param name="MacAddress">The device.</param>
@@ -67,4 +107,11 @@ internal interface IDeviceDirectory
     /// <summary>Describes a device.</summary>
     /// <returns><see langword="false"/> when no sensor carries that address.</returns>
     bool TryDescribe(string macAddress, out DeviceProfile profile);
+
+    /// <summary>The devices of the same kind in the same general zone as a device, itself included, in address order.</summary>
+    /// <remarks>
+    /// What a general-level pattern ("a pump in Zone 1") is turned into when it has to become something an operator can click:
+    /// the actual pumps in that zone.
+    /// </remarks>
+    IReadOnlyList<DeviceProfile> Similar(DeviceProfile device);
 }

@@ -75,6 +75,40 @@ internal sealed class DeviceDirectory(DeviceIndex index, IOptions<PatternOptions
         return true;
     }
 
+    // Kept with the number of devices it was worked out from, so a device registering after it was worked out is picked up
+    // on the next ask and nothing else forces it to be rebuilt.
+    private readonly ConcurrentDictionary<(string Class, string Zone), (int Count, IReadOnlyList<DeviceProfile> Devices)> _similar = new();
+
+    public IReadOnlyList<DeviceProfile> Similar(DeviceProfile device)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+
+        var count = index.Count;
+        var key = (device.Class, device.GeneralZoneId);
+
+        if (_similar.TryGetValue(key, out var cached) && cached.Count == count)
+        {
+            return cached.Devices;
+        }
+
+        var found = new List<DeviceProfile>();
+
+        foreach (var registration in index.Registrations())
+        {
+            if (TryDescribe(registration.MacAddress, out var profile)
+                && profile.Class == device.Class
+                && profile.GeneralZoneId == device.GeneralZoneId)
+            {
+                found.Add(profile);
+            }
+        }
+
+        found.Sort((left, right) => string.CompareOrdinal(left.MacAddress, right.MacAddress));
+        _similar[key] = (count, found);
+
+        return found;
+    }
+
     /// <summary>Walks up from a zone to the ancestor at the general depth, or stops at the zone itself if it is shallower.</summary>
     private (string Id, string Name) GeneralZoneOf(string zoneId)
     {
