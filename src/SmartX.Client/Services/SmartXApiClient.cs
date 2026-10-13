@@ -103,6 +103,26 @@ public sealed class SmartXApiClient(HttpClient http)
     public Task<ApiResult<PipelineUpdate>> GetPipelineSnapshotAsync(CancellationToken cancellationToken = default) =>
         GetAsync<PipelineUpdate>("api/realtime/pipeline", cancellationToken);
 
+    /// <summary>The suggested actions and automated insights, with the sequence number they are as of.</summary>
+    public Task<ApiResult<SuggestionsUpdate>> GetSuggestionsSnapshotAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<SuggestionsUpdate>("api/realtime/suggestions", cancellationToken);
+
+    /// <summary>Marks a suggestion "Not useful". Answers with the suggestions as they are afterwards.</summary>
+    public Task<ApiResult<SuggestionsUpdate>> DismissSuggestionAsync(string id, CancellationToken cancellationToken = default) =>
+        SendAsync<SuggestionsUpdate>(token => http.PostAsync($"api/suggestions/{Uri.EscapeDataString(id)}/dismiss", null, token), cancellationToken);
+
+    /// <summary>Takes a "Not useful" back. Answers with the suggestions as they are afterwards.</summary>
+    public Task<ApiResult<SuggestionsUpdate>> RestoreSuggestionAsync(string id, CancellationToken cancellationToken = default) =>
+        SendAsync<SuggestionsUpdate>(token => http.DeleteAsync($"api/suggestions/{Uri.EscapeDataString(id)}/dismiss", token), cancellationToken);
+
+    /// <summary>The investigations that are still open, newest first.</summary>
+    public Task<ApiResult<IReadOnlyList<InvestigationDetails>>> GetOpenInvestigationsAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<IReadOnlyList<InvestigationDetails>>("api/investigations?status=Open&limit=50", cancellationToken);
+
+    /// <summary>Gives an operator's verdict on an investigation. A later verdict replaces an earlier one.</summary>
+    public Task<ApiResult<InvestigationDetails>> GiveVerdictAsync(Guid id, VerdictRequest request, CancellationToken cancellationToken = default) =>
+        SendAsync<InvestigationDetails>(token => http.PostAsJsonAsync($"api/investigations/{id}/verdict", request, token), cancellationToken);
+
     /// <summary>The latest reading from each node, with the sequence number it is as of.</summary>
     public Task<ApiResult<StreamSnapshot>> GetStreamSnapshotAsync(CancellationToken cancellationToken = default) =>
         GetAsync<StreamSnapshot>("api/realtime/stream", cancellationToken);
@@ -275,11 +295,11 @@ public sealed class SmartXApiClient(HttpClient http)
 
     /// <summary>Tells the gateway an operator opened a device, which is what the pattern analysis learns from.</summary>
     /// <returns>Null on success, otherwise why it failed.</returns>
-    public async Task<ApiProblem?> RecordSelectionAsync(string macAddress, CancellationToken cancellationToken = default)
+    public async Task<ApiProblem?> RecordSelectionAsync(string macAddress, string? suggestionId = null, CancellationToken cancellationToken = default)
     {
         try
         {
-            using var response = await http.PostAsJsonAsync("api/activity/selection", new SelectionRequest(macAddress), cancellationToken);
+            using var response = await http.PostAsJsonAsync("api/activity/selection", new SelectionRequest(macAddress, suggestionId), cancellationToken);
 
             return response.IsSuccessStatusCode ? null : await ReadProblemAsync(response, cancellationToken);
         }
