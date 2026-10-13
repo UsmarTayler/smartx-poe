@@ -28,10 +28,10 @@ internal sealed class FakeDirectory : IDeviceDirectory
 
     public bool TryDescribe(string macAddress, out DeviceProfile profile) => _profiles.TryGetValue(macAddress, out profile!);
 
-    public IReadOnlyList<DeviceProfile> Similar(DeviceProfile device) =>
+    public IReadOnlyList<DeviceProfile> Similar(string deviceClass, string generalZoneId) =>
     [
         .. _profiles.Values
-            .Where(other => other.Class == device.Class && other.GeneralZoneId == device.GeneralZoneId)
+            .Where(other => other.Class == deviceClass && other.GeneralZoneId == generalZoneId)
             .OrderBy(other => other.MacAddress, StringComparer.Ordinal),
     ];
 }
@@ -46,6 +46,8 @@ internal sealed class RecordingEngine : IPatternEngine
     public PatternSettings Settings { get; } = new(TimeSpan.FromMinutes(10), 3, 1.5, TimeSpan.FromDays(7));
 
     public int TriggersInWindow => Triggers.Count;
+
+    public long LearnedVersion => Actions.Count;
 
     public void RecordTrigger(TriggerEvent trigger)
     {

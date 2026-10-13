@@ -79,12 +79,10 @@ internal sealed class DeviceDirectory(DeviceIndex index, IOptions<PatternOptions
     // on the next ask and nothing else forces it to be rebuilt.
     private readonly ConcurrentDictionary<(string Class, string Zone), (int Count, IReadOnlyList<DeviceProfile> Devices)> _similar = new();
 
-    public IReadOnlyList<DeviceProfile> Similar(DeviceProfile device)
+    public IReadOnlyList<DeviceProfile> Similar(string deviceClass, string generalZoneId)
     {
-        ArgumentNullException.ThrowIfNull(device);
-
         var count = index.Count;
-        var key = (device.Class, device.GeneralZoneId);
+        var key = (deviceClass, generalZoneId);
 
         if (_similar.TryGetValue(key, out var cached) && cached.Count == count)
         {
@@ -96,8 +94,8 @@ internal sealed class DeviceDirectory(DeviceIndex index, IOptions<PatternOptions
         foreach (var registration in index.Registrations())
         {
             if (TryDescribe(registration.MacAddress, out var profile)
-                && profile.Class == device.Class
-                && profile.GeneralZoneId == device.GeneralZoneId)
+                && profile.Class == deviceClass
+                && profile.GeneralZoneId == generalZoneId)
             {
                 found.Add(profile);
             }

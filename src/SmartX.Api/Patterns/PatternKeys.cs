@@ -99,7 +99,11 @@ internal sealed record DeviceProfile(
     string ClassLabel,
     bool IsState,
     double RangeMinimum,
-    double RangeMaximum);
+    double RangeMaximum)
+{
+    /// <summary>The scope this device has at the general level: its kind, in its general zone. What a general pattern is about.</summary>
+    public string GeneralScope => $"{Class}@{GeneralZoneId}";
+}
 
 /// <summary>Looks devices up for the pattern engine, so the engine does not depend on how they are stored.</summary>
 internal interface IDeviceDirectory
@@ -108,10 +112,12 @@ internal interface IDeviceDirectory
     /// <returns><see langword="false"/> when no sensor carries that address.</returns>
     bool TryDescribe(string macAddress, out DeviceProfile profile);
 
-    /// <summary>The devices of the same kind in the same general zone as a device, itself included, in address order.</summary>
+    /// <summary>The devices of one kind in one general zone, in address order.</summary>
     /// <remarks>
     /// What a general-level pattern ("a pump in Zone 1") is turned into when it has to become something an operator can click:
     /// the actual pumps in that zone.
     /// </remarks>
-    IReadOnlyList<DeviceProfile> Similar(DeviceProfile device);
+    /// <param name="deviceClass">The kind: <c>Actuator/Pump</c>, <c>Environmental/%</c>.</param>
+    /// <param name="generalZoneId">The zone devices are grouped under at the general level.</param>
+    IReadOnlyList<DeviceProfile> Similar(string deviceClass, string generalZoneId);
 }

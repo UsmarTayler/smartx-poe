@@ -48,6 +48,12 @@ internal interface IPatternEngine
     /// </remarks>
     void Replay(IEnumerable<HistoricEvent> history);
 
+    /// <summary>
+    /// A number that goes up each time the engine learns something: an action that counted. Lets a caller that last looked
+    /// at an unchanged engine skip asking again.
+    /// </summary>
+    long LearnedVersion { get; }
+
     /// <summary>Raised after an observed trigger was recorded. Not raised for replayed history.</summary>
     event Action<TriggerEvent>? TriggerRecorded;
 
@@ -200,6 +206,7 @@ internal sealed class PatternEngine : IPatternEngine
     private readonly Dictionary<string, string> _targetLabels = new(StringComparer.Ordinal);
 
     private long _nextInstance;
+    private long _learnedVersion;
     private int _pairs;
     private int _pruneAfter;
     private DateTimeOffset? _watchingSince;
@@ -234,6 +241,8 @@ internal sealed class PatternEngine : IPatternEngine
     public event Action<TriggerEvent>? TriggerRecorded;
 
     public event Action<OperatorAction>? ActionRecorded;
+
+    public long LearnedVersion => Interlocked.Read(ref _learnedVersion);
 
     public void RecordTrigger(TriggerEvent trigger)
     {
@@ -381,6 +390,8 @@ internal sealed class PatternEngine : IPatternEngine
         {
             return;
         }
+
+        Interlocked.Increment(ref _learnedVersion);
 
         var seeded = action.Source == EventSource.Seeded;
         var now = Advance(action.At);
@@ -536,7 +547,7 @@ internal sealed class PatternEngine : IPatternEngine
         }
     }
 
-    private static string GeneralScope(DeviceProfile profile) => $"{profile.Class}@{profile.GeneralZoneId}";
+    private static string GeneralScope(DeviceProfile profile) => profile.GeneralScope;
 
     // ---- answering --------------------------------------------------------------------------------------------------
 
