@@ -25,6 +25,13 @@ public sealed class SimulatorOptions
     /// <summary>Where the gateway is.</summary>
     public string ApiBaseUrl { get; set; } = "http://localhost:5266";
 
+    /// <summary>
+    /// The secret every device's key is derived from, the same as <c>Auth:FleetSecret</c> on the gateway. Each device sends its own
+    /// MAC and <c>HMAC-SHA256(secret, MAC)</c> on every request; the secret itself is never sent. The default is the published
+    /// development secret.
+    /// </summary>
+    public string FleetSecret { get; set; } = "smartx-development-fleet-secret-not-a-secret";
+
     /// <summary>How many of the demo devices to run, from the top of the fleet list.</summary>
     /// <remarks>Lower it to watch a handful of devices, or leave it to run the whole forty.</remarks>
     public int DeviceCount { get; set; } = 55;
