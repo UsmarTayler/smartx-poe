@@ -12,6 +12,8 @@
         <MudText Typo="Typo.caption" Class="mud-text-secondary">A node that falls into fault is gathered here with what you would need to judge it.</MudText>
     </div>
 
+    <OperatorsOnlyNote Text="Operators only. You are signed in as a Viewer, so you can read an investigation but not give a verdict on it." />
+
     @if (_problem is not null)
     {
         <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="mt-2" role="status">@_problem</MudAlert>

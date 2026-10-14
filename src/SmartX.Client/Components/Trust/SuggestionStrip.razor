@@ -18,6 +18,8 @@
             <a class="smartx-insight__link" href="command-stream">See evidence and more on the Command Stream</a>
         </div>
 
+        <OperatorsOnlyNote Text="Operators only. You are signed in as a Viewer, so suggested commands are disabled." />
+
         @if (_message is not null)
         {
             <MudAlert Severity="@(_failed ? Severity.Warning : Severity.Success)" Dense="true" Variant="Variant.Outlined" Class="mt-2" role="status">@_message</MudAlert>

@@ -1,3 +1,4 @@
+@inject AuthSession Auth
 @* One suggested action: what to do, why it is being suggested, what the pattern rests on, where it came from, and one click to do
    it. "Not useful" lowers the pattern's weight, within a floor, and can be taken back. A suggestion that has just arrived is
    outlined and says "New" in words, so the highlight is never colour alone, and it does not move anything on the page. *@
@@ -37,7 +38,7 @@
     }
 
     <div class="smartx-suggestion__actions">
-        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Disabled="Busy"
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Disabled="@(Busy || (!Auth.CanChange && Suggestion.Action.Kind == SuggestedActionKind.Command))"
                    StartIcon="@(Suggestion.Action.Kind == SuggestedActionKind.Command ? Icons.Material.Filled.PlayArrow : Icons.Material.Filled.OpenInNew)"
                    OnClick="() => OnAccept.InvokeAsync(Suggestion)"
                    aria-label="@($"{Suggestion.Action.Label}, suggested because {Suggestion.Why}")">
@@ -46,7 +47,7 @@
 
         @if (!Compact)
         {
-            <MudButton Variant="Variant.Text" Size="Size.Small" Disabled="Busy" StartIcon="@Icons.Material.Filled.ThumbDownOffAlt"
+            <MudButton Variant="Variant.Text" Size="Size.Small" Disabled="@(Busy || !Auth.CanChange)" StartIcon="@Icons.Material.Filled.ThumbDownOffAlt"
                        OnClick="() => OnNotUseful.InvokeAsync(Suggestion)"
                        aria-label="@($"Not useful: {Suggestion.What}")">
                 Not useful

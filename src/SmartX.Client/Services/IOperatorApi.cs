@@ -1,3 +1,4 @@
+using SmartX.Client.Auth;
 using SmartX.Shared;
 
 namespace SmartX.Client.Services;
@@ -58,7 +59,7 @@ public interface IOperatorApi
 }
 
 /// <summary><see cref="IOperatorApi"/> over <see cref="SmartXApiClient"/>.</summary>
-public sealed class OperatorApi(SmartXApiClient api, ApiConnection connection) : IOperatorApi
+public sealed class OperatorApi(SmartXApiClient api, ApiConnection connection, AuthSession session) : IOperatorApi
 {
     public Task<ApiResult<DeviceSearchResponse>> SearchDevicesAsync(DeviceSearchFilters filters, CancellationToken cancellationToken = default) =>
         Reported(api.SearchDevicesAsync(filters, cancellationToken));
@@ -110,6 +111,13 @@ public sealed class OperatorApi(SmartXApiClient api, ApiConnection connection) :
 
     public async Task<ApiProblem?> RecordSelectionAsync(string macAddress, string? suggestionId = null, CancellationToken cancellationToken = default)
     {
+        // A Viewer opening a device is looking, not acting, and there is nothing for the pattern analysis to learn from it: the gateway
+        // takes this report from Operators only. So it is not sent, rather than sent to be refused and reported as a problem.
+        if (!session.CanChange)
+        {
+            return null;
+        }
+
         var problem = await api.RecordSelectionAsync(macAddress, suggestionId, cancellationToken);
 
         connection.Report(problem is not { IsUnreachable: true });

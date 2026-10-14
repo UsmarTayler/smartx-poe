@@ -3,6 +3,7 @@
 @inject SuggestionActions Actions
 @inject CommandStreamOptions Options
 @inject TimeProvider Time
+@inject AuthSession Auth
 
 @* Suggested Actions: what the system thinks the operator is likely to want to do now, before they search for it. Ranked, each with
    what to do, why, what the pattern rests on and where it came from, and one click. Seeded evidence says it is seeded. The list
@@ -13,6 +14,8 @@
         <MudText Typo="Typo.h6" HtmlTag="h2">Suggested Actions</MudText>
         <MudText Typo="Typo.caption" Class="mud-text-secondary">Ranked by how much more likely than usual, how reliable, how severe and how recent.</MudText>
     </div>
+
+    <OperatorsOnlyNote Text="Operators only. You are signed in as a Viewer, so suggested commands, Not useful and Take back are disabled. You can still open a device." />
 
     @if (_message is not null)
     {
@@ -64,7 +67,7 @@
                     <li @key="dismissed.Suggestion.Id">
                         <span>@dismissed.Suggestion.What <span class="mud-text-secondary">· weight now @dismissed.WeightAfter.ToString("P0")</span></span>
                         <MudButton Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Undo"
-                                   OnClick="() => UndoAsync(dismissed.Suggestion)"
+                                   Disabled="@(!Auth.CanChange)" OnClick="() => UndoAsync(dismissed.Suggestion)"
                                    aria-label="@($"Take back: not useful, {dismissed.Suggestion.What}")">Take back</MudButton>
                     </li>
                 }

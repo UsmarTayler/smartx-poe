@@ -1,0 +1,24 @@
+@implements IDisposable
+@inject AuthSession Session
+
+@* The visible reason a control is disabled. A Viewer sees the buttons, greyed out, with this beside them, and not a page with parts
+   missing: hiding the controls would leave someone wondering where the feature went. Rendered only for a Viewer.
+   The server enforces all of it; this is the explanation, and the disabled state, for the person at the screen. *@
+@if (!Session.CanChange && Session.IsAuthenticated)
+{
+    <MudText Typo="Typo.caption" Class="smartx-operators-only mud-text-secondary" role="note">
+        <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Small" aria-hidden="true" /> @Text
+    </MudText>
+}
+
+@code {
+    /// <summary>What to say. The default is the short form; a panel with more to say can say it.</summary>
+    [Parameter]
+    public string Text { get; set; } = "Operators only. You are signed in as a Viewer, so these controls are disabled.";
+
+    protected override void OnInitialized() => Session.Changed += OnChanged;
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Session.Changed -= OnChanged;
+}

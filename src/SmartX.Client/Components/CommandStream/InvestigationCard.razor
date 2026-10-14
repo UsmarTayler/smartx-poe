@@ -1,5 +1,6 @@
 @inject IOperatorApi Api
 @inject AppState AppState
+@inject AuthSession Auth
 
 @* One investigation: a node's fall into fault, gathered where an operator can act on it. What it shows is what they would otherwise
    go and find: when it began to decay, what the trust engine blames, the alerts on it, and what operators did last time. The
@@ -65,16 +66,16 @@
         <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.QueryStats" OnClick="Investigate"
                    aria-label="@($"Show decay window of {Investigation.Room} on its timeline")">Show decay window</MudButton>
 
-        <MudButton Size="Size.Small" Variant="@(Investigation.Verdict == Verdict.Confirm ? Variant.Filled : Variant.Outlined)" Color="Color.Primary" Disabled="_busy"
-                   StartIcon="@Icons.Material.Filled.Check" OnClick="() => GiveAsync(Verdict.Confirm, null)"
+        <MudButton Size="Size.Small" Variant="@(Investigation.Verdict == Verdict.Confirm ? Variant.Filled : Variant.Outlined)" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Check" Disabled="@(_busy || !Auth.CanChange)" OnClick="() => GiveAsync(Verdict.Confirm, null)"
                    aria-pressed="@(Investigation.Verdict == Verdict.Confirm ? "true" : "false")">Confirm</MudButton>
 
-        <MudButton Size="Size.Small" Variant="@(Investigation.Verdict == Verdict.Dismiss ? Variant.Filled : Variant.Outlined)" Color="Color.Primary" Disabled="_busy"
-                   StartIcon="@Icons.Material.Filled.Block" OnClick="() => GiveAsync(Verdict.Dismiss, null)"
+        <MudButton Size="Size.Small" Variant="@(Investigation.Verdict == Verdict.Dismiss ? Variant.Filled : Variant.Outlined)" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Block" Disabled="@(_busy || !Auth.CanChange)" OnClick="() => GiveAsync(Verdict.Dismiss, null)"
                    aria-pressed="@(Investigation.Verdict == Verdict.Dismiss ? "true" : "false")">Dismiss</MudButton>
 
-        <MudButton Size="Size.Small" Variant="@(Investigation.Verdict == Verdict.Relabel ? Variant.Filled : Variant.Outlined)" Color="Color.Primary" Disabled="_busy"
-                   StartIcon="@Icons.Material.Filled.Label" OnClick="() => _relabelling = !_relabelling"
+        <MudButton Size="Size.Small" Variant="@(Investigation.Verdict == Verdict.Relabel ? Variant.Filled : Variant.Outlined)" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Label" Disabled="@(_busy || !Auth.CanChange)" OnClick="() => _relabelling = !_relabelling"
                    aria-expanded="@(_relabelling ? "true" : "false")"
                    aria-pressed="@(Investigation.Verdict == Verdict.Relabel ? "true" : "false")">Relabel</MudButton>
     </div>
@@ -95,7 +96,7 @@
                 }
             </select>
 
-            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" Disabled="_busy || _cause is null"
+            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" Disabled="@(_busy || _cause is null || !Auth.CanChange)"
                        OnClick="() => GiveAsync(Verdict.Relabel, _cause)">Apply relabel</MudButton>
             <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="() => _relabelling = false">Cancel</MudButton>
         </div>
