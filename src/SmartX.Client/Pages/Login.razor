@@ -55,7 +55,7 @@
     private string? _error;
     private string? _notice;
 
-    /// <summary>Where to go after signing in. Only ever a path on this site; see <see cref="SafeReturnUrl"/>.</summary>
+    /// <summary>Where to go after signing in. Only ever a path on this site; see <see cref="ReturnAddress"/>.</summary>
     [SupplyParameterFromQuery(Name = "returnUrl")]
     public string? ReturnUrl { get; set; }
 
@@ -69,7 +69,7 @@
 
         if (Session.IsAuthenticated)
         {
-            Navigation.NavigateTo(SafeReturnUrl(ReturnUrl));
+            Navigation.NavigateTo(ReturnAddress.Safe(ReturnUrl));
 
             return;
         }
@@ -103,7 +103,7 @@
                 _model.Password = "";
 
                 await Session.SignInAsync(result.Value!);
-                Navigation.NavigateTo(SafeReturnUrl(ReturnUrl));
+                Navigation.NavigateTo(ReturnAddress.Safe(ReturnUrl));
 
                 return;
             }
@@ -118,20 +118,6 @@
             _busy = false;
         }
     }
-
-    /// <summary>
-    /// A return address is accepted only if it is a path on this site. A login link can be written by anyone, so a return address of
-    /// <c>https://elsewhere.example</c> or <c>//elsewhere.example</c> would turn this page into a way to send a user, freshly signed
-    /// in and trusting, to somewhere else.
-    /// </summary>
-    internal static string SafeReturnUrl(string? url) =>
-        !string.IsNullOrEmpty(url)
-        && url[0] == '/'
-        && !url.StartsWith("//", StringComparison.Ordinal)
-        && !url.StartsWith("/\\", StringComparison.Ordinal)
-        && !url.StartsWith("/login", StringComparison.OrdinalIgnoreCase)
-            ? url
-            : "/";
 
     private sealed class LoginModel
     {
