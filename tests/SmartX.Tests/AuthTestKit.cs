@@ -124,3 +124,27 @@ internal static class DeviceCalls
     public static Task<HttpResponseMessage> DevicePostAsJsonAsync<T>(this HttpClient http, string url, string mac, T body) =>
         http.DevicePostAsync(url, mac, System.Net.Http.Json.JsonContent.Create(body));
 }
+
+/// <summary>The browser's sessionStorage, as a dictionary a test can look into.</summary>
+public sealed class MemorySessionStorage : SmartX.Client.Auth.ISessionStorage
+{
+    private readonly Dictionary<string, string> _values = [];
+
+    public IReadOnlyDictionary<string, string> Values => _values;
+
+    public Task<string?> GetAsync(string key) => Task.FromResult(_values.GetValueOrDefault(key));
+
+    public Task SetAsync(string key, string value)
+    {
+        _values[key] = value;
+
+        return Task.CompletedTask;
+    }
+
+    public Task RemoveAsync(string key)
+    {
+        _values.Remove(key);
+
+        return Task.CompletedTask;
+    }
+}

@@ -3,6 +3,7 @@ using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
 using MudBlazor.Services;
+using SmartX.Client.Auth;
 using SmartX.Client.CommandStream;
 using SmartX.Client.Realtime;
 using SmartX.Client.Services;
@@ -285,6 +286,20 @@ public abstract class StreamComponentTests : IAsyncLifetime
     // ever disposed through DisposeAsync.
     private readonly BunitContext _context = new();
 
+    /// <summary>Who is signed in. An Operator unless a test changes it.</summary>
+    protected AuthSession Session { get; }
+
+    /// <summary>Where the session is stored, so a test can see what was kept and what was cleared.</summary>
+    protected MemorySessionStorage Storage { get; }
+
+    /// <summary>Signs in as a user with this role, replacing whoever was signed in.</summary>
+    protected void SignInAs(string role, string? username = null) =>
+        Session.Adopt(new LoginResponse(
+            "test-token-" + role,
+            Time.GetUtcNow().AddDays(3650),
+            username ?? (role == UserRoles.Viewer ? "test-viewer" : "test-operator"),
+            role));
+
     protected StreamComponentTests(int streamCapacity = 500)
     {
         Rig = ClientRig.Create();
@@ -292,11 +307,18 @@ public abstract class StreamComponentTests : IAsyncLifetime
         Api = new FakeOperatorApi();
         Options = new CommandStreamOptions { StreamCapacity = streamCapacity };
 
+        // Signed in as an Operator, with a token that outlasts any test, so the existing component tests are about what they were
+        // about. The tests that are about being a Viewer sign in as one: see SignInAs.
+        Storage = new MemorySessionStorage();
+        Session = new AuthSession(Storage, Time);
+        SignInAs(UserRoles.Operator);
+
         _context.JSInterop.Mode = JSRuntimeMode.Loose;
         var Services = _context.Services;
 
         Services.AddMudServices();
         Services.AddSingleton(Rig.State);
+        Services.AddSingleton(Session);
         Services.AddSingleton<TimeProvider>(Time);
         Services.AddSingleton(Options);
         Services.AddSingleton<IOperatorApi>(Api);
