@@ -58,10 +58,18 @@ namespace SmartX.Api.Endpoints;
 /// </remarks>
 internal static class TelemetryEndpoints
 {
-    internal static RouteGroupBuilder MapTelemetryEndpoints(this RouteGroupBuilder api)
+    /// <summary>Sending readings. Mapped on the operator-or-device group: a device sends its own, and the telemetry page lets an operator send one by hand.</summary>
+    internal static RouteGroupBuilder MapTelemetryIngestEndpoints(this RouteGroupBuilder api)
     {
         api.MapPost("/telemetry", IngestAsync).WithName("IngestTelemetry");
         api.MapPost("/telemetry/batch", IngestBatchAsync).WithName("IngestTelemetryBatch");
+
+        return api;
+    }
+
+    /// <summary>Reading them back. Mapped on the console group.</summary>
+    internal static RouteGroupBuilder MapTelemetryReadEndpoints(this RouteGroupBuilder api)
+    {
         api.MapGet("/sensors/{mac}/telemetry", GetHistoryAsync).WithName("GetSensorTelemetry");
         api.MapGet("/telemetry/recent", GetAllRecentAsync).WithName("GetAllRecentTelemetry");
 
@@ -75,6 +83,7 @@ internal static class TelemetryEndpoints
     /// </remarks>
     private static async Task<IResult> IngestAsync(
         HttpContext context,
+        System.Security.Claims.ClaimsPrincipal user,
         TelemetryIngestionRequest request,
         ISensorRegistry registry,
         ITrustEngine trust,
@@ -84,6 +93,12 @@ internal static class TelemetryEndpoints
         IOptions<IngestionOptions> options,
         CancellationToken cancellationToken)
     {
+        // Before anything else, so a device cannot learn whether another device exists by posting as it.
+        if (!string.IsNullOrWhiteSpace(request.MacAddress) && SmartX.Api.Security.DeviceScope.Require(user, request.MacAddress) is { } forbidden)
+        {
+            return forbidden;
+        }
+
         var sensor = await registry.FindAsync(request.MacAddress, cancellationToken);
 
         if (sensor is null)
@@ -205,6 +220,7 @@ internal static class TelemetryEndpoints
     /// </remarks>
     private static async Task<IResult> IngestBatchAsync(
         HttpContext context,
+        System.Security.Claims.ClaimsPrincipal user,
         TelemetryBatchRequest request,
         ISensorRegistry registry,
         ITrustEngine trust,
@@ -214,6 +230,12 @@ internal static class TelemetryEndpoints
         IOptions<IngestionOptions> options,
         CancellationToken cancellationToken)
     {
+        // Before anything else, so a device cannot learn whether another device exists by posting as it.
+        if (!string.IsNullOrWhiteSpace(request.MacAddress) && SmartX.Api.Security.DeviceScope.Require(user, request.MacAddress) is { } forbidden)
+        {
+            return forbidden;
+        }
+
         var sensor = await registry.FindAsync(request.MacAddress, cancellationToken);
 
         if (sensor is null)

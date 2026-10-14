@@ -8,6 +8,7 @@ using SmartX.Api.Ingestion;
 using SmartX.Api.Patterns;
 using SmartX.Api.Realtime;
 using SmartX.Api.Search;
+using SmartX.Api.Security;
 using SmartX.Api.Storage;
 using SmartX.Api.Trust;
 
@@ -196,6 +197,9 @@ builder.Services
     .ValidateOnStart();
 
 builder.Services.AddSignalR();
+
+// Authentication and authorization: who may call what. See SmartX.Api.Security.
+builder.Services.AddSmartXSecurity(builder.Configuration);
 builder.Services.AddSingleton<RealtimeSubscriptions>();
 builder.Services.AddSingleton<ProcessedReadings>();
 builder.Services.AddSingleton<RealtimeBroadcaster>();
@@ -238,28 +242,52 @@ builder.Services.AddSingleton<AttachmentUploader>();
 var app = builder.Build();
 
 app.UseCors(ClientCorsPolicy);
+app.UseSmartXSecurity();
 
 // Everything the client calls hangs off /api. Feature areas attach themselves to this group.
 var api = app.MapGroup("/api");
+
+// Protection is applied to GROUPS, and an endpoint inherits it from the group it is mapped on. Nothing here protects an endpoint by
+// remembering to: an endpoint mapped on a group is protected, and one mapped outside every group is found by the test that lists them
+// all (EndpointProtectionTests). Four groups, from most open to least:
+//
+//   public     health and login, and nothing else
+//   console    what the operator's browser calls: a read needs a Viewer or an Operator, anything that changes state needs an Operator
+//   ingest     what a device does and an operator may also do by hand: send readings, register. A device acts only for its own MAC
+//   device     what only a device does: collect its commands, acknowledge them
 api.MapHealthEndpoints();
-api.MapSensorEndpoints();
-api.MapTelemetryEndpoints();
-api.MapZoneEndpoints();
-api.MapTrustEndpoints();
-api.MapAttachmentEndpoints();
-api.MapSimulationEndpoints();
-api.MapPipelineEndpoints();
-api.MapCommandEndpoints();
-api.MapHistoryEndpoints();
-api.MapAlertEndpoints();
-api.MapSearchEndpoints();
-api.MapPatternEndpoints();
-api.MapSuggestionEndpoints();
-api.MapRealtimeEndpoints();
+api.MapLoginEndpoint();
+
+var console = api.MapGroup("").RequireAuthorization(Policies.Console);
+console.MapCurrentUserEndpoint();
+console.MapSensorReadEndpoints();
+console.MapTelemetryReadEndpoints();
+console.MapZoneEndpoints();
+console.MapTrustEndpoints();
+console.MapAttachmentEndpoints();
+console.MapSimulationEndpoints();
+console.MapPipelineEndpoints();
+console.MapCommandEndpoints();
+console.MapHistoryEndpoints();
+console.MapAlertEndpoints();
+console.MapSearchEndpoints();
+console.MapPatternEndpoints();
+console.MapSuggestionEndpoints();
+console.MapRealtimeEndpoints();
+
+var ingest = api.MapGroup("").RequireAuthorization(Policies.OperatorOrDevice);
+ingest.MapSensorRegistrationEndpoint();
+ingest.MapTelemetryIngestEndpoints();
+
+var device = api.MapGroup("").RequireAuthorization(Policies.Device);
+device.MapDeviceShadowEndpoint();
+device.MapCommandAckEndpoint();
 
 // The hub is mapped on the app and not on the /api group: it is a different kind of endpoint, with its own path,
-// which the client's web server forwards separately from /api.
-app.MapHub<TelemetryHub>(SmartX.Shared.RealtimeTopics.HubPath);
+// which the client's web server forwards separately from /api. It needs a token (a Viewer's will do, because joining a topic only
+// reads), and closes a connection when that token expires, so a session cannot outlive its credential.
+app.MapHub<TelemetryHub>(SmartX.Shared.RealtimeTopics.HubPath, options => options.CloseOnAuthenticationExpiration = true)
+    .RequireAuthorization(Policies.Viewer);
 
 app.Run();
 
