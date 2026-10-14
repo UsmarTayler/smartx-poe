@@ -300,6 +300,9 @@ public abstract class StreamComponentTests : IAsyncLifetime
             username ?? (role == UserRoles.Viewer ? "test-viewer" : "test-operator"),
             role));
 
+    /// <summary>Signs out. The in-memory storage finishes at once, so the session is clear by the time this returns.</summary>
+    protected void SignOut() => _ = Session.SignOutAsync();
+
     protected StreamComponentTests(int streamCapacity = 500)
     {
         Rig = ClientRig.Create();
@@ -351,6 +354,13 @@ public abstract class StreamComponentTests : IAsyncLifetime
         where TComponent : Microsoft.AspNetCore.Components.IComponent => _context.Render(parameters);
 
     protected Task DisposeComponentsAsync() => _context.DisposeComponentsAsync();
+
+    /// <summary>The services the components under test see. Add to them before the first render.</summary>
+    protected Bunit.BunitServiceProvider TestServices => _context.Services;
+
+    /// <summary>The navigation manager the components navigate with, which records where they went.</summary>
+    protected Microsoft.AspNetCore.Components.NavigationManager Navigation =>
+        _context.Services.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>();
 
     protected FakeTimeProvider Time { get; }
 
