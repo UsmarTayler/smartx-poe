@@ -1,0 +1,41 @@
+@implements IAsyncDisposable
+
+@* An image that needs the bearer token to be fetched. An <img src> asks the browser to fetch the address itself, and the browser
+   sends no Authorization header when it does, so a protected thumbnail would be a broken image. This asks for it through the
+   authenticated path instead, and shows the result from a blob address in memory. *@
+@if (_source is not null)
+{
+    <img src="@_source" alt="@Alt" class="@Class" />
+}
+else if (_failed)
+{
+    <MudIcon Icon="@Icons.Material.Outlined.BrokenImage" Class="mud-text-secondary" aria-label="The image could not be loaded" />
+}
+else
+{
+    <MudSkeleton SkeletonType="SkeletonType.Rectangle" Width="56px" Height="56px" aria-hidden="true" />
+}
+
+@code {
+    private string? _source;
+    private bool _failed;
+
+    /// <summary>Fetches the image and returns an address for it, or null if it could not be had.</summary>
+    [Parameter, EditorRequired]
+    public Func<Task<string?>> Load { get; set; } = () => Task.FromResult<string?>(null);
+
+    [Parameter]
+    public string Alt { get; set; } = string.Empty;
+
+    [Parameter]
+    public string? Class { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _source = await Load();
+        _failed = _source is null;
+    }
+
+    // The address itself is kept and released by whoever made it (AttachmentService caches and revokes them), so this only lets go.
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}

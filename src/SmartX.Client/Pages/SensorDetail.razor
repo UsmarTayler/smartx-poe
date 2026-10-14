@@ -1,7 +1,9 @@
 @page "/sensors/{Mac}"
+@attribute [Authorize]
 @implements IDisposable
 @inject SensorService SensorCatalog
 @inject AttachmentService Attachments
+@inject AuthSession Auth
 @inject IDialogService Dialogs
 @inject ISnackbar Snackbar
 
@@ -74,7 +76,8 @@ else
                     </MudSelect>
                 </div>
 
-                <AttachmentDropZone Limits="Attachments.Limits" OnFilesSelected="QueueAsync" />
+                <OperatorsOnlyNote Text="Operators only. You are signed in as a Viewer, so you can look at and download attachments but not add or delete them." />
+                <AttachmentDropZone Limits="Attachments.Limits" OnFilesSelected="QueueAsync" Disabled="@(!Auth.CanChange)" />
 
                 <UploadQueue Items="State.Uploads"
                              OnCancel="@(item => Attachments.CancelAsync(item))"
@@ -110,8 +113,9 @@ else
                 else
                 {
                     <AttachmentList Attachments="State.Items"
-                                    DownloadUrl="Attachments.DownloadUrl"
-                                    ThumbnailUrl="Attachments.ThumbnailUrl"
+                                    ThumbnailSource="@(id => Attachments.ObjectUrlAsync(id))"
+                                    CanDelete="Auth.CanChange"
+                                    OnDownload="DownloadAsync"
                                     OnPreview="PreviewAsync"
                                     OnDelete="DeleteAsync" />
                 }
@@ -166,15 +170,23 @@ else
     {
         var parameters = new DialogParameters<ImagePreviewDialog>
         {
-            { dialog => dialog.Source, Attachments.ThumbnailUrl(attachment.Id) },
+            { dialog => dialog.LoadSource, () => Attachments.ObjectUrlAsync(attachment.Id) },
             { dialog => dialog.Title, attachment.OriginalFileName },
-            { dialog => dialog.DownloadUrl, Attachments.DownloadUrl(attachment.Id) },
+            { dialog => dialog.OnDownload, () => DownloadAsync(attachment) },
         };
 
         await Dialogs.ShowAsync<ImagePreviewDialog>(
             attachment.OriginalFileName,
             parameters,
             new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseOnEscapeKey = true, CloseButton = true });
+    }
+
+    private async Task DownloadAsync(AttachmentMetadata attachment)
+    {
+        if (!await Attachments.DownloadAsync(attachment))
+        {
+            Snackbar.Add($"{attachment.OriginalFileName} could not be downloaded.", Severity.Warning);
+        }
     }
 
     private async Task DeleteAsync(AttachmentMetadata attachment)

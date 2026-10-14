@@ -1,8 +1,8 @@
 @using System.Globalization
-@* A sensor's attachments. Data in: the attachments and how to address them. Events out: preview and delete.
-   Downloading needs no event — it is a plain link the browser follows, and the API sends the file with a
-   Content-Disposition of attachment, so the page stays where it is. Images show their thumbnail, which is a
-   button that opens a preview; everything else shows an icon for its kind. *@
+@* A sensor's attachments. Data in: the attachments and how to fetch their thumbnails. Events out: preview, download and delete.
+   Neither a thumbnail nor a download can be a plain address any more: the API wants the bearer token, which an image tag and a link
+   cannot send, so the page fetches them itself. Images show their thumbnail, which is a button that opens a preview; everything
+   else shows an icon for its kind. Deleting is an Operator's, and is disabled, with the reason beside it, for a Viewer. *@
 <ul class="smartx-attachments" aria-label="Attachments">
     @foreach (var attachment in Attachments)
     {
@@ -12,7 +12,7 @@
                 <button type="button" class="smartx-attachments__thumb"
                         aria-label="@($"Preview {attachment.OriginalFileName}")"
                         @onclick="@(() => OnPreview.InvokeAsync(attachment))">
-                    <img src="@ThumbnailUrl(attachment.Id)" alt="" loading="lazy" />
+                    <AuthenticatedImage Load="@(() => ThumbnailSource(attachment.Id))" />
                 </button>
             }
             else
@@ -31,9 +31,10 @@
             </div>
 
             <div class="smartx-attachments__actions">
-                <MudIconButton Icon="@Icons.Material.Filled.Download" Href="@DownloadUrl(attachment.Id)"
-                               aria-label="@($"Download {attachment.OriginalFileName}")" />
-                <MudIconButton Icon="@Icons.Material.Outlined.Delete" Color="Color.Error"
+                <MudIconButton Icon="@Icons.Material.Filled.Download"
+                               aria-label="@($"Download {attachment.OriginalFileName}")"
+                               OnClick="@(() => OnDownload.InvokeAsync(attachment))" />
+                <MudIconButton Icon="@Icons.Material.Outlined.Delete" Color="Color.Error" Disabled="@(!CanDelete)"
                                aria-label="@($"Delete {attachment.OriginalFileName}")"
                                OnClick="@(() => OnDelete.InvokeAsync(attachment))" />
             </div>
@@ -46,10 +47,14 @@
     public IReadOnlyList<AttachmentMetadata> Attachments { get; set; } = [];
 
     [Parameter, EditorRequired]
-    public Func<Guid, string> DownloadUrl { get; set; } = _ => string.Empty;
+    public Func<Guid, Task<string?>> ThumbnailSource { get; set; } = _ => Task.FromResult<string?>(null);
 
-    [Parameter, EditorRequired]
-    public Func<Guid, string> ThumbnailUrl { get; set; } = _ => string.Empty;
+    /// <summary>Whether the delete buttons work. False for a Viewer.</summary>
+    [Parameter]
+    public bool CanDelete { get; set; } = true;
+
+    [Parameter]
+    public EventCallback<AttachmentMetadata> OnDownload { get; set; }
 
     [Parameter]
     public EventCallback<AttachmentMetadata> OnPreview { get; set; }
