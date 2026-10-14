@@ -70,10 +70,22 @@ public sealed class SignalRHub : IRealtimeHub
     private readonly HubConnection _connection;
 
     /// <summary>Builds a connection to a hub. It is not opened until <see cref="StartAsync"/>.</summary>
-    public SignalRHub(Uri hubUri, RealtimeClientOptions options)
+    /// <param name="hubUri">Where the hub is.</param>
+    /// <param name="options">How to reconnect.</param>
+    /// <param name="accessToken">
+    /// Asked for the token on every connection attempt, the first and each reconnect. A browser cannot put a header on a WebSocket,
+    /// so SignalR sends the result as <c>?access_token=</c> in the URL, which the gateway reads for the hub's path only.
+    /// </param>
+    public SignalRHub(Uri hubUri, RealtimeClientOptions options, Func<Task<string?>>? accessToken = null)
     {
         _connection = new HubConnectionBuilder()
-            .WithUrl(hubUri)
+            .WithUrl(hubUri, connection =>
+            {
+                if (accessToken is not null)
+                {
+                    connection.AccessTokenProvider = accessToken;
+                }
+            })
             .WithAutomaticReconnect(new RealtimeRetryPolicy(options.ReconnectDelays))
             .Build();
 

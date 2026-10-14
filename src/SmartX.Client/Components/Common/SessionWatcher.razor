@@ -1,0 +1,22 @@
+@implements IDisposable
+@inject AuthSession Session
+@inject NavigationManager Navigation
+
+@* Renders nothing. It listens for a session that ended without the user asking (the token ran out, or the API refused it) and goes
+   to the login page, saying why and remembering where the user was. The page is reloaded as it goes, not navigated: the app's scoped
+   state (feeds, the stream's buffer, the search result, the hub connection) belongs to the user who has just gone, and a reload is
+   the one way to be sure none of it is left for whoever signs in next. *@
+
+@code {
+    protected override void OnInitialized() => Session.Ended += OnEnded;
+
+    private void OnEnded(SessionEnd reason)
+    {
+        var path = "/" + Navigation.ToBaseRelativePath(Navigation.Uri);
+        var returnUrl = path.StartsWith("/login", StringComparison.OrdinalIgnoreCase) || path == "/" ? "" : $"&returnUrl={Uri.EscapeDataString(path)}";
+
+        _ = InvokeAsync(() => Navigation.NavigateTo($"login?reason={reason.ToString().ToLowerInvariant()}{returnUrl}", forceLoad: true));
+    }
+
+    public void Dispose() => Session.Ended -= OnEnded;
+}
