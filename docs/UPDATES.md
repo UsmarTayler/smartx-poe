@@ -42,6 +42,7 @@ Entries U1 to U12 each name their own source (a review of the code, a test, a li
 | [U18](#u18-suggestions-deadlocked-with-the-device-index) | 2026-10-13 | Suggestions | Take engine events from an inbox so ranking never meets the index lock | `96c4320` |
 | [U19](#u19-compose-would-not-start-without-an-env-file) | 2026-10-13 | Docker | Default the development key so a fresh clone starts with no `.env` | `ae8a4e1` |
 | [U20](#u20-accessibility-findings-in-the-light-theme) | 2026-10-13 | Client | Contrast, names, landmarks and live regions found by an axe pass | `b62dccc`, `5c23e63`, `7b5e0fc`, `3bd34b4`, `718d7e0` |
+| [U21](#u21-the-api-had-no-authentication) | 2026-10-14 | API, client, simulator | Add a login with roles, per-device keys, a protected hub and a login page; protect every endpoint but health and login | `5b33a2b`, `b845474`, `76355a3`, `3fcb356`, `7920580`, `94be739`, `36d261e`, `fbe6bb3`, `1041e6b` |
 
 ---
 
@@ -597,10 +598,42 @@ roles in place. One finding is left: a second `<nav>` inside MudBlazor's own nav
 
 ---
 
+## U21. The API had no authentication
+
+**Source:** lecturer feedback on Part 1, criterion Gateway Startup Layout and API Integration, 5/10: "There is no authentication on the API at all, so add a login step and protect your sensitive endpoints with it in Part 2." It was the only criterion that lost marks.
+
+**What was wrong.** Every endpoint was open. Anyone who could reach the API could read the whole mesh, register sensors, send readings, issue commands to actuators, change a device's scenario, upload and delete files and give verdicts. The simulator's calls were as open as an operator's, so anyone could also post fake readings as any device.
+
+**Why it mattered.** The API controls physical actuators and decides what an operator believes about the mesh. Open to the network it is a way to shut valves and to lie about sensors, and a dashboard that anyone can write to cannot be trusted by the people reading it. The brief also asked for it, and the marks were lost for it.
+
+**What changed.**
+
+- **Operators log in.** `POST /api/auth/login` checks a password against a hash made with ASP.NET Core Identity's `PasswordHasher` and returns an HMAC-SHA256 JWT with the user's name, role and an expiry (an option, 60 minutes). A wrong username and a wrong password get the same message and about the same time, the endpoint is rate limited, and an account is locked after repeated failures (names that do not exist lock the same way). Two roles: **Viewer** reads everything; **Operator** also does everything that changes something.
+- **Protection is by policy on groups.** Five named policies on four endpoint groups, with a default (`Console`) under which a read is a Viewer's and anything else an Operator's, so a new endpoint is safe whichever way it is written. Public: health and login only. A test reads the routing table and fails on any endpoint that lacks authorization, and others call every endpoint anonymously, as a Viewer and as an Operator.
+- **Devices have their own keys.** A device's key is `HMAC-SHA256(fleetSecret, MAC)` (Azure IoT Hub's derived device keys), recomputed and never stored. A device may act only for its own MAC: a valid key used for another MAC is a 403. The simulator signs every call, registers each device with that device's own key (so no operator credential is ever in the simulator, which stands in for field hardware), and stops with one clear message if its secret is wrong instead of retrying for ever.
+- **The hub needs a token.** Sent as `access_token` in the query string (a browser cannot put a header on a WebSocket) and read for the hub's path only; nginx's access log for `/hubs/` omits the query string; a connection closes when its token expires.
+- **The client.** A login page; a session in `sessionStorage` (survives a refresh, ends with the tab); a `DelegatingHandler` that adds the token and ends the session on a 401; every page but login and not-found requires a user, with a return address; the app bar shows the name and role and a Log out. A Viewer sees the controls that change something disabled with "Operators only" beside them, and none of those calls is made. Attachment thumbnails, downloads and uploads, which an `<img>`, a link and a bare XHR cannot authenticate, go through the token.
+- **Configuration.** Every secret, expiry, lockout and rate-limit value is an option. Development uses published values (like the attachment key), and the API warns at start-up for each one in use elsewhere; it refuses to start outside Development without real secrets. `.env` stays optional.
+- **Tests.** The existing 1,188 tests run as an Operator, or as the device they play, with no assertion changed. 153 new ones cover login, lockout and rate limit, forged, expired and altered tokens, every endpoint's protection, a Viewer's 403 on every write, device keys and scope, the hub, the session, the token handler, route protection, the login page, the Viewer's disabled controls and the layout. Two mutations (an unprotected endpoint; a device scope that always allows) were each shown to fail the build.
+- **Documentation.** An Authentication section in the README, and every `curl` in it, and in the two demo scripts, now sends the token.
+
+Considered and not done: giving the simulator an Operator login to register (a person's credential inside hardware); a refresh token (more moving parts than a one-hour session needs here); putting the token in an httpOnly cookie (needs same-site deployment and CSRF handling). Limits, stated in the README: tokens cannot be revoked before they expire, users are in memory, and a token in `sessionStorage` can be read by script running in the page.
+
+- `src/SmartX.Shared/Auth/`
+- `src/SmartX.Api/Security/`, `Endpoints/AuthEndpoints.cs`, `Program.cs` and the endpoint files
+- `src/SmartX.DeviceSimulator/GatewayClient.cs`, `DeviceKeyring.cs`
+- `src/SmartX.Client/Auth/`, `Pages/Login.razor`, `Layout/MainLayout.razor` and the components with a control that changes something
+- `src/SmartX.Client/nginx/default.conf`, `docker-compose.yml`, `scripts/`
+- `tests/SmartX.Tests/AuthenticationTests.cs`, `EndpointProtectionTests.cs`, `DeviceAuthenticationTests.cs`, `ClientAuthTests.cs`, `ClientAuthComponentTests.cs`
+
+**Commits:** `5b33a2b` shared contracts and device keys, `b845474` API login, roles and protected groups, `76355a3` nginx log, `3fcb356` simulator keys, `7920580` login page and session, `94be739` attachments through the token, `36d261e` Viewer controls, `fbe6bb3` compose, `1041e6b` README
+
+---
+
 ## Entry template
 
 ```markdown
-## U21. Short title of the problem
+## U22. Short title of the problem
 
 **Source:** how it was found: lecturer feedback on Part 1, code review, a test, a live run
 
