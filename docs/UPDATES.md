@@ -10,14 +10,13 @@ reconstructed afterwards.
 
 ## Lecturer feedback on Part 1
 
-> **PLACEHOLDER: to be filled in by the author.** Nothing under this heading has been written yet, and nothing in this file claims
-> to answer the lecturer's feedback. Paste each point of the lecturer's Part 1 feedback here, verbatim, one per row, and say which
-> update below answered it, or that it was not acted on and why. Entries U1 to U12 each name their own source (a review of the
-> code, a test, a live run); none of them is recorded as lecturer feedback, because that has not been supplied.
+**Criterion:** Gateway Startup Layout and API Integration. **Mark: 5/10.** This is the only criterion that lost marks in Part 1.
 
 | # | Feedback, verbatim | Answered by | Notes |
 | --- | --- | --- | --- |
-| 1 | _not yet filled in_ | | |
+| 1 | "The rest of your startup flow is flawless, with clean pillar disabling and fully asynchronous communication. There is no authentication on the API at all, so add a login step and protect your sensitive endpoints with it in Part 2." | [U21](#u21-the-api-had-no-authentication) | Operators log in with a JWT and have a role; devices authenticate with a per-device key; the hub requires a token. |
+
+Entries U1 to U12 each name their own source (a review of the code, a test, a live run); none of them is recorded as lecturer feedback.
 
 ## Summary
 
