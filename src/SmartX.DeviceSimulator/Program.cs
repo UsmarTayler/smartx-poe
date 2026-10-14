@@ -29,6 +29,8 @@ internal static class SimulatorHost
         // controlled clock in a test.
         builder.Services.AddSingleton(TimeProvider.System);
 
+        builder.Services.AddSingleton(services => new DeviceKeyring(services.GetRequiredService<IOptions<SimulatorOptions>>().Value.FleetSecret));
+
         builder.Services.AddHttpClient<GatewayClient>((services, client) =>
         {
             var options = services.GetRequiredService<IOptions<SimulatorOptions>>().Value;

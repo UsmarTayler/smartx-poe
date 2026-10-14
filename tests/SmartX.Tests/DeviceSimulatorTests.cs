@@ -21,11 +21,11 @@ public class DeviceSimulatorTests
 {
     /// <summary>An API serving the larger hierarchy the demo fleet is deployed into.</summary>
     private static WebApplicationFactory<Program> DemoApi() =>
-        new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        new AuthenticatedFactory().WithWebHostBuilder(builder =>
             builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(
                 new Dictionary<string, string?> { ["Zones:Hierarchy"] = "Demo" })));
 
-    private static GatewayClient Gateway(HttpClient http) => new(http, NullLogger<GatewayClient>.Instance);
+    private static GatewayClient Gateway(HttpClient http) => new(http, NullLogger<GatewayClient>.Instance, new DeviceKeyring(TestAuth.FleetSecret));
 
     [Fact]
     public async Task Every_device_in_the_fleet_registers_against_the_demo_hierarchy()
@@ -229,7 +229,7 @@ public class DeviceSimulatorTests
     [Fact]
     public async Task A_busy_gateway_is_reported_as_backpressure_not_as_a_refusal()
     {
-        using var api = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        using var api = new AuthenticatedFactory().WithWebHostBuilder(builder =>
         {
             builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(
                 new Dictionary<string, string?> { ["Ingestion:MaxQueueDepth"] = "1", ["Zones:Hierarchy"] = "Demo" }));

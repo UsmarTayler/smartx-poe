@@ -3,6 +3,7 @@
 @inject IAlertFeed Alerts
 @inject IOperatorApi Api
 @inject SensorService Catalog
+@inject AuthSession Auth
 @inject TimeProvider Time
 
 @* The ingestion queues, made visible. Two lanes side by side, from the pipeline statistics the API pushes once a second:
@@ -48,8 +49,9 @@
     </div>
 
     <div class="smartx-pipeline__simulate">
+        <OperatorsOnlyNote Text="Operators only. You are signed in as a Viewer, so devices cannot be switched to a scenario." />
         <MudSelect T="string" Label="Simulate on" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense"
-                   @bind-Value="_device" AnchorOrigin="Origin.BottomCenter" Class="smartx-pipeline__device"
+                   @bind-Value="_device" AnchorOrigin="Origin.BottomCenter" Class="smartx-pipeline__device" Disabled="@(!Auth.CanChange)"
                    ToStringFunc="Describe" HelperText="Sets the device's scenario through the shadow endpoint">
             @foreach (var sensor in Candidates)
             {
@@ -57,11 +59,11 @@
             }
         </MudSelect>
         <MudButton Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Bolt"
-                   Disabled="@(string.IsNullOrEmpty(_device) || _busy)" OnClick="() => SimulateAsync(SimulationScenario.Critical)">
+                   Disabled="@(string.IsNullOrEmpty(_device) || _busy || !Auth.CanChange)" OnClick="() => SimulateAsync(SimulationScenario.Critical)">
             Simulate critical event
         </MudButton>
         <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Undo"
-                   Disabled="@(string.IsNullOrEmpty(_device) || _busy)" OnClick="() => SimulateAsync(SimulationScenario.Nominal)">
+                   Disabled="@(string.IsNullOrEmpty(_device) || _busy || !Auth.CanChange)" OnClick="() => SimulateAsync(SimulationScenario.Nominal)">
             Back to normal
         </MudButton>
     </div>

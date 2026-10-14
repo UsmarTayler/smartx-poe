@@ -37,7 +37,7 @@ export function capture(container) {
 
 // Uploads one captured file as a single-file multipart request. Resolves with the HTTP status and response
 // body; never rejects, so every outcome — success, rejection, abort, network failure — is a value .NET can show.
-export function upload(id, url, progressSink) {
+export function upload(id, url, progressSink, token) {
     const file = files.get(id);
 
     return new Promise(resolve => {
@@ -73,8 +73,52 @@ export function upload(id, url, progressSink) {
 
         active.set(id, request);
         request.open('POST', url);
+
+        // The bearer token goes on as a header, as on every other request. XMLHttpRequest is not the app's HttpClient, so nothing
+        // adds it for us.
+        if (token) {
+            request.setRequestHeader('Authorization', 'Bearer ' + token);
+        }
+
         request.send(form);
     });
+}
+
+// Fetches a protected file with the bearer token and returns an address for it that an <img> can show. An image tag cannot send an
+// Authorization header, so it cannot fetch anything the API protects; this does the fetch and hands the bytes over as a blob.
+// Resolves with null on any failure, so a missing thumbnail is a value and not an exception.
+export async function objectUrl(url, token) {
+    try {
+        const response = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+
+        return response.ok ? URL.createObjectURL(await response.blob()) : null;
+    } catch {
+        return null;
+    }
+}
+
+// Downloads a protected file: the same authenticated fetch, then a save through a temporary link. Resolves with whether it worked.
+export async function download(url, token, fileName) {
+    const address = await objectUrl(url, token);
+
+    if (!address) {
+        return false;
+    }
+
+    const link = document.createElement('a');
+    link.href = address;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(address), 30000);
+
+    return true;
+}
+
+// Lets go of an address made by objectUrl, so the browser can free the bytes behind it.
+export function revoke(address) {
+    URL.revokeObjectURL(address);
 }
 
 // Stops an upload in progress. Its promise resolves with status -1.

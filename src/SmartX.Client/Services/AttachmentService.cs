@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using Microsoft.AspNetCore.Components;
 using Microsoft.JSInterop;
+using SmartX.Client.Auth;
 using SmartX.Shared;
 
 namespace SmartX.Client.Services;
@@ -21,7 +22,7 @@ namespace SmartX.Client.Services;
 /// trusted by it.
 /// </para>
 /// </remarks>
-public sealed class AttachmentService(SmartXApiClient api, ApiConnection connection, IJSRuntime js) : IAsyncDisposable
+public sealed class AttachmentService(SmartXApiClient api, ApiConnection connection, IJSRuntime js, AuthSession session) : IAsyncDisposable
 {
     // Two at a time: parallel enough that one large log does not hold up a batch of photos, restrained enough
     // not to saturate a gateway's uplink or its request threads.
@@ -29,6 +30,7 @@ public sealed class AttachmentService(SmartXApiClient api, ApiConnection connect
 
     private readonly Dictionary<string, SensorAttachments> _bySensor = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, UploadItem> _uploadsById = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _objectUrls = new(StringComparer.Ordinal);
     private readonly Queue<(string Mac, UploadItem Item, AttachmentKind? Kind)> _waiting = new();
 
     private IJSObjectReference? _module;
@@ -167,9 +169,42 @@ public sealed class AttachmentService(SmartXApiClient api, ApiConnection connect
         return problem;
     }
 
-    public string DownloadUrl(Guid id) => api.AbsoluteUrl($"api/attachments/{id}");
+    /// <summary>
+    /// An address the browser can show for an attachment's thumbnail (or, with <paramref name="thumbnail"/> false, the whole file),
+    /// fetched with the bearer token. Null if it could not be had. Kept, so a re-render does not fetch it again.
+    /// </summary>
+    /// <remarks>
+    /// An image tag, a link or a download cannot carry an Authorization header, and the API protects these endpoints, so the browser
+    /// cannot be left to fetch them by address. The bytes are fetched here through the authenticated path and shown from memory.
+    /// </remarks>
+    public async Task<string?> ObjectUrlAsync(Guid id, bool thumbnail = true)
+    {
+        var path = thumbnail ? $"api/attachments/{id}/thumbnail" : $"api/attachments/{id}";
 
-    public string ThumbnailUrl(Guid id) => api.AbsoluteUrl($"api/attachments/{id}/thumbnail");
+        if (_objectUrls.TryGetValue(path, out var known))
+        {
+            return known;
+        }
+
+        if (session.Token is not { } token)
+        {
+            return null;
+        }
+
+        var address = await (await ModuleAsync()).InvokeAsync<string?>("objectUrl", api.AbsoluteUrl(path), token);
+
+        if (address is not null)
+        {
+            _objectUrls[path] = address;
+        }
+
+        return address;
+    }
+
+    /// <summary>Saves an attachment to the user's computer, fetched with the bearer token. Returns whether it worked.</summary>
+    public async Task<bool> DownloadAsync(AttachmentMetadata attachment) =>
+        session.Token is { } token
+        && await (await ModuleAsync()).InvokeAsync<bool>("download", api.AbsoluteUrl($"api/attachments/{attachment.Id}"), token, attachment.OriginalFileName);
 
     /// <summary>Receives upload progress from the browser.</summary>
     [JSInvokable]
@@ -188,6 +223,11 @@ public sealed class AttachmentService(SmartXApiClient api, ApiConnection connect
         {
             try
             {
+                foreach (var address in _objectUrls.Values)
+                {
+                    await _module.InvokeVoidAsync("revoke", address);
+                }
+
                 await _module.DisposeAsync();
             }
             catch (JSDisconnectedException)
@@ -247,7 +287,7 @@ public sealed class AttachmentService(SmartXApiClient api, ApiConnection connect
             var query = kind is null ? string.Empty : $"?kind={kind}";
             var url = api.AbsoluteUrl($"api/sensors/{Uri.EscapeDataString(macAddress)}/attachments{query}");
 
-            var response = await module.InvokeAsync<UploadResponse>("upload", item.Id, url, _self);
+            var response = await module.InvokeAsync<UploadResponse>("upload", item.Id, url, _self, session.Token);
 
             connection.Report(response.Status != 0);
 

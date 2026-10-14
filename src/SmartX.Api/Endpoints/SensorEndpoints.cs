@@ -15,13 +15,25 @@ namespace SmartX.Api.Endpoints;
 /// </remarks>
 internal static class SensorEndpoints
 {
-    internal static RouteGroupBuilder MapSensorEndpoints(this RouteGroupBuilder api)
+    /// <summary>The reads. Mapped on the console group.</summary>
+    internal static RouteGroupBuilder MapSensorReadEndpoints(this RouteGroupBuilder api)
     {
         var sensors = api.MapGroup("/sensors");
 
         sensors.MapGet("", ListAsync).WithName("ListSensors");
         sensors.MapGet("/{mac}", GetAsync).WithName("GetSensor");
-        sensors.MapPost("", RegisterAsync).WithName("RegisterSensor");
+
+        return api;
+    }
+
+    /// <summary>
+    /// Registration. Mapped on the operator-or-device group, because there are two honest callers: an operator registering a sensor
+    /// from the page, and a device introducing itself with its own key, which is how the simulator starts (see DeviceScope and the
+    /// README). A device can register only its own MAC.
+    /// </summary>
+    internal static RouteGroupBuilder MapSensorRegistrationEndpoint(this RouteGroupBuilder api)
+    {
+        api.MapGroup("/sensors").MapPost("", RegisterAsync).WithName("RegisterSensor");
 
         return api;
     }
@@ -62,6 +74,7 @@ internal static class SensorEndpoints
     /// rejected registration never half-writes.
     /// </remarks>
     private static async Task<IResult> RegisterAsync(
+        System.Security.Claims.ClaimsPrincipal user,
         SensorRegistrationRequest request,
         ISensorRegistry registry,
         IZoneStore zones,
@@ -69,6 +82,11 @@ internal static class SensorEndpoints
         DeviceIndex index,
         CancellationToken cancellationToken)
     {
+        if (!string.IsNullOrWhiteSpace(request.MacAddress) && SmartX.Api.Security.DeviceScope.Require(user, request.MacAddress) is { } forbidden)
+        {
+            return forbidden;
+        }
+
         if (!request.TryCreateRegistration(out var registration, out var errors))
         {
             return Results.ValidationProblem(errors, title: "The registration request is not valid");

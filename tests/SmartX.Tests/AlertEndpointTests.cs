@@ -18,7 +18,7 @@ public class AlertEndpointTests
     private const string Quiet = "AA:BB:CC:DD:EE:12";
 
     internal static WebApplicationFactory<Program> Host(Dictionary<string, string?>? extra = null) =>
-        new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        new AuthenticatedFactory().WithWebHostBuilder(builder =>
             builder.ConfigureAppConfiguration((_, configuration) =>
             {
                 Dictionary<string, string?> settings = new() { ["Zones:Hierarchy"] = "Demo" };

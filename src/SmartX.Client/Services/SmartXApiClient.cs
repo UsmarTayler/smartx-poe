@@ -34,6 +34,10 @@ public sealed class SmartXApiClient(HttpClient http)
         }
     }
 
+    /// <summary>Logs in. A wrong username or password is a failed result whose message is the API's own, the same for both.</summary>
+    public Task<ApiResult<LoginResponse>> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default) =>
+        SendAsync<LoginResponse>(token => http.PostAsJsonAsync("api/auth/login", request, token), cancellationToken);
+
     public Task<ApiResult<IReadOnlyList<ZoneTreeNode>>> GetZoneTreeAsync(CancellationToken cancellationToken = default) =>
         GetAsync<IReadOnlyList<ZoneTreeNode>>("api/zones", cancellationToken);
 

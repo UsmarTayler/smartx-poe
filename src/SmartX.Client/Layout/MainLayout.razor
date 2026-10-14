@@ -3,6 +3,8 @@
 @inject AppState State
 @inject ApiConnection Connection
 @inject RealtimeConnection Realtime
+@inject AuthSession Auth
+@inject NavigationManager Navigation
 
 @* MudBlazor's providers must appear exactly once, above the layout. Dialogs, popovers and
    snackbars are rendered into these hosts rather than where they are invoked, so leaving one
@@ -14,12 +16,17 @@
 
 <MudLayout>
     <MudAppBar Elevation="0">
-        <MudIconButton Icon="@Icons.Material.Filled.Menu"
-                       Color="Color.Inherit"
-                       Edge="Edge.Start"
-                       OnClick="ToggleDrawer"
-                       aria-label="Toggle navigation"
-                       aria-expanded="@(State.DrawerOpen ? "true" : "false")" />
+        @* Navigation exists for someone who is signed in. On the login page there is nowhere to go, and a menu of links that each
+           bounce back to login is worse than no menu. *@
+        @if (Auth.IsAuthenticated)
+        {
+            <MudIconButton Icon="@Icons.Material.Filled.Menu"
+                           Color="Color.Inherit"
+                           Edge="Edge.Start"
+                           OnClick="ToggleDrawer"
+                           aria-label="Toggle navigation"
+                           aria-expanded="@(State.DrawerOpen ? "true" : "false")" />
+        }
 
         <MudIcon Icon="@Icons.Material.Filled.Hub" Class="ml-1 mr-2" aria-hidden="true" />
         <MudText Typo="Typo.h6" HtmlTag="span">Smart-X</MudText>
@@ -27,6 +34,19 @@
         <MudSpacer />
 
         <ConnectionIndicator Display="ConnectionDisplays.From(Connection.Status, Realtime.State)" Transport="@Realtime.Transport" OnRetry="RetryConnectionAsync" />
+
+        @* Who is signed in, and as what, in words: the role is what decides whether the controls on the page are enabled, so it is
+           always in view. *@
+        @if (Auth.User is { } user)
+        {
+            <MudText Typo="Typo.body2" Color="Color.Inherit" Class="smartx-appbar-user mx-3" role="status">
+                <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" aria-hidden="true" />
+                <span class="smartx-appbar-user__name">@user.Username</span>
+                <span class="smartx-appbar-user__role">@user.Role</span>
+            </MudText>
+            <MudButton Color="Color.Inherit" Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Logout"
+                       OnClick="SignOutAsync" Class="mr-2">Log out</MudButton>
+        }
 
         <MudTooltip Text="@ThemeToggleLabel">
             <MudIconButton Icon="@(IsDark ? Icons.Material.Filled.LightMode : Icons.Material.Filled.DarkMode)"
@@ -41,15 +61,18 @@
        it, Tab on a phone walks through four invisible links before reaching the page.
        Responsive: pinned open beside the content on wide screens, and an overlay that closes after
        use below the medium breakpoint, so a phone never loses two thirds of its width to navigation. *@
-    <MudDrawer Open="State.DrawerOpen"
-               OpenChanged="State.SetDrawerOpen"
-               ClipMode="DrawerClipMode.Always"
-               Variant="DrawerVariant.Responsive"
-               Breakpoint="Breakpoint.Md"
-               Elevation="0"
-               inert="@(!State.DrawerOpen)">
-        <NavMenu />
-    </MudDrawer>
+    @if (Auth.IsAuthenticated)
+    {
+        <MudDrawer Open="State.DrawerOpen"
+                   OpenChanged="State.SetDrawerOpen"
+                   ClipMode="DrawerClipMode.Always"
+                   Variant="DrawerVariant.Responsive"
+                   Breakpoint="Breakpoint.Md"
+                   Elevation="0"
+                   inert="@(!State.DrawerOpen)">
+            <NavMenu />
+        </MudDrawer>
+    }
 
     @* MudMainContent renders a div, so the page's one main landmark is declared here. Without it a screen reader's "jump to main
        content" has nowhere to go, and every control on the page sits outside any landmark. *@
@@ -74,13 +97,42 @@
         State.Changed += OnStateChanged;
         Connection.Changed += OnStateChanged;
         Realtime.StateChanged += OnStateChanged;
-
-        // The one real-time connection starts with the app and not with any page, so the indicator is right on
-        // every page, and a page opening or closing can never be what opens or closes the connection.
-        Realtime.EnsureStarted();
+        Auth.Changed += OnSessionChanged;
     }
 
-    protected override Task OnInitializedAsync() => Connection.CheckAsync();
+    protected override async Task OnInitializedAsync()
+    {
+        // The stored session is read before anything else, because whether the hub may be opened depends on it.
+        await Auth.RestoreAsync();
+        StartRealtimeIfSignedIn();
+
+        await Connection.CheckAsync();
+    }
+
+    // The one real-time connection starts with the app and not with any page, so the indicator is right on every page, and a page
+    // opening or closing can never be what opens or closes the connection. It needs a token, so it starts once someone is signed in:
+    // at load if a session was restored, and at the moment of login otherwise.
+    private void StartRealtimeIfSignedIn()
+    {
+        if (Auth.IsAuthenticated)
+        {
+            Realtime.EnsureStarted();
+        }
+    }
+
+    private void OnSessionChanged()
+    {
+        StartRealtimeIfSignedIn();
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    // A reload and not a navigation, so nothing the previous user was looking at (feeds, the stream's buffer, the hub connection)
+    // is left in memory for the next person to sign in.
+    private async Task SignOutAsync()
+    {
+        await Auth.SignOutAsync();
+        Navigation.NavigateTo("login", forceLoad: true);
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -107,5 +159,6 @@
         State.Changed -= OnStateChanged;
         Connection.Changed -= OnStateChanged;
         Realtime.StateChanged -= OnStateChanged;
+        Auth.Changed -= OnSessionChanged;
     }
 }

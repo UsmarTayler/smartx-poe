@@ -1,5 +1,6 @@
 @implements IAsyncDisposable
 @inject IAlertFeed Alerts
+@inject AuthSession Auth
 @inject IOperatorApi Api
 @inject SensorService Catalog
 
@@ -13,6 +14,8 @@
             @State.Stats.Active active · @State.Stats.Raised.ToString("N0") raised · @State.Stats.Suppressed.ToString("N0") repeats suppressed · @State.Stats.Cleared.ToString("N0") cleared
         </MudText>
     </div>
+
+    <OperatorsOnlyNote Text="Operators only. You are signed in as a Viewer, so alerts cannot be acknowledged." />
 
     @if (_problem is not null)
     {
@@ -57,7 +60,7 @@
                     else
                     {
                         <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Check"
-                                   OnClick="() => AcknowledgeAsync(alert)"
+                                   Disabled="@(!Auth.CanChange)" OnClick="() => AcknowledgeAsync(alert)"
                                    aria-label="@($"Acknowledge {style.Label} on {alert.Room ?? alert.Key.Mac}")">Acknowledge</MudButton>
                     }
                 </li>

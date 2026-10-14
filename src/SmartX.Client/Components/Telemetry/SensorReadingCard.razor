@@ -1,3 +1,4 @@
+@inject AuthSession Auth
 @* One sensor's ingestion controls. Data in: the sensor, its telemetry state and where it sits.
    Event out: a reading to send. The input control follows the registered payload kind — a number
    box for a meter or thermometer, a switch for an actuator — because that kind is what the server
@@ -49,7 +50,7 @@
         }
 
         <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Send"
-                   Disabled="@(!CanSend)" OnClick="SendAsync">
+                   Disabled="@(!CanSend || !Auth.CanChange)" OnClick="SendAsync">
             @(Telemetry.IsSending ? "Sending…" : "Send")
         </MudButton>
     </div>

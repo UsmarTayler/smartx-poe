@@ -28,7 +28,7 @@ public class IngestionEndpointTests
     /// there, which is deterministic where a race is not.
     /// </remarks>
     private static WebApplicationFactory<Program> HostWithoutWorker(int maxQueueDepth, int retryAfterSeconds = 5) =>
-        new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        new AuthenticatedFactory().WithWebHostBuilder(builder =>
         {
             builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(
                 new Dictionary<string, string?>
@@ -224,11 +224,11 @@ public class IngestionEndpointTests
         using var api = New();
         var client = await WithSensorsAsync(api);
 
-        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/devices/{Thermometer}/desired")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.DeviceGetAsync($"/api/devices/{Thermometer}/desired", Thermometer)).StatusCode);
 
         await client.PostAsync($"/api/simulation/{Thermometer}/scenario", Json("""{ "scenario": "Disconnect" }"""));
 
-        var desired = await client.GetFromJsonAsync<DeviceDesiredState>($"/api/devices/{Thermometer}/desired");
+        var desired = await client.DeviceGetFromJsonAsync<DeviceDesiredState>($"/api/devices/{Thermometer}/desired", Thermometer);
 
         Assert.Equal(SimulationScenario.Disconnect, desired?.Scenario);
         Assert.Equal(Thermometer, desired?.MacAddress);
@@ -242,7 +242,7 @@ public class IngestionEndpointTests
 
         await client.PostAsync($"/api/simulation/{Thermometer.ToLowerInvariant()}/scenario", Json("""{ "scenario": "Spike" }"""));
 
-        var desired = await client.GetFromJsonAsync<DeviceDesiredState>($"/api/devices/{Thermometer}/desired");
+        var desired = await client.DeviceGetFromJsonAsync<DeviceDesiredState>($"/api/devices/{Thermometer}/desired", Thermometer);
 
         Assert.Equal(SimulationScenario.Spike, desired?.Scenario);
     }

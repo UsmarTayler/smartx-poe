@@ -25,7 +25,7 @@ internal static class ApiTestHost
     internal const string Switch = "AA:BB:CC:DD:EE:03";
 
     /// <summary>A host with empty stores and the seeded zone hierarchy.</summary>
-    internal static WebApplicationFactory<Program> New() => new();
+    internal static WebApplicationFactory<Program> New() => new AuthenticatedFactory();
 
 
     /// <summary>

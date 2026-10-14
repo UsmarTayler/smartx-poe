@@ -4,10 +4,10 @@
         <MudText Typo="Typo.h6" Class="smartx-attachments__name">@Title</MudText>
     </TitleContent>
     <DialogContent>
-        <img src="@Source" alt="@Title" class="smartx-preview-image" />
+        <AuthenticatedImage Load="LoadSource" Alt="@Title" Class="smartx-preview-image" />
     </DialogContent>
     <DialogActions>
-        <MudButton Href="@DownloadUrl" StartIcon="@Icons.Material.Filled.Download">Download</MudButton>
+        <MudButton OnClick="DownloadAsync" StartIcon="@Icons.Material.Filled.Download">Download</MudButton>
         <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Close">Close</MudButton>
     </DialogActions>
 </MudDialog>
@@ -16,14 +16,17 @@
     [CascadingParameter]
     private IMudDialogInstance Dialog { get; set; } = default!;
 
+    /// <summary>Fetches the picture, with the bearer token, and returns an address to show it from.</summary>
     [Parameter]
-    public string Source { get; set; } = string.Empty;
+    public Func<Task<string?>> LoadSource { get; set; } = () => Task.FromResult<string?>(null);
 
     [Parameter]
     public string Title { get; set; } = string.Empty;
 
     [Parameter]
-    public string DownloadUrl { get; set; } = string.Empty;
+    public Func<Task> OnDownload { get; set; } = () => Task.CompletedTask;
+
+    private Task DownloadAsync() => OnDownload();
 
     private void Close() => Dialog.Close();
 }

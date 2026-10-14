@@ -45,8 +45,45 @@ internal enum AckDelivery
 /// and there is nothing else it can do. The simulator has no reference to SmartX.Api, so there is no
 /// in-process shortcut available even by accident.
 /// </remarks>
-internal sealed class GatewayClient(HttpClient http, ILogger<GatewayClient> logger)
+internal sealed class GatewayClient(HttpClient http, ILogger<GatewayClient> logger, DeviceKeyring? keyring = null)
 {
+    private int _rejectionReported;
+
+    /// <summary>
+    /// Raised once, with the MAC of the device concerned, the first time the gateway answers 401 to a request that carried a device
+    /// key. That means the fleet secret here is not the one the gateway derives keys from, so every request will be refused:
+    /// retrying forever would only fill the log with the same failure. The fleet stops instead and says why.
+    /// </summary>
+    public event Action<string>? CredentialsRejected;
+
+    /// <summary>
+    /// Sends one request as a device: with its key on it, and watching for the one answer that means the key is wrong.
+    /// </summary>
+    private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, string macAddress, CancellationToken cancellationToken)
+    {
+        keyring?.Sign(request, macAddress);
+
+        var response = await http.SendAsync(request, cancellationToken);
+
+        if (response.StatusCode == HttpStatusCode.Unauthorized && keyring is { IsConfigured: true } && Interlocked.Exchange(ref _rejectionReported, 1) == 0)
+        {
+            logger.LogCritical(
+                "The gateway rejected the device key for {Mac} (401). Simulator:FleetSecret must be the same secret as Auth:FleetSecret on " +
+                "the gateway. Every request would be refused, so the simulator is stopping.",
+                macAddress);
+
+            CredentialsRejected?.Invoke(macAddress);
+        }
+
+        return response;
+    }
+
+    private Task<HttpResponseMessage> PostAsync<T>(string url, string macAddress, T body, CancellationToken cancellationToken) =>
+        SendAsync(new HttpRequestMessage(HttpMethod.Post, url) { Content = JsonContent.Create(body) }, macAddress, cancellationToken);
+
+    private Task<HttpResponseMessage> GetAsync(string url, string macAddress, CancellationToken cancellationToken) =>
+        SendAsync(new HttpRequestMessage(HttpMethod.Get, url), macAddress, cancellationToken);
+
     /// <summary>Waits until the gateway answers its health endpoint.</summary>
     /// <remarks>
     /// Compose starts containers in parallel, and a device that crashed because it won the race would be a
@@ -99,7 +136,7 @@ internal sealed class GatewayClient(HttpClient http, ILogger<GatewayClient> logg
     {
         try
         {
-            using var response = await http.PostAsJsonAsync("api/sensors", registration, cancellationToken);
+            using var response = await PostAsync("api/sensors", registration.MacAddress, registration, cancellationToken);
 
             if (response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.Conflict)
             {
@@ -127,11 +164,11 @@ internal sealed class GatewayClient(HttpClient http, ILogger<GatewayClient> logg
     /// Safe to repeat: the gateway answers the same acknowledgement for the same command with the same result,
     /// so a device that never saw the reply simply sends it again.
     /// </remarks>
-    public async Task<AckDelivery> AcknowledgeAsync(Guid commandId, CommandAckRequest acknowledgement, CancellationToken cancellationToken)
+    public async Task<AckDelivery> AcknowledgeAsync(string macAddress, Guid commandId, CommandAckRequest acknowledgement, CancellationToken cancellationToken)
     {
         try
         {
-            using var response = await http.PostAsJsonAsync($"api/commands/{commandId}/ack", acknowledgement, cancellationToken);
+            using var response = await PostAsync($"api/commands/{commandId}/ack", macAddress, acknowledgement, cancellationToken);
 
             return response.IsSuccessStatusCode ? AckDelivery.Done
                 : response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Conflict ? AckDelivery.Rejected
@@ -167,8 +204,9 @@ internal sealed class GatewayClient(HttpClient http, ILogger<GatewayClient> logg
     {
         try
         {
-            using var response = await http.PostAsJsonAsync(
+            using var response = await PostAsync(
                 "api/telemetry",
+                macAddress,
                 new TelemetryIngestionRequest(macAddress, value, timestamp),
                 cancellationToken);
 
@@ -215,8 +253,9 @@ internal sealed class GatewayClient(HttpClient http, ILogger<GatewayClient> logg
     {
         try
         {
-            using var response = await http.GetAsync(
+            using var response = await GetAsync(
                 $"api/devices/{Uri.EscapeDataString(macAddress)}/desired?deliver={(deliverCommands ? "true" : "false")}",
+                macAddress,
                 cancellationToken);
 
             if (response.StatusCode == HttpStatusCode.NotFound || !response.IsSuccessStatusCode)

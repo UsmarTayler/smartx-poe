@@ -32,7 +32,17 @@ internal static class CommandEndpoints
         commands.MapPost("/undo", Undo).WithName("UndoCommand");
         commands.MapGet("/composite/{id:guid}", GetComposite).WithName("GetCompositeCommand");
         commands.MapGet("/{id:guid}", Get).WithName("GetCommand");
-        commands.MapPost("/{id:guid}/ack", Acknowledge).WithName("AcknowledgeCommand");
+
+        return api;
+    }
+
+    /// <summary>
+    /// A device confirming, or failing, a command it fetched. Mapped on the device group, and only for a command addressed to the
+    /// device that is sending it: one device cannot report that another applied something.
+    /// </summary>
+    internal static RouteGroupBuilder MapCommandAckEndpoint(this RouteGroupBuilder api)
+    {
+        api.MapGroup("/commands").MapPost("/{id:guid}/ack", Acknowledge).WithName("AcknowledgeCommand");
 
         return api;
     }
@@ -154,8 +164,18 @@ internal static class CommandEndpoints
             : Results.Ok(new CompositeCommandResult(id, string.Empty, children[0].Action, children, CommandService.StatusOf(children)));
     }
 
-    private static IResult Acknowledge(Guid id, CommandAckRequest request, CommandService commands)
+    private static IResult Acknowledge(
+        System.Security.Claims.ClaimsPrincipal user,
+        Guid id,
+        CommandAckRequest request,
+        CommandService commands,
+        ICommandStore store)
     {
+        if (store.Find(id) is { } target && SmartX.Api.Security.DeviceScope.Require(user, target.MacAddress) is { } forbidden)
+        {
+            return forbidden;
+        }
+
         var result = commands.Acknowledge(id, request);
 
         return result.Outcome switch

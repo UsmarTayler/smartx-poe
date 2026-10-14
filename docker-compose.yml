@@ -26,6 +26,16 @@ services:
       Patterns__Window: ${SMARTX_PATTERN_WINDOW:-00:10:00}
       Patterns__HalfLife: ${SMARTX_PATTERN_HALFLIFE:-7.00:00:00}
       SeededHistory__Enabled: ${SMARTX_SEED_HISTORY:-true}
+      # Who may call the API. Like the attachment key, the defaults are the development values published in the README, so a fresh
+      # clone works with no .env; they protect nothing, and the API logs a warning at start-up for each one still in use. Set
+      # SMARTX_AUTH_SIGNING_KEY (openssl rand -base64 48), SMARTX_FLEET_SECRET (openssl rand -base64 32) and
+      # SMARTX_DEMO_USERS=false, and give the API real users (Auth__Users), for anything but a demo.
+      Auth__SigningKey: ${SMARTX_AUTH_SIGNING_KEY:-smartx-development-signing-key-not-a-secret-0001}
+      Auth__FleetSecret: ${SMARTX_FLEET_SECRET:-smartx-development-fleet-secret-not-a-secret}
+      Auth__SeedDemoUsers: ${SMARTX_DEMO_USERS:-true}
+      # The API is reached only through nginx here, which puts the client's address in X-Forwarded-For. Believing it lets the login
+      # rate limit count each browser separately and not nginx as one client. Not safe where the API port is open to the internet.
+      Auth__TrustForwardedHeaders: "true"
     volumes:
       # Encrypted files and their index, kept across container restarts and rebuilds.
       - attachments:/data/attachments
@@ -59,6 +69,9 @@ services:
     image: smartx-simulator
     environment:
       Simulator__ApiBaseUrl: http://api:8080
+      # The same secret the API derives device keys from. Each device sends its own MAC and HMAC-SHA256(secret, MAC); the secret
+      # itself never leaves this container.
+      Simulator__FleetSecret: ${SMARTX_FLEET_SECRET:-smartx-development-fleet-secret-not-a-secret}
       Simulator__DeviceCount: ${SMARTX_DEVICE_COUNT:-55}
       Simulator__Mix: ${SMARTX_SCENARIO_MIX:-Demo}
       Simulator__BackfillDuration: ${SMARTX_BACKFILL:-00:10:00}

@@ -1,3 +1,4 @@
+@inject AuthSession Auth
 @* The registration form. Data in: the zones to choose from, whether a submission is in flight, and
    the problem the server returned for the last attempt. Events out: a finished request.
 
@@ -7,6 +8,8 @@
    (typically a zone constraint only the recursive validator can check) is attached to the field it
    belongs to, not dropped into a banner. Editing a field clears its server error, because the
    message described a value that is no longer there. *@
+
+<OperatorsOnlyNote Text="Operators only. You are signed in as a Viewer, so sensors cannot be registered." />
 
 <MudForm @ref="_form" @bind-IsValid="_isValid">
     <MudGrid Spacing="3">
@@ -128,7 +131,7 @@
         </MudItem>
 
         <MudItem xs="12" sm="6" Class="d-flex align-center justify-end">
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SubmitAsync" Disabled="Busy"
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SubmitAsync" Disabled="@(Busy || !Auth.CanChange)"
                        StartIcon="@Icons.Material.Filled.AddCircleOutline">
                 @(Busy ? "Registering…" : "Register sensor")
             </MudButton>

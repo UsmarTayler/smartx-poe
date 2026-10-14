@@ -1,7 +1,9 @@
+using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
 using MudBlazor.Services;
 using SmartX.Client;
+using SmartX.Client.Auth;
 using SmartX.Client.CommandStream;
 using SmartX.Client.Realtime;
 using SmartX.Client.Services;
@@ -35,7 +37,16 @@ var apiBaseAddress = builder.Configuration["ApiBaseAddress"]
 // API container and the browser only ever talks to one origin. An absolute value ignores the base entirely.
 var apiBaseUri = new Uri(new Uri(builder.HostEnvironment.BaseAddress), apiBaseAddress);
 
-builder.Services.AddHttpClient<SmartXApiClient>(client => client.BaseAddress = apiBaseUri);
+// Who is signed in. A singleton, because the handler that adds the token is built by IHttpClientFactory in a scope of its own and
+// has to see the same session as the pages do. See AuthSession.
+builder.Services.AddSingleton<ISessionStorage, BrowserSessionStorage>();
+builder.Services.AddSingleton<AuthSession>();
+builder.Services.AddAuthorizationCore();
+builder.Services.AddScoped<AuthenticationStateProvider, SmartXAuthenticationStateProvider>();
+builder.Services.AddTransient<BearerTokenHandler>();
+
+builder.Services.AddHttpClient<SmartXApiClient>(client => client.BaseAddress = apiBaseUri)
+    .AddHttpMessageHandler<BearerTokenHandler>();
 
 // Scoped, which in WebAssembly means one instance per browser tab. State that must survive
 // navigation lives in these rather than in page components, which are rebuilt on every visit.
@@ -53,7 +64,13 @@ var realtimeOptions = builder.Configuration.GetSection(RealtimeClientOptions.Sec
 var hubUri = new Uri(apiBaseUri, RealtimeTopics.HubPath.TrimStart('/'));
 
 builder.Services.AddSingleton(realtimeOptions);
-builder.Services.AddScoped<IRealtimeHub>(_ => new SignalRHub(hubUri, realtimeOptions));
+// The hub is asked for the token each time it connects, so a reconnect always carries the current one (and none once signed out).
+builder.Services.AddScoped<IRealtimeHub>(services =>
+{
+    var session = services.GetRequiredService<AuthSession>();
+
+    return new SignalRHub(hubUri, realtimeOptions, () => Task.FromResult(session.Token));
+});
 builder.Services.AddScoped<RealtimeConnection>();
 builder.Services.AddScoped<IRealtimeSnapshots, ApiRealtimeSnapshots>();
 

@@ -26,7 +26,7 @@ public class CommandEndpointTests
     internal static async Task<(WebApplicationFactory<Program> Api, HttpClient Http)> HostAsync(
         TimeSpan? pendingTimeout = null, TimeSpan? deliveredTimeout = null)
     {
-        var api = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        var api = new AuthenticatedFactory().WithWebHostBuilder(builder =>
             builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(
                 new Dictionary<string, string?>
                 {
@@ -36,7 +36,7 @@ public class CommandEndpointTests
                 })));
 
         var http = api.CreateClient();
-        var gateway = new GatewayClient(http, NullLogger<GatewayClient>.Instance);
+        var gateway = new GatewayClient(http, NullLogger<GatewayClient>.Instance, new DeviceKeyring(TestAuth.FleetSecret));
 
         foreach (var device in DemoDevices.All)
         {
@@ -58,7 +58,7 @@ public class CommandEndpointTests
     }
 
     private static Task<HttpResponseMessage> DeviceChecksIn(HttpClient http, string mac, bool deliver = true) =>
-        http.GetAsync($"/api/devices/{mac}/desired?deliver={(deliver ? "true" : "false")}");
+        http.DeviceGetAsync($"/api/devices/{mac}/desired?deliver={(deliver ? "true" : "false")}", mac);
 
     // ---- issuing ------------------------------------------------------------------------------------------
 
@@ -196,8 +196,8 @@ public class CommandEndpointTests
         await DeviceChecksIn(http, Valve);
 
         var ack = Json("""{ "success": true, "resultingValue": 0 }""");
-        var first = await http.PostAsync($"/api/commands/{command.Id}/ack", ack);
-        var second = await http.PostAsync($"/api/commands/{command.Id}/ack", Json("""{ "success": true, "resultingValue": 0 }"""));
+        var first = await http.DevicePostAsync($"/api/commands/{command.Id}/ack", Valve, ack);
+        var second = await http.DevicePostAsync($"/api/commands/{command.Id}/ack", Valve, Json("""{ "success": true, "resultingValue": 0 }"""));
 
         Assert.Equal(HttpStatusCode.OK, first.StatusCode);
         Assert.Equal(CommandState.Acknowledged, (await first.Content.ReadFromJsonAsync<Command>())?.State);
@@ -211,8 +211,8 @@ public class CommandEndpointTests
         using var _ = api;
         var command = await IssuedAsync(http, Valve, "ValveClose");
 
-        var early = await http.PostAsync($"/api/commands/{command.Id}/ack", Json("""{ "success": true }"""));
-        var unknown = await http.PostAsync($"/api/commands/{Guid.NewGuid()}/ack", Json("""{ "success": true }"""));
+        var early = await http.DevicePostAsync($"/api/commands/{command.Id}/ack", Valve, Json("""{ "success": true }"""));
+        var unknown = await http.DevicePostAsync($"/api/commands/{Guid.NewGuid()}/ack", Valve, Json("""{ "success": true }"""));
 
         Assert.Equal(HttpStatusCode.Conflict, early.StatusCode);
         Assert.Contains("not been delivered", await early.Content.ReadAsStringAsync(), StringComparison.Ordinal);
@@ -250,7 +250,7 @@ public class CommandEndpointTests
         using var _ = api;
         var command = await IssuedAsync(http, Valve, "ValveClose");
         await DeviceChecksIn(http, Valve);
-        await http.PostAsync($"/api/commands/{command.Id}/ack", Json("""{ "success": true, "resultingValue": 0 }"""));
+        await http.DevicePostAsync($"/api/commands/{command.Id}/ack", Valve, Json("""{ "success": true, "resultingValue": 0 }"""));
 
         var detail = await http.GetFromJsonAsync<CommandDetail>($"/api/commands/{command.Id}");
 

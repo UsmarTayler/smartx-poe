@@ -14,7 +14,7 @@ management on top, without replacing any of it: a separate device simulator that
 ingestion queues (a FIFO lane and a priority lane for critical alerts, with backpressure), commands to actuators with an undo
 stack, a time-ordered history with timelines, de-duplicated alerts and set-intersection search, everything pushed to the browser
 over SignalR, and a predictive engine that learns what operators do after what, suggests the next action, and warns of a node
-heading for Fault before it gets there. **Part 3** (Network Topology and Mesh Routing) is not built: its entry in the navigation
+heading for Fault before it gets there. Every call is authenticated: operators log in and hold a role (Viewer or Operator), each device carries a key derived for its MAC address, and the real-time hub needs a token. **Part 3** (Network Topology and Mesh Routing) is not built: its entry in the navigation
 is visibly disabled and marked "Part 3".
 
 ## Contents
@@ -22,6 +22,7 @@ is visibly disabled and marked "Part 3".
 - [What Smart-X is](#what-smart-x-is)
 - [Architecture](#architecture)
 - [Quick start](#quick-start) (Docker, no `.env` needed)
+- [Authentication](#authentication): the two roles, the demo users, tokens for `curl`, device keys
 - [Running without Docker](#running-without-docker)
 - [Testing the Part 2 data structures](#testing-the-part-2-data-structures)
   - [`Queue<T>`](#queuet-the-standard-lane), [`PriorityQueue`](#priorityqueue-the-critical-lane) (how to simulate a high-priority alert), [`Stack<T>`](#stackt-undo), [`Dictionary`](#dictionary-lookups-and-learned-counts), [`SortedDictionary`](#sorteddictionary-the-history-store), [`HashSet`](#hashset-duplicates-and-already-done), [the predictive engine](#the-predictive-engine)
@@ -44,6 +45,7 @@ flowchart LR
         SIM["SmartX.DeviceSimulator<br/>55 devices"]
 
         subgraph API["SmartX.Api"]
+            AUTH["Authentication<br/>JWT login and roles,<br/>per-device keys"]
             EDGE["Edge, on the request thread<br/>parse, registered, type, range"]
             STD["Queue#lt;T#gt;<br/>standard lane, bounded"]
             CRIT["PriorityQueue<br/>critical lane"]
@@ -58,8 +60,9 @@ flowchart LR
         end
     end
 
-    SIM -- "HTTP: register, telemetry,<br/>poll desired state" --> EDGE
-    UI -- "HTTP /api" --> NGINX
+    SIM -- "HTTP + device key: register,<br/>telemetry, poll desired state" --> EDGE
+    UI -- "HTTP /api + bearer token" --> NGINX
+    AUTH -. "checks every request" .-> EDGE
     NGINX -- "/api" --> EDGE
     EDGE -- "valid, critical" --> CRIT
     EDGE -- "valid" --> STD
@@ -134,7 +137,7 @@ docker compose up -d --build
 ```
 
 The first build downloads the .NET SDK and nginx images and takes a few minutes; later builds reuse cached layers. Three
-containers start: the API first, then the simulator once the API reports healthy, then the client. Open <http://localhost:8080>.
+containers start: the API first, then the simulator once the API reports healthy, then the client. Open <http://localhost:8080> and sign in as `operator` with the password `smartx-operator-demo` (see [Authentication](#authentication)).
 The dashboard fills within about half a minute, and **Suggested Actions** is not empty from the first moment, because the engine
 starts with a labelled, seeded operator history (see [Suggestions](#suggestions-anticipation-and-insights)).
 
@@ -148,11 +151,17 @@ docker compose ps
 curl http://localhost:5266/api/health
 ```
 
-That prints `{"status":"ok"}`. The fleet is 55 devices, including the hydroponics bay (the last seven), and the engine already
+That prints `{"status":"ok"}`. Everything else needs a token. Log in as the demo operator once and keep it in `$TOKEN`:
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:5266/api/auth/login -H "Content-Type: application/json" -d '{"username":"operator","password":"smartx-operator-demo"}' | sed -E 's/.*"token":"([^"]+)".*/\1/')
+```
+
+The fleet is 55 devices, including the hydroponics bay (the last seven), and the engine already
 has something to suggest:
 
 ```bash
-curl http://localhost:5266/api/suggestions
+curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/suggestions
 ```
 
 The first suggestion is **Turn on Pump A**, with evidence such as "Operators did this 7 of the last 8 times (7 from seeded
@@ -162,7 +171,7 @@ history)". The second number grows by one each time the sensor dips again, and t
 reading above the critical threshold takes the priority lane; an ordinary one takes the standard lane:
 
 ```bash
-curl -X POST http://localhost:5266/api/telemetry -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:0F","value":200}'
+curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:5266/api/telemetry -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:0F","value":200}'
 ```
 
 The response is `202` with `"lane":"critical"`. The same device with `"value":120` answers `"lane":"standard"`.
@@ -217,6 +226,133 @@ without buffering them or applying its own size limit, and the API enforces the 
 
 Both images are multi-stage. The SDK stage restores and publishes in Release, and only the output is copied into the runtime
 image, so neither image contains source or a compiler.
+
+## Authentication
+
+The API has two kinds of caller and each proves who it is in the way that suits it. **People** log in with a username and password and get a signed token, and what they may do depends on their **role**. **Devices** cannot type a password, so each one carries a **key derived for its MAC address** and may act only for itself. Nothing on the API is open except the health check and the login itself. (Part 1 had no authentication at all; this is the answer to that feedback, recorded in [docs/UPDATES.md](docs/UPDATES.md).)
+
+### Who may call what
+
+| Who | Proves it with | May |
+| --- | --- | --- |
+| **Anyone** | nothing | `GET /api/health` and `POST /api/auth/login`. Nothing else. |
+| **Viewer** | a login token | Every `GET`: trust, sensors, telemetry, history, alerts, patterns, suggestions, insights, the real-time hub. Nothing that changes anything. |
+| **Operator** | a login token | Everything a Viewer may, and every action that changes something: register a sensor, send a reading by hand, issue commands (one device or a zone) and undo them, change a device's scenario, upload and delete attachments, acknowledge alerts, give a verdict on an investigation, mark a suggestion "Not useful" and take it back, report that a device was opened. |
+| **A device** | its own key (`X-Device-Mac`, `X-Device-Key`) | Send its **own** readings, register **itself**, collect its **own** commands and acknowledge them. A valid key used for another MAC is `403`. A device key opens nothing in the operator console. |
+
+How the API enforces this, so it cannot be left out by accident:
+
+- Protection is applied to **endpoint groups**, by **authorization policies** (`Console`, `Viewer`, `Operator`, `Device`, `OperatorOrDevice` in [`Policies.cs`](src/SmartX.Api/Security/Policies.cs)), and no endpoint's code asks for a role. The `Console` policy is the default for everything an operator's browser calls: a read (`GET`, `HEAD`, `OPTIONS`) needs a Viewer or an Operator and **anything else needs an Operator**, so a new `GET` is readable and a new `POST`, `PUT` or `DELETE` is not, whichever way it was written.
+- [`EndpointProtectionTests`](tests/SmartX.Tests/EndpointProtectionTests.cs) reads the routing table (`EndpointDataSource`) and **fails if any mapped endpoint lacks authorization, other than health and login**. It also calls every endpoint with no token (all `401`), as a Viewer (reads work, every write is `403`) and as an Operator. A new endpoint is checked the moment it exists.
+- The role in the web page only decides which buttons are disabled. The API checks the role in the token on every request.
+
+### Demo users
+
+| Username | Password | Role |
+| --- | --- | --- |
+| `operator` | `smartx-operator-demo` | Operator |
+| `viewer` | `smartx-viewer-demo` | Viewer |
+
+These are treated exactly like the published development encryption key: they exist in Development and in the Docker demo, **they protect nothing** because anyone with this repository has them, and the API logs a warning at start-up for each one in use when it is not running in Development. Only a **hash** of each password is in the source (made with ASP.NET Core Identity's `PasswordHasher`); a password is never stored, compared as text, echoed or logged.
+
+### Signing in from the page
+
+Open <http://localhost:8080>. Every page needs a signed-in user, so you land on a **login page** (the not-found page and the login page are the only ones that do not). Sign in and you are taken to the page you asked for.
+
+- A refresh does not sign you out: the session is kept in the tab's `sessionStorage`. Closing the tab does. (`localStorage` would outlive the tab and the browser and be shared by every tab, for no benefit here.)
+- The app bar shows your name and role, and **Log out**, which clears the session and reloads the page so nothing the last user was looking at stays in memory.
+- A token lasts **60 minutes** (`Auth:TokenLifetime`). When it runs out, or the API refuses it, the app goes back to the login page, says why, and brings you back to where you were after you sign in again. It does not fail quietly.
+- As a **Viewer** you see the same pages with every control that would change something **disabled and labelled "Operators only"**, so nothing seems to be missing. Opening a device and looking at its timeline still work.
+
+### Getting a token for `curl`
+
+Log in once and keep the token in a variable (bash, Git Bash and zsh):
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:5266/api/auth/login -H "Content-Type: application/json" -d '{"username":"operator","password":"smartx-operator-demo"}' | sed -E 's/.*"token":"([^"]+)".*/\1/')
+```
+
+The response also says who you are and when the token ends: `{"token":"…","expiresAt":"…","username":"operator","role":"Operator"}`. Send the token as a bearer token on every other request:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/auth/me
+```
+
+That answers `{"username":"operator","role":"Operator","expiresAt":"…"}`. Every `curl` in this README adds that header. In PowerShell, `curl` is an alias for something else: use `curl.exe`, or `Invoke-RestMethod` (`$TOKEN = (Invoke-RestMethod -Method Post http://localhost:5266/api/auth/login -ContentType application/json -Body '{"username":"operator","password":"smartx-operator-demo"}').token`).
+
+What you get back when it goes wrong:
+
+| Status | Meaning |
+| --- | --- |
+| `401` | No token, an expired or altered one, or one signed by another key. On login: the username or password is wrong (the message is the same either way). |
+| `403` | A valid token whose role is not enough. Log in as `viewer`, repeat a `POST`, and this is what you see. |
+| `429` | Too many login attempts: the client's rate limit, or the account's lockout. `Retry-After` says how many seconds. |
+
+### What protects the login
+
+- **Hashed passwords**, with `PasswordHasher<T>` (PBKDF2). An unknown username is still hashed against a hash of nothing, so a login for a name that does not exist takes as long as a wrong password, and neither the message nor the time says which names are real.
+- **A rate limit** on the login endpoint, per client address: `Auth:LoginPermitLimit` attempts (10) in `Auth:LoginWindow` (one minute), then `429`.
+- **An account lockout**: `Auth:MaxFailedAttempts` failures in a row (5) lock the name for `Auth:LockoutDuration` (one minute), even against the right password. It counts failures for any name submitted, real or not, so a lockout cannot be used to tell which usernames exist. A good login clears the count.
+- **Tokens** are HMAC-SHA256 JWTs checked for signature, algorithm (only HS256), issuer, audience and expiry (with a 15 second tolerance), so an unsigned `alg: none` token or a token re-signed by anyone else is refused.
+
+### Devices: a key for each, derived and not stored
+
+A device's key is `HMAC-SHA256(fleetSecret, MAC)`, sent as `X-Device-Key` with its MAC as `X-Device-Mac` on every request. The API recomputes it from the secret it already holds and compares in constant time, so it **never stores a table of keys**. This is how Azure IoT Hub's *derived device keys* work, for the same reason: a fleet is enrolled with one master secret, each device is given only its own key, and losing one device's key loses one device, because HMAC cannot be run backwards to the secret or sideways to another MAC. The function is in one place, [`DeviceKeys`](src/SmartX.Shared/Auth/DeviceKeys.cs), used by both the API and the simulator.
+
+A device may act **only for its own MAC**: post its own telemetry, register itself, poll its own shadow (which is also how it collects commands), acknowledge its own commands. A valid key for one MAC used against another is `403`, and a device learns nothing about whether the other one exists.
+
+To try it, derive the key for a MAC and send a reading as that device, with no token at all:
+
+```bash
+FLEET=smartx-development-fleet-secret-not-a-secret
+MAC=B8:27:EB:10:00:0F
+KEY=$(printf %s "$MAC" | openssl dgst -sha256 -hmac "$FLEET" -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+curl -X POST http://localhost:5266/api/telemetry -H "X-Device-Mac: $MAC" -H "X-Device-Key: $KEY" -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:0F","value":120}'
+```
+
+That is `202`. The same headers with `"macAddress":"B8:27:EB:10:00:11"` in the body is `403`, and a wrong `$KEY` is `401`.
+
+**How the simulator registers, and why.** The simulator registers each device **with that device's own key** (a device introducing itself, the way Azure's Device Provisioning Service enrols a device with a key derived from a group secret), and the API accepts a registration from an Operator's token or from a device for **its own MAC only**. The alternative was to give the simulator an Operator login for that one call. That would put a person's credential, with power over every actuator and every command, inside a process that stands in for field hardware, so a single compromised device could drive the whole mesh. A device's derived key can register one MAC and nothing else. Registration still goes through every zone and range rule, and an Operator registering a sensor from the page is unchanged.
+
+**If the secret is wrong.** A simulator whose `Simulator:FleetSecret` is not the API's `Auth:FleetSecret` is refused on its first call. It logs one clear message naming the setting and **stops**, and does not retry for ever: every request would be refused the same way.
+
+### The real-time hub
+
+The hub needs a token (a Viewer's is enough, because joining a topic only reads). A browser cannot set a header on a WebSocket, so SignalR sends the token as `?access_token=` in the hub's URL, and the API reads it from the query string **for the hub's path only**: a token in the URL of any other request is ignored, so a credential is never accepted from a place that gets logged. Because that puts a token in a URL, nginx's access log for `/hubs/` uses a format built from the path (`$uri`) with no query string ([`default.conf`](src/SmartX.Client/nginx/default.conf)), and the API's own request logging is at warning level, which does not print URLs. nginx's *error* log can still show the request line when the API behind it fails; a token in it is good for at most an hour.
+
+A hub connection is closed when its token expires (`CloseOnAuthenticationExpiration`), and the page, which knows the expiry, goes to the login page at that moment. The connection asks for the current token each time it connects.
+
+### Setting real secrets
+
+Everything is an option under `Auth` (environment variable `Auth__Name`; in Docker, the `SMARTX_` variable in the table), and an unset secret is refused at start-up outside Development with a message saying how to make one:
+
+| Setting | Docker variable | What it is |
+| --- | --- | --- |
+| `Auth:SigningKey` | `SMARTX_AUTH_SIGNING_KEY` | Signs login tokens. At least 32 bytes: `openssl rand -base64 48`. Anyone who has it can forge any role. |
+| `Auth:FleetSecret` | `SMARTX_FLEET_SECRET` | Device keys derive from it. `openssl rand -base64 32`. The simulator's `Simulator:FleetSecret` must be the same. |
+| `Auth:SeedDemoUsers` | `SMARTX_DEMO_USERS` | `false` removes the two demo users. |
+| `Auth:Users:0:Username`, `…:PasswordHash`, `…:Role` | none | Your own users: a **hash**, never a password, and `Viewer` or `Operator`. |
+| `Auth:TokenLifetime` | none | `01:00:00`. How long a token lasts. |
+| `Auth:LoginPermitLimit`, `Auth:LoginWindow` | none | The login rate limit. |
+| `Auth:MaxFailedAttempts`, `Auth:LockoutDuration` | none | The account lockout. |
+| `Auth:TrustForwardedHeaders` | none | Believe `X-Forwarded-For`, so the rate limit counts each browser behind nginx and not nginx as one client. The Docker stack sets it. Leave it off where the API port is open to anyone, because anyone can write that header. |
+
+To make a password hash for `Auth:Users`, with the .NET 10 SDK (no project needed):
+
+```csharp
+// hash.cs
+#:package Microsoft.Extensions.Identity.Core@10.0.11
+using Microsoft.AspNetCore.Identity;
+Console.WriteLine(new PasswordHasher<string>().HashPassword("user", args[0]));
+```
+
+```bash
+dotnet run hash.cs -- "a long password"
+```
+
+### What this does not do
+
+Tokens cannot be revoked before they expire (there is no session table, which is also why they can be checked without a lookup); keep `Auth:TokenLifetime` short. There are no refresh tokens: an expired session means signing in again. Users are in memory, seeded from configuration, like everything else on the gateway. A token in `sessionStorage` can be read by script running in the page, as one in `localStorage` could; an httpOnly cookie would resist that and brings CSRF handling with it. The checks in the page are for clarity only.
 
 ## Running without Docker
 
@@ -346,7 +482,7 @@ development certificate once with `dotnet dev-certs https --trust`.
 
 Each subsection is a short recipe: the steps, then what you should see. They assume the Docker stack from the [quick start](#quick-start)
 is running, and use the API on port 5266 and the page on 8080. Each also names the automated tests that hold the behaviour in place
-(`dotnet test --filter "FullyQualifiedName~Name"` runs one). The design behind each is in the [design notes](#design-notes).
+(`dotnet test --filter "FullyQualifiedName~Name"` runs one). Every `curl` carries the bearer token, so log in once first and keep it in `$TOKEN` ([how](#getting-a-token-for-curl)). The design behind each is in the [design notes](#design-notes).
 
 ### `Queue<T>`: the standard lane
 
@@ -355,13 +491,13 @@ The standard lane is a bounded FIFO, `Queue<QueuedReading>` behind a lock, drain
 1. Send an ordinary reading:
 
    ```bash
-   curl -X POST http://localhost:5266/api/telemetry -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:0F","value":120}'
+   curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:5266/api/telemetry -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:0F","value":120}'
    ```
 
 2. Read the pipeline's own figures:
 
    ```bash
-   curl http://localhost:5266/api/pipeline/stats
+   curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/pipeline/stats
    ```
 
 **Expect:** `202 Accepted` with `"lane":"standard"` and a `queuePosition`. In the stats, the `standard` lane's `processed` count keeps
@@ -393,11 +529,11 @@ reading through after every 20 critical ones.
 other thresholds are in [Ingestion queues](#ingestion-queues)). The device's registered range is 0 to 450 kW, so the reading is valid:
 
 ```bash
-curl -X POST http://localhost:5266/api/telemetry -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:0F","value":200}'
+curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:5266/api/telemetry -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:0F","value":200}'
 ```
 
 ```bash
-curl http://localhost:5266/api/pipeline/stats
+curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/pipeline/stats
 ```
 
 **Expect:** `202` with `"lane":"critical"`, and in the stats the `critical` lane's `processed` count goes up and its average wait is a
@@ -429,17 +565,17 @@ sends the device its previous state (not the opposite of the command).
 1. Close a valve:
 
    ```bash
-   curl -X POST http://localhost:5266/api/commands -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:2B","action":"ValveClose"}'
+   curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:5266/api/commands -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:2B","action":"ValveClose"}'
    ```
 
 2. Look at the stack, then undo:
 
    ```bash
-   curl http://localhost:5266/api/commands/undo-stack
+   curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/commands/undo-stack
    ```
 
    ```bash
-   curl -X POST http://localhost:5266/api/commands/undo
+   curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:5266/api/commands/undo
    ```
 
 **Expect:** the stack lists the close with the valve's previous state on top; the undo is accepted, a restore command is sent to that
@@ -457,19 +593,19 @@ lookup. The device index keeps a `Dictionary<TKey, HashSet<string>>` per search 
 1. A per-packet lookup by key:
 
    ```bash
-   curl http://localhost:5266/api/trust/B8:27:EB:10:00:0F
+   curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/trust/B8:27:EB:10:00:0F
    ```
 
 2. The nested dictionary, for Moisture Sensor B (every association the engine holds, including the weak ones):
 
    ```bash
-   curl "http://localhost:5266/api/patterns?mac=B8:27:EB:10:00:32&includeWeak=true"
+   curl -H "Authorization: Bearer $TOKEN" "http://localhost:5266/api/patterns?mac=B8:27:EB:10:00:32&includeWeak=true"
    ```
 
 3. A search that intersects the index's sets:
 
    ```bash
-   curl "http://localhost:5266/api/devices/search?category=Actuator&actuatorKind=Valve&zone=zone-3"
+   curl -H "Authorization: Bearer $TOKEN" "http://localhost:5266/api/devices/search?category=Actuator&actuatorKind=Valve&zone=zone-3"
    ```
 
 **Expect:** (1) the node's score, band and reason. (2) A first association whose trigger is a low-level crossing on Moisture Sensor B and
@@ -486,7 +622,7 @@ History is a dictionary of nodes, each owning a `SortedDictionary<HistoryKey, Hi
 range is read in order.
 
 ```bash
-curl "http://localhost:5266/api/sensors/B8:27:EB:10:00:0C/timeline?maxPoints=20"
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:5266/api/sensors/B8:27:EB:10:00:0C/timeline?maxPoints=20"
 ```
 
 **Expect:** `"shape":"Buckets"`, at most 20 buckets in time order, each with `start`, `end`, `min`, `max`, `average` and `count`, and a
@@ -504,13 +640,13 @@ answer is the whole decision: `true` is a new alert, `false` is a repeat, which 
 1. Look at the alerts, wait a few seconds, look again:
 
    ```bash
-   curl http://localhost:5266/api/alerts
+   curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/alerts
    ```
 
 2. Then the totals:
 
    ```bash
-   curl http://localhost:5266/api/alerts/stats
+   curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/alerts/stats
    ```
 
 **Expect:** the same alerts (one per device and kind) with `suppressedCount` higher the second time, and in the stats `suppressed` far
@@ -530,11 +666,11 @@ at K (the ranking), and a least-squares fit (the forecast).
 2. The same data, as the page receives it:
 
    ```bash
-   curl http://localhost:5266/api/suggestions
+   curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/suggestions
    ```
 
    ```bash
-   curl http://localhost:5266/api/insights
+   curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/insights
    ```
 
 3. Press **Open Pump A** (or open Pump A yourself from the device list). **Expect:** the suggestion disappears without a reload, because
@@ -626,6 +762,12 @@ Parts 1 and 2, in one table.
 | Trust formula | [`TrustFormula.cs`](src/SmartX.Shared/Trust/TrustFormula.cs) | `Score` (Laplace smoothing), `DecayWeight` (half-life), `Classify` |
 | Background services | [`HeartbeatMonitor.cs`](src/SmartX.Api/Trust/HeartbeatMonitor.cs), [`TelemetryProcessor.cs`](src/SmartX.Api/Ingestion/TelemetryProcessor.cs), [`DeviceFleet.cs`](src/SmartX.DeviceSimulator/DeviceFleet.cs) | `PeriodicTimer` driven by an injected `TimeProvider`; a worker that survives one bad reading |
 | Async all the way down | [`SmartXApiClient.cs`](src/SmartX.Client/Services/SmartXApiClient.cs), [`ISensorRegistry.cs`](src/SmartX.Api/Storage/ISensorRegistry.cs) | no `.Result`, `.Wait()` or `GetAwaiter().GetResult()` anywhere |
+| Authentication policies on groups | [`Policies.cs`](src/SmartX.Api/Security/Policies.cs), [`Program.cs`](src/SmartX.Api/Program.cs) | five named policies applied to endpoint groups; `ConsoleAccessHandler` makes a read a Viewer's and everything else an Operator's, so a new endpoint is safe by default |
+| Every endpoint must be protected | [`EndpointProtectionTests.cs`](tests/SmartX.Tests/EndpointProtectionTests.cs) | reads `EndpointDataSource` and fails on any endpoint without authorization, other than health and login |
+| JWT login, lockout, rate limit | [`AuthEndpoints.cs`](src/SmartX.Api/Endpoints/AuthEndpoints.cs), [`TokenService.cs`](src/SmartX.Api/Security/TokenService.cs), [`LoginThrottle.cs`](src/SmartX.Api/Security/LoginThrottle.cs) | one message for every failure, an unknown name still costs a hash, and the token is checked for algorithm, issuer, audience and expiry |
+| Hashed passwords | [`UserDirectory.cs`](src/SmartX.Api/Security/UserDirectory.cs) | `PasswordHasher<T>`; only hashes in the source |
+| Derived device keys | [`DeviceKeys.cs`](src/SmartX.Shared/Auth/DeviceKeys.cs), [`DeviceKeyAuthentication.cs`](src/SmartX.Api/Security/DeviceKeyAuthentication.cs) | `HMAC-SHA256(fleetSecret, MAC)`, never stored, and `DeviceScope` limits a device to its own MAC |
+| The client's session | [`AuthSession.cs`](src/SmartX.Client/Auth/AuthSession.cs), [`SessionPlumbing.cs`](src/SmartX.Client/Auth/SessionPlumbing.cs) | a token in memory and `sessionStorage`, a `DelegatingHandler` that adds it and ends the session on a 401, and an `AuthenticationStateProvider` |
 | Streamed, encrypted I/O | [`AttachmentUploader.cs`](src/SmartX.Api/Attachments/AttachmentUploader.cs), [`AesGcmEncryptingStream.cs`](src/SmartX.Api/Attachments/AesGcmEncryptingStream.cs) | `MultipartReader`, not `IFormFile`, and chunked AES-256-GCM |
 
 ## Measurements
@@ -705,6 +847,23 @@ setting.
 | `History:MaxPointsLimit` | `2000` | The most buckets a caller may ask for. More is a `400`. |
 | `History:DefaultEventLimit` | `500` | Events in the stream when `limit` is omitted. |
 | `History:MaxEventLimit` | `5000` | The most events a caller may ask for. |
+
+### API: `Auth`
+
+See [Authentication](#authentication) for what each does and how to set real secrets. A secret left unset is allowed only in Development, where the published development value is used.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `Auth:SigningKey` | development: the published key | Signs login tokens (HMAC-SHA256). At least 32 bytes. Required outside Development. |
+| `Auth:FleetSecret` | development: the published secret | Device keys derive from it. At least 16 bytes. Required outside Development. |
+| `Auth:Issuer` / `Auth:Audience` | `smartx-api` / `smartx-operators` | Checked on every token. |
+| `Auth:TokenLifetime` | `01:00:00` | How long a token lasts. |
+| `Auth:ClockSkew` | `00:00:15` | How far a clock may be out before a token counts as expired. |
+| `Auth:SeedDemoUsers` | `true` in Development, otherwise `false` | Whether `operator` and `viewer` exist. The Docker stack sets it to `true`. |
+| `Auth:Users:<n>:Username`, `:PasswordHash`, `:Role` | none | More users. A password hash, never a password. Role is `Viewer` or `Operator`. |
+| `Auth:LoginPermitLimit` / `Auth:LoginWindow` | `10` / `00:01:00` | The login rate limit, per client address. |
+| `Auth:MaxFailedAttempts` / `Auth:LockoutDuration` | `5` / `00:01:00` | Failures in a row that lock a username, and for how long. |
+| `Auth:TrustForwardedHeaders` | `false` | Believe `X-Forwarded-For`. The Docker stack sets it (nginx is the only way in); leave it off where the API port is open to anyone. |
 
 ### API: `Alerts`
 
@@ -829,6 +988,7 @@ Bound by `SmartX.DeviceSimulator`, from `src/SmartX.DeviceSimulator/appsettings.
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `Simulator:ApiBaseUrl` | `http://localhost:5266` (`http://api:8080` in Docker) | Where the API is. |
+| `Simulator:FleetSecret` | the published development secret | The secret device keys derive from; the same as `Auth:FleetSecret` on the API. The secret is never sent: each request carries the device's MAC and its derived key. A wrong one stops the simulator with a clear message. |
 | `Simulator:DeviceCount` | `55` | How many of the demo devices to run, from the top of the list. |
 | `Simulator:Mix` | `Demo` | `Demo` gives each device its own scenario, for a spread of bands. `Nominal` starts every device healthy. |
 | `Simulator:Scenarios:<mac>` | none | Starts one device in a named scenario, on top of the mix. A MAC contains colons, which can't be in an environment variable name, so write it with underscores: `Simulator__Scenarios__B8_27_EB_10_00_01=Critical`. |
@@ -902,6 +1062,9 @@ These go in `.env`, which is optional (every one has a default):
 | `SMARTX_PROCESS_DELAY` | `00:00:00` | Becomes `Ingestion__SimulatedGatewayCost`: the simulated per-reading cost of a constrained gateway; see [the Command Stream page](#seeing-a-critical-reading-overtake-the-standard-queue). |
 | `SMARTX_PATTERN_WINDOW` | `00:10:00` | Becomes `Patterns__Window`. A short one, such as `00:01:00`, lets the pattern example be shown in minutes. |
 | `SMARTX_PATTERN_HALFLIFE` | `7.00:00:00` | Becomes `Patterns__HalfLife`. |
+| `SMARTX_AUTH_SIGNING_KEY` | the published development key | Becomes `Auth__SigningKey`. Set a real one (`openssl rand -base64 48`) for anything but a demo. |
+| `SMARTX_FLEET_SECRET` | the published development secret | Becomes `Auth__FleetSecret` and `Simulator__FleetSecret`, so the two always agree. |
+| `SMARTX_DEMO_USERS` | `true` | Becomes `Auth__SeedDemoUsers`. `false` removes the demo `operator` and `viewer`. |
 | `SMARTX_SEED_HISTORY` | `true` | Becomes `SeededHistory__Enabled`. `false` leaves the suggestion engine knowing only what it has observed. |
 | `SMARTX_CLIENT_PORT` | `8080` | Host port for the client. Open this one in the browser. |
 | `SMARTX_API_PORT` | `5266` | Host port for the API, for `curl` and the scenario endpoint. |
@@ -968,6 +1131,22 @@ This demonstrates the *encryption mechanism*, not production key management.
     usual approach, and is not implemented here.
 
 ## Troubleshooting
+
+### The page keeps going back to the login page, or every request is a 401
+
+The token is no longer accepted. Either it expired (they last an hour), or the API was restarted with a different `Auth:SigningKey` (in Development an unset key is the same published one every time, so a restart does not do it), or it was altered. Sign in again. For `curl`, make a fresh `$TOKEN` as in [Authentication](#getting-a-token-for-curl). A `401` on a device route means the device key is wrong for that MAC.
+
+### Login says "Too many attempts" or "Too many failed attempts"
+
+Two protections, both per design. The rate limit allows `Auth:LoginPermitLimit` attempts (10) a minute from one address, and a username that fails `Auth:MaxFailedAttempts` times (5) in a row is locked for `Auth:LockoutDuration` (a minute), even against the right password. `Retry-After` and the message say how long. Waiting is the fix; raising the limits in a demo is fine.
+
+### A button is greyed out and says "Operators only"
+
+You are signed in as the `viewer`. A Viewer can read everything and change nothing, and the API refuses a write from a Viewer with `403` whatever the page shows. Log out and sign in as `operator` (password in [Authentication](#demo-users)).
+
+### The simulator stops with "The gateway rejected the device key"
+
+`Simulator:FleetSecret` is not the same as the API's `Auth:FleetSecret`, so every device is refused and the simulator stops instead of retrying for ever. In Docker both come from `SMARTX_FLEET_SECRET`, so check `.env` sets it once. Running the two by hand, set the same value on both.
 
 ### The indicator says "Polling" and never goes Live
 
@@ -1204,7 +1383,7 @@ because the change hasn't happened yet: the device applies it on its next poll, 
 macOS, Linux or Git Bash:
 
 ```bash
-curl -X POST http://localhost:5266/api/simulation/B8:27:EB:10:00:01/scenario -H "Content-Type: application/json" -d "{\"scenario\":\"Critical\"}"
+curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:5266/api/simulation/B8:27:EB:10:00:01/scenario -H "Content-Type: application/json" -d "{\"scenario\":\"Critical\"}"
 ```
 
 PowerShell:
@@ -1217,7 +1396,7 @@ The response is the desired state, with a version that increases on every change
 version it has already applied does nothing. To see what has been asked of every device:
 
 ```bash
-curl http://localhost:5266/api/simulation
+curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/simulation
 ```
 
 The device's own endpoint is `GET /api/devices/{mac}/desired`, which answers `404` when nothing has been
@@ -1334,7 +1513,7 @@ dotnet test --filter "FullyQualifiedName~CriticalBypassMeasurementTests" --logge
 maximum wait per lane, and how many readings were refused with `503`. Critical is listed first.
 
 ```bash
-curl http://localhost:5266/api/pipeline/stats
+curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/pipeline/stats
 ```
 
 ## Commands and undo
@@ -1477,17 +1656,17 @@ moment, which cannot be reconstructed afterwards.
 With the API and simulator running (`--Zones:Hierarchy=Demo`), close one valve, then undo it:
 
 ```bash
-curl -X POST http://localhost:5266/api/commands -H "Content-Type: application/json" -d "{\"macAddress\":\"B8:27:EB:10:00:2B\",\"action\":\"ValveClose\"}"
+curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:5266/api/commands -H "Content-Type: application/json" -d "{\"macAddress\":\"B8:27:EB:10:00:2B\",\"action\":\"ValveClose\"}"
 ```
 
 ```bash
-curl -X POST http://localhost:5266/api/commands/undo
+curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:5266/api/commands/undo
 ```
 
 Shut every valve under Zone 3:
 
 ```bash
-curl -X POST http://localhost:5266/api/commands/zone -H "Content-Type: application/json" -d "{\"zoneId\":\"zone-3\",\"action\":\"ValveClose\"}"
+curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:5266/api/commands/zone -H "Content-Type: application/json" -d "{\"zoneId\":\"zone-3\",\"action\":\"ValveClose\"}"
 ```
 
 The **timeout demo**: `B8:27:EB:10:00:20` is a relay that starts silent (`Disconnect`). Send it `RelayOn` and
@@ -1641,26 +1820,26 @@ With the API and simulator running on the demo hierarchy, the alerts are real: a
 few send bad readings.
 
 ```bash
-curl http://localhost:5266/api/alerts
+curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/alerts
 ```
 
 Run it twice a few seconds apart and watch `suppressedCount` climb on the disconnected devices while the number of
 alerts stays the same. The totals:
 
 ```bash
-curl http://localhost:5266/api/alerts/stats
+curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/alerts/stats
 ```
 
 The valves in Zone 3 that are in the fault band, combining a category, a band and a zone:
 
 ```bash
-curl "http://localhost:5266/api/devices/search?category=Actuator&actuatorKind=Valve&zone=zone-3"
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:5266/api/devices/search?category=Actuator&actuatorKind=Valve&zone=zone-3"
 ```
 
 A downsampled timeline for the compressor, with its spike still visible as a maximum:
 
 ```bash
-curl "http://localhost:5266/api/sensors/B8:27:EB:10:00:0C/timeline?maxPoints=20"
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:5266/api/sensors/B8:27:EB:10:00:0C/timeline?maxPoints=20"
 ```
 
 ## Real-time push
@@ -2109,20 +2288,20 @@ Or one round with `curl`, five or more times, at least a minute and a half apart
 
 ```bash
 # 1. The sensor (registered 18 to 32, low level 20.8) drops below its low level. A second low reading is the same dip.
-curl -X POST http://localhost:5266/api/telemetry -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:01","value":19.5}'
+curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:5266/api/telemetry -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:01","value":19.5}'
 # 2. The operator opens the pump: click it in the Command Stream, or tell the gateway.
-curl -X POST http://localhost:5266/api/activity/selection -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:06"}'
+curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:5266/api/activity/selection -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:06"}'
 # 3. The sensor recovers past its re-arm level (21.5), so the next drop is a new crossing.
-curl -X POST http://localhost:5266/api/telemetry -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:01","value":26}'
+curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:5266/api/telemetry -H "Content-Type: application/json" -d '{"macAddress":"B8:27:EB:10:00:01","value":26}'
 ```
 
 Then look at what it learned. The second command shows the associations that did not qualify too, with the reason visible in the
 numbers:
 
 ```bash
-curl "http://localhost:5266/api/patterns?mac=B8:27:EB:10:00:01"
-curl "http://localhost:5266/api/patterns?mac=B8:27:EB:10:00:01&includeWeak=true"
-curl "http://localhost:5266/api/patterns/for/B8:27:EB:10:00:03"
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:5266/api/patterns?mac=B8:27:EB:10:00:01"
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:5266/api/patterns?mac=B8:27:EB:10:00:01&includeWeak=true"
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:5266/api/patterns/for/B8:27:EB:10:00:03"
 ```
 
 Expect the first to be empty for the first two rounds (support is below three), and to show the pattern from the third or fourth.
@@ -2396,9 +2575,9 @@ when it is sent. At 100× the topic went from about 12 messages a second to abou
 docker compose up --build -d
 # open http://localhost:8080/command-stream
 
-curl http://localhost:5266/api/suggestions        # what the engine suggests now, with its sequence
-curl http://localhost:5266/api/insights           # anticipated first, then current
-curl "http://localhost:5266/api/patterns?mac=B8:27:EB:10:00:32&includeWeak=true"   # Moisture Sensor B's patterns
+curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/suggestions        # what the engine suggests now, with its sequence
+curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/insights           # anticipated first, then current
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:5266/api/patterns?mac=B8:27:EB:10:00:32&includeWeak=true"   # Moisture Sensor B's patterns
 
 SMARTX_SEED_HISTORY=false docker compose up -d    # the engine knows only what it has observed
 ```
@@ -2474,9 +2653,13 @@ Restart the API, or the Docker stack, and the attachments are still there.
 
 ## API reference
 
+Every route except `GET /api/health` and `POST /api/auth/login` needs a token or, for the device routes, a device key: see [Authentication](#authentication). Reads need a Viewer or an Operator; everything that changes something needs an Operator.
+
 | Method | Route | Returns |
 | --- | --- | --- |
-| `GET` | `/api/health` | `{ "status": "ok" }` |
+| `GET` | `/api/health` | `{ "status": "ok" }`. Public. |
+| `POST` | `/api/auth/login` | `{ "username", "password" }` returns `200` with `{ token, expiresAt, username, role }`, `401` (wrong username or password, one message for both), `429` (rate limited, or the account is locked; `Retry-After`). Public. |
+| `GET` | `/api/auth/me` | The caller: `{ username, role, expiresAt }` |
 | `GET` | `/api/sensors` | Every registered sensor |
 | `POST` | `/api/sensors` | Register a sensor: `201`, `400` (invalid, or a zone violation), `409` (MAC taken) |
 | `GET` | `/api/sensors/{mac}` | One sensor, or `404` |

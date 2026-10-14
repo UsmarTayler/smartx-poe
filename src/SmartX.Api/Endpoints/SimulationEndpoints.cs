@@ -27,7 +27,16 @@ internal static class SimulationEndpoints
         api.MapPost("/simulation/{mac}/scenario", SetScenarioAsync).WithName("SetDeviceScenario");
         api.MapGet("/simulation", ListAsync).WithName("ListDesiredState");
 
-        // The device's own view: one document, for one device, polled by that device.
+        return api;
+    }
+
+    /// <summary>
+    /// The device's own view: one document, for one device, polled by that device. Mapped on the device group, so only a device with
+    /// a valid key reaches it, and only for its own MAC. It is not an operator's endpoint: polling it with deliver collects the
+    /// device's waiting commands, which hands each over once, so an operator reading it would steal them.
+    /// </summary>
+    internal static RouteGroupBuilder MapDeviceShadowEndpoint(this RouteGroupBuilder api)
+    {
         api.MapGet("/devices/{mac}/desired", GetDesiredAsync).WithName("GetDeviceDesiredState");
 
         return api;
@@ -89,12 +98,18 @@ internal static class SimulationEndpoints
     /// </para>
     /// </remarks>
     private static async Task<IResult> GetDesiredAsync(
+        System.Security.Claims.ClaimsPrincipal user,
         string mac,
         bool? deliver,
         IDeviceShadowStore shadows,
         CommandService commands,
         CancellationToken cancellationToken)
     {
+        if (SmartX.Api.Security.DeviceScope.Require(user, mac) is { } forbidden)
+        {
+            return forbidden;
+        }
+
         if (!MacAddressValidator.TryNormalise(mac, out var canonical))
         {
             return NotRegistered(mac);

@@ -2,6 +2,7 @@
 @inject IOperatorApi Api
 @inject ICommandFeed Commands
 @inject SensorService Catalog
+@inject AuthSession Auth
 
 @* One action for every matching device in a zone and beneath it, as a single step that undo reverses as a single step.
    Nothing is sent until the operator has seen exactly which devices will be affected: "Apply to zone" asks the server
@@ -10,6 +11,7 @@
    applied. *@
 <section class="smartx-zone-action" aria-label="Apply an action to a zone">
     <MudText Typo="Typo.subtitle2" HtmlTag="h3">Apply to zone</MudText>
+    <OperatorsOnlyNote />
 
     <div class="smartx-zone-action__form">
         <ZonePicker Zones="Catalog.Zones" Value="@_zone" ValueChanged="value => { _zone = value; }" Label="Zone" Placeholder="Choose a zone" ShowRules="false" />
@@ -27,7 +29,7 @@
         }
 
         <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.AccountTree"
-                   Disabled="@(string.IsNullOrEmpty(_zone) || _busy)" OnClick="PreviewAsync">
+                   Disabled="@(string.IsNullOrEmpty(_zone) || _busy || !Auth.CanChange)" OnClick="PreviewAsync">
             Apply to zone&hellip;
         </MudButton>
     </div>

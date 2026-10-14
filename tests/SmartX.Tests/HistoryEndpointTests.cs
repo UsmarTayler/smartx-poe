@@ -266,8 +266,8 @@ public class HistoryEndpointTests
         var command = (await issued.Content.ReadFromJsonAsync<Command>())!;
 
         // The device collects and confirms it: those are the device's doing and are not the operator's activity.
-        await http.GetAsync($"/api/devices/{Valve}/desired");
-        await http.PostAsJsonAsync($"/api/commands/{command.Id}/ack", new CommandAckRequest(true, null));
+        await http.DeviceGetAsync($"/api/devices/{Valve}/desired", Valve);
+        await http.DevicePostAsJsonAsync($"/api/commands/{command.Id}/ack", Valve, new CommandAckRequest(true, null));
 
         var activity = (await http.GetFromJsonAsync<List<ActivityEntry>>("/api/activity"))!;
 

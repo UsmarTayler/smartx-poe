@@ -27,6 +27,9 @@ internal sealed class DeviceFleet(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // A wrong fleet secret is not something to retry through: say so once (the client has) and stop.
+        gateway.CredentialsRejected += _ => lifetime.StopApplication();
+
         if (!await gateway.WaitForGatewayAsync(_options.StartupTimeout, stoppingToken))
         {
             logger.LogCritical("The gateway never came up. Stopping.");
@@ -375,7 +378,7 @@ internal sealed class DeviceFleet(
 
         foreach (var (commandId, acknowledgement) in device.PendingAcks.ToArray())
         {
-            var delivery = await gateway.AcknowledgeAsync(commandId, acknowledgement, cancellationToken);
+            var delivery = await gateway.AcknowledgeAsync(device.MacAddress, commandId, acknowledgement, cancellationToken);
 
             if (delivery != AckDelivery.Retry)
             {

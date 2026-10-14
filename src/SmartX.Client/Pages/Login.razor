@@ -1,0 +1,128 @@
+@page "/login"
+@attribute [AllowAnonymous]
+@inject SmartXApiClient Api
+@inject AuthSession Session
+@inject NavigationManager Navigation
+
+<PageTitle>Sign in · Smart-X</PageTitle>
+
+@* The one page that needs no token. It is an ordinary form, so Enter submits it and a password manager can fill it; the button says
+   it is working and cannot be pressed twice while it is; and every failure is said in words in an alert that a screen reader reads out
+   as it appears. The error is the server's own wording. For a wrong username and a wrong password it is the same sentence, which is on
+   purpose and is the server's doing, not this page's. *@
+<MudContainer MaxWidth="MaxWidth.ExtraSmall" Class="mt-8">
+    <MudPaper Outlined="true" Class="pa-6">
+        <h1 class="mud-typography mud-typography-h5 mb-1" tabindex="-1">Sign in</h1>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-4">Smart-X needs you to sign in. Operators can change things; viewers can only look.</MudText>
+
+        <div aria-live="polite">
+            @if (_notice is not null)
+            {
+                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3" role="status">@_notice</MudAlert>
+            }
+
+            @if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-3" role="alert">@_error</MudAlert>
+            }
+        </div>
+
+        <EditForm Model="_model" OnSubmit="SubmitAsync" novalidate>
+            <MudTextField @bind-Value="_model.Username" Label="Username" Variant="Variant.Outlined" Immediate="true"
+                          Disabled="_busy" Required="true" autocomplete="username" autocapitalize="none" spellcheck="false" Class="mb-3" />
+            <MudTextField @bind-Value="_model.Password" Label="Password" Variant="Variant.Outlined" Immediate="true"
+                          InputType="InputType.Password" Disabled="_busy" Required="true" autocomplete="current-password" Class="mb-4" />
+
+            <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled" Color="Color.Primary" FullWidth="true"
+                       Disabled="@(_busy || string.IsNullOrWhiteSpace(_model.Username) || string.IsNullOrEmpty(_model.Password))">
+                @if (_busy)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" aria-hidden="true" />
+                    <span>Signing in…</span>
+                }
+                else
+                {
+                    <span>Sign in</span>
+                }
+            </MudButton>
+        </EditForm>
+    </MudPaper>
+</MudContainer>
+
+@code {
+    private readonly LoginModel _model = new();
+    private bool _busy;
+    private string? _error;
+    private string? _notice;
+
+    /// <summary>Where to go after signing in. Only ever a path on this site; see <see cref="ReturnAddress"/>.</summary>
+    [SupplyParameterFromQuery(Name = "returnUrl")]
+    public string? ReturnUrl { get; set; }
+
+    /// <summary>Why the user is here, when it was not their choice: <c>expired</c> or <c>rejected</c>.</summary>
+    [SupplyParameterFromQuery(Name = "reason")]
+    public string? Reason { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Session.RestoreAsync();
+
+        if (Session.IsAuthenticated)
+        {
+            Navigation.NavigateTo(ReturnAddress.Safe(ReturnUrl));
+
+            return;
+        }
+
+        _notice = Reason switch
+        {
+            "expired" => "Your session expired. Sign in again to carry on where you were.",
+            "rejected" => "The gateway no longer accepts your sign-in. Sign in again to carry on where you were.",
+            _ => null,
+        };
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (_busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            var result = await Api.LoginAsync(new LoginRequest(_model.Username.Trim(), _model.Password));
+
+            if (result.IsSuccess)
+            {
+                // The password is not kept: the model is cleared before anything else can happen to it.
+                _model.Password = "";
+
+                await Session.SignInAsync(result.Value!);
+                Navigation.NavigateTo(ReturnAddress.Safe(ReturnUrl));
+
+                return;
+            }
+
+            _model.Password = "";
+            _error = result.Problem!.IsUnreachable
+                ? "The API could not be reached. Check that it is running and try again."
+                : result.Problem.Detail ?? result.Problem.Title;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private sealed class LoginModel
+    {
+        public string Username { get; set; } = "";
+
+        public string Password { get; set; } = "";
+    }
+}

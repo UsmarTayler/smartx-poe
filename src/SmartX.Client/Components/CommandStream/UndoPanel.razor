@@ -2,6 +2,7 @@
 @inject IOperatorApi Api
 @inject ICommandFeed Commands
 @inject SensorService Catalog
+@inject AuthSession Auth
 
 @* The undo stack, top first, and the result of undoing exactly as the API reports it. Undo restores the state a command
    replaced; it is not the opposite action. An entry that cannot be undone says why before anyone presses anything, in
@@ -15,9 +16,11 @@
 
     <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Class="mt-2"
                StartIcon="@(TopBlocked ? Icons.Material.Filled.DeleteSweep : Icons.Material.Filled.Undo)"
-               Disabled="@(_stack.Count == 0 || _busy)" OnClick="UndoAsync">
+               Disabled="@(_stack.Count == 0 || _busy || !Auth.CanChange)" OnClick="UndoAsync">
         @(TopBlocked ? "Clear last (can't be undone)" : "Undo last")
     </MudButton>
+
+    <OperatorsOnlyNote Text="Operators only. You are signed in as a Viewer, so nothing can be undone." />
 
     @if (_loadProblem is not null)
     {

@@ -1,6 +1,7 @@
 @implements IAsyncDisposable
 @inject IOperatorApi Api
 @inject ICommandFeed Commands
+@inject AuthSession Auth
 
 @* Manual override for one actuator. The controls are made from the device's kind and offer nothing else: a pump gets on and
    off, a relay gets on and off, a valve gets open and close, a dimmer gets a level. So a command that does not match the
@@ -8,6 +9,7 @@
    Acknowledged, or Timed out or Failed, each with an icon and a word. *@
 <section class="smartx-commands" aria-label="@($"Commands for {Sensor.Location.Room}")">
     <MudText Typo="Typo.subtitle2" HtmlTag="h3">Override</MudText>
+    <OperatorsOnlyNote />
 
     @if (Sensor.ActuatorKind is { } kind)
     {
@@ -15,11 +17,11 @@
         {
             <div class="smartx-commands__level">
                 <MudSlider T="double" Min="Sensor.ExpectedRange.Minimum" Max="Sensor.ExpectedRange.Maximum" Step="1"
-                           @bind-Value="_level" Color="Color.Primary" aria-label="Level">
+                           @bind-Value="_level" Color="Color.Primary" Disabled="@(!Auth.CanChange)" aria-label="Level">
                     Level: @_level.ToString("0") @Sensor.Unit
                 </MudSlider>
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" StartIcon="@Icons.Material.Filled.Tune"
-                           Disabled="_busy" OnClick="() => SendAsync(CommandAction.SetLevel, _level)">
+                           Disabled="@(_busy || !Auth.CanChange)" OnClick="() => SendAsync(CommandAction.SetLevel, _level)">
                     Set level to @_level.ToString("0")
                 </MudButton>
             </div>
@@ -30,7 +32,7 @@
                 @foreach (var choice in CommandChoices.For(kind))
                 {
                     <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" StartIcon="@choice.Icon"
-                               Disabled="_busy" OnClick="() => SendAsync(choice.Action, null)">
+                               Disabled="@(_busy || !Auth.CanChange)" OnClick="() => SendAsync(choice.Action, null)">
                         @choice.Label
                     </MudButton>
                 }

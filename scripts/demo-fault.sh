@@ -17,6 +17,16 @@ API=${API:-http://localhost:5266/api}
 NODE=${NODE:-B8:27:EB:10:00:03}
 JSON='Content-Type: application/json'
 
+# Everything below is an operator action or a read, so it needs a token. Log in once as the demo operator (override with
+# SMARTX_USER and SMARTX_PASSWORD, or pass a token you already have in TOKEN).
+TOKEN=${TOKEN:-$(curl -s -X POST "$API/auth/login" -H "$JSON" \
+  -d "{\"username\":\"${SMARTX_USER:-operator}\",\"password\":\"${SMARTX_PASSWORD:-smartx-operator-demo}\"}" \
+  | sed -E 's/.*"token":"([^"]+)".*/\1/')}
+case "$TOKEN" in
+  ""|*"{"*) echo "Could not log in. Is the stack up, and are the demo users enabled?" >&2; exit 1 ;;
+esac
+AUTH="Authorization: Bearer $TOKEN"
+
 show() {
   node -e '
     let text = "";
@@ -29,17 +39,17 @@ show() {
 }
 
 echo "Trust before:"
-curl -s "$API/trust/$NODE" | show '{ band: j.band, score: j.score, reason: j.reason }'
+curl -s -H "$AUTH" "$API/trust/$NODE" | show '{ band: j.band, score: j.score, reason: j.reason }'
 
 echo "Sending 300 readings the registration refuses (the node keeps its last 256 outcomes, so it takes enough to push the good ones out)."
 for _ in $(seq 1 300); do
-  curl -s -o /dev/null -X POST "$API/telemetry" -H "$JSON" -d "{\"macAddress\":\"$NODE\",\"value\":999}"
+  curl -s -H "$AUTH" -o /dev/null -X POST "$API/telemetry" -H "$JSON" -d "{\"macAddress\":\"$NODE\",\"value\":999}"
 done
 
 echo "Trust after:"
-curl -s "$API/trust/$NODE" | show '{ band: j.band, score: j.score, reason: j.reason }'
+curl -s -H "$AUTH" "$API/trust/$NODE" | show '{ band: j.band, score: j.score, reason: j.reason }'
 
-ID=$(curl -s "$API/investigations?status=Open" | node -e '
+ID=$(curl -s -H "$AUTH" "$API/investigations?status=Open" | node -e '
   let text = "";
   process.stdin.on("data", chunk => text += chunk).on("end", () => {
     const found = JSON.parse(text).find(i => i.macAddress === process.argv[1]);
@@ -53,29 +63,29 @@ fi
 
 echo
 echo "The investigation that opened:"
-curl -s "$API/investigations/$ID" | show '{
+curl -s -H "$AUTH" "$API/investigations/$ID" | show '{
   id: j.id, room: j.room, status: j.status, score: j.score, reason: j.reason, causedBy: j.causedBy,
   window: [j.windowStart, j.windowEnd], activeAlerts: j.activeAlerts, trustSamples: j.trustHistory.length,
   readingCount: j.readingCount, precedent: j.precedent.answeredBy, sensitivity: j.sensitivity }'
 
 echo
 echo "Dismiss (a false alarm):"
-curl -s -X POST "$API/investigations/$ID/verdict" -H "$JSON" -d '{"verdict":"Dismiss"}' \
+curl -s -H "$AUTH" -X POST "$API/investigations/$ID/verdict" -H "$JSON" -d '{"verdict":"Dismiss"}' \
   | show '{ status: j.status, verdict: j.verdict, change: j.sensitivityChange, sensitivity: j.sensitivity }'
 echo "Trust after dismissing:"
-curl -s "$API/trust/$NODE" | show '{ band: j.band, score: j.score }'
+curl -s -H "$AUTH" "$API/trust/$NODE" | show '{ band: j.band, score: j.score }'
 
 echo
 echo "Changed to Confirm (the sensitivity is given back):"
-curl -s -X POST "$API/investigations/$ID/verdict" -H "$JSON" -d '{"verdict":"Confirm"}' \
+curl -s -H "$AUTH" -X POST "$API/investigations/$ID/verdict" -H "$JSON" -d '{"verdict":"Confirm"}' \
   | show '{ status: j.status, verdict: j.verdict, change: j.sensitivityChange, sensitivity: j.sensitivity }'
 echo "Trust after confirming:"
-curl -s "$API/trust/$NODE" | show '{ band: j.band, score: j.score }'
+curl -s -H "$AUTH" "$API/trust/$NODE" | show '{ band: j.band, score: j.score }'
 
 echo
 echo "A relabel without a cause is refused:"
-curl -s -w ' [HTTP %{http_code}]\n' -X POST "$API/investigations/$ID/verdict" -H "$JSON" -d '{"verdict":"Relabel"}' | head -c 500
+curl -s -H "$AUTH" -w ' [HTTP %{http_code}]\n' -X POST "$API/investigations/$ID/verdict" -H "$JSON" -d '{"verdict":"Relabel"}' | head -c 500
 echo
 echo "A relabel with one is stored:"
-curl -s -X POST "$API/investigations/$ID/verdict" -H "$JSON" -d '{"verdict":"Relabel","cause":"Power"}' \
+curl -s -H "$AUTH" -X POST "$API/investigations/$ID/verdict" -H "$JSON" -d '{"verdict":"Relabel","cause":"Power"}' \
   | show '{ status: j.status, verdict: j.verdict, cause: j.cause, change: j.sensitivityChange }'

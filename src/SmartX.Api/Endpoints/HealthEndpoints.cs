@@ -14,8 +14,10 @@ internal static class HealthEndpoints
 {
     internal static RouteGroupBuilder MapHealthEndpoints(this RouteGroupBuilder api)
     {
+        // Public, with the login endpoint, and nothing else: a container health check and a load balancer have no token to send.
         api.MapGet("/health", () => Results.Ok(new HealthResponse("ok")))
-           .WithName("GetHealth");
+           .WithName("GetHealth")
+           .AllowAnonymous();
 
         return api;
     }
