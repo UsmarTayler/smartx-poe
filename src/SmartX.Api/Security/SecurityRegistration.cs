@@ -29,6 +29,7 @@ internal static class SecurityRegistration
                 {
                     options.SigningKey = string.IsNullOrWhiteSpace(options.SigningKey) ? AuthDefaults.DevelopmentSigningKey : options.SigningKey;
                     options.FleetSecret = string.IsNullOrWhiteSpace(options.FleetSecret) ? AuthDefaults.DevelopmentFleetSecret : options.FleetSecret;
+                    options.SeedDemoUsers ??= true;
                 }
             })
             .ValidateOnStart();
