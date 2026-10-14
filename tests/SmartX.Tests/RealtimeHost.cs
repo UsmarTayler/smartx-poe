@@ -64,7 +64,7 @@ internal sealed class RealtimeHost : IAsyncDisposable
             settings[key] = value;
         }
 
-        var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        var factory = new AuthenticatedFactory().WithWebHostBuilder(builder =>
             builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(settings)));
 
         var host = new RealtimeHost(factory);
@@ -83,6 +83,7 @@ internal sealed class RealtimeHost : IAsyncDisposable
             {
                 options.HttpMessageHandlerFactory = _ => Factory.Server.CreateHandler();
                 options.Transports = HttpTransportType.LongPolling;
+                options.AccessTokenProvider = () => Task.FromResult<string?>(TestAuth.Token());
             })
             .Build();
 

@@ -164,7 +164,7 @@ public class CommandStreamServerTests
     public async Task The_reporting_rate_multiplier_divides_each_devices_reporting_interval(double multiplier, double expectedMilliseconds)
     {
         using var api = CommandEndpointTests_Demo();
-        var gateway = new GatewayClient(api.CreateClient(), NullLogger<GatewayClient>.Instance);
+        var gateway = new GatewayClient(api.CreateClient(), NullLogger<GatewayClient>.Instance, new DeviceKeyring(TestAuth.FleetSecret));
         var fleet = new DeviceFleet(
             gateway,
             Microsoft.Extensions.Options.Options.Create(new SimulatorOptions { DeviceCount = 13, ReportingRateMultiplier = multiplier }),
@@ -185,7 +185,7 @@ public class CommandStreamServerTests
     }
 
     private static Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program> CommandEndpointTests_Demo() =>
-        new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        new AuthenticatedFactory().WithWebHostBuilder(builder =>
             builder.ConfigureAppConfiguration((_, configuration) =>
                 configuration.AddInMemoryCollection(new Dictionary<string, string?> { ["Zones:Hierarchy"] = "Demo" })));
 

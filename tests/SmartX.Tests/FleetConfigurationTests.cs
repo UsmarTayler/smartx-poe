@@ -53,7 +53,7 @@ public class FleetConfigurationTests
     [Fact]
     public async Task A_nominal_mix_and_a_named_override_decide_each_devices_starting_scenario()
     {
-        using var api = new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        using var api = new AuthenticatedFactory().WithWebHostBuilder(builder =>
             builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(
                 new Dictionary<string, string?> { ["Zones:Hierarchy"] = "Demo" })));
 
@@ -63,7 +63,7 @@ public class FleetConfigurationTests
             ("Simulator:BackfillDuration", "00:00:00"),
             ("Simulator:Scenarios:B8_27_EB_10_00_02", "Critical"));
 
-        var fleet = new TestableFleet(new GatewayClient(api.CreateClient(), NullLogger<GatewayClient>.Instance), options);
+        var fleet = new TestableFleet(new GatewayClient(api.CreateClient(), NullLogger<GatewayClient>.Instance, new DeviceKeyring(TestAuth.FleetSecret)), options);
 
         await fleet.RegisterAsync();
 

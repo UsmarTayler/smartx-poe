@@ -31,7 +31,7 @@ internal sealed class AttachmentTestHost : IDisposable
 
         Key = key ?? Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
 
-        Factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        Factory = new AuthenticatedFactory().WithWebHostBuilder(builder =>
             builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(
                 new Dictionary<string, string?>
                 {

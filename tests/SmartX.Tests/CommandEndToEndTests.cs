@@ -38,7 +38,7 @@ public class CommandEndToEndTests
             var (api, http) = await CommandEndpointTests.HostAsync(pendingTimeout);
 
             var fleet = new DeviceFleet(
-                new GatewayClient(http, NullLogger<GatewayClient>.Instance),
+                new GatewayClient(http, NullLogger<GatewayClient>.Instance, new DeviceKeyring(TestAuth.FleetSecret)),
                 Options.Create(new SimulatorOptions { DeviceCount = 55 }),
                 TimeProvider.System,
                 new NoopLifetime(),
@@ -180,11 +180,11 @@ public class CommandEndToEndTests
         var issued = await rig.IssueAsync(0x2B, CommandAction.ValveClose);
 
         // The device checks in and receives the command...
-        var first = await rig.Http.GetFromJsonAsync<DeviceDesiredState>($"/api/devices/{Mac(0x2B)}/desired");
+        var first = await rig.Http.DeviceGetFromJsonAsync<DeviceDesiredState>($"/api/devices/{Mac(0x2B)}/desired", Mac(0x2B));
         Assert.Equal(issued.Id, Assert.Single(first!.CommandList).Id);
 
         // ...and checks in again before its acknowledgement has been sent. There is nothing left to give it.
-        Assert.Equal(HttpStatusCode.NotFound, (await rig.Http.GetAsync($"/api/devices/{Mac(0x2B)}/desired")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await rig.Http.DeviceGetAsync($"/api/devices/{Mac(0x2B)}/desired", Mac(0x2B))).StatusCode);
         Assert.Equal(CommandState.Delivered, (await rig.CommandAsync(issued.Id)).State);
     }
 
@@ -331,13 +331,13 @@ public class CommandEndToEndTests
         var issued = await rig.IssueAsync(0x2B, CommandAction.ValveClose);
 
         // The device collects it and the actuator does not respond.
-        var command = (await rig.Http.GetFromJsonAsync<DeviceDesiredState>($"/api/devices/{Mac(0x2B)}/desired"))!.CommandList.Single();
+        var command = (await rig.Http.DeviceGetFromJsonAsync<DeviceDesiredState>($"/api/devices/{Mac(0x2B)}/desired", Mac(0x2B)))!.CommandList.Single();
         var outcome = valve.ApplyCommand(command, failureRate: 1, new Random(1));
         Assert.False(outcome.Success);
 
         foreach (var (id, acknowledgement) in valve.PendingAcks.ToArray())
         {
-            Assert.Equal(HttpStatusCode.OK, (await rig.Http.PostAsJsonAsync($"/api/commands/{id}/ack", acknowledgement)).StatusCode);
+            Assert.Equal(HttpStatusCode.OK, (await rig.Http.DevicePostAsJsonAsync($"/api/commands/{id}/ack", Mac(0x2B), acknowledgement)).StatusCode);
         }
 
         var failed = await rig.CommandAsync(issued.Id);
@@ -371,7 +371,7 @@ public class CommandEndToEndTests
         var issued = await rig.IssueAsync(0x2B, CommandAction.ValveClose);
 
         // The device collects and applies the command but has not yet told the gateway.
-        var command = (await rig.Http.GetFromJsonAsync<DeviceDesiredState>($"/api/devices/{Mac(0x2B)}/desired"))!.CommandList.Single();
+        var command = (await rig.Http.DeviceGetFromJsonAsync<DeviceDesiredState>($"/api/devices/{Mac(0x2B)}/desired", Mac(0x2B)))!.CommandList.Single();
         valve.ApplyCommand(command, failureRate: 0, new Random(1));
         Assert.Single(valve.PendingAcks);
         Assert.Equal(CommandState.Delivered, (await rig.CommandAsync(issued.Id)).State);
