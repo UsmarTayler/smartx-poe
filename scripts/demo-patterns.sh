@@ -28,7 +28,17 @@ PUMP=${PUMP:-B8:27:EB:10:00:06}
 BUSY=${BUSY:-B8:27:EB:10:00:1E}
 JSON='Content-Type: application/json'
 
-post() { curl -s -o /dev/null -w '%{http_code}' -X POST "$API/$1" -H "$JSON" -d "$2"; }
+# Everything below is an operator action or a read, so it needs a token. Log in once as the demo operator (override with
+# SMARTX_USER and SMARTX_PASSWORD, or pass a token you already have in TOKEN).
+TOKEN=${TOKEN:-$(curl -s -X POST "$API/auth/login" -H "$JSON" \
+  -d "{\"username\":\"${SMARTX_USER:-operator}\",\"password\":\"${SMARTX_PASSWORD:-smartx-operator-demo}\"}" \
+  | sed -E 's/.*"token":"([^"]+)".*/\1/')}
+case "$TOKEN" in
+  ""|*"{"*) echo "Could not log in. Is the stack up, and are the demo users enabled?" >&2; exit 1 ;;
+esac
+AUTH="Authorization: Bearer $TOKEN"
+
+post() { curl -s -H "$AUTH" -o /dev/null -w '%{http_code}' -X POST "$API/$1" -H "$JSON" -d "$2"; }
 reading() { post telemetry "{\"macAddress\":\"$SENSOR\",\"value\":$1}"; }
 open() { post activity/selection "{\"macAddress\":\"$1\"}"; }
 
@@ -66,7 +76,7 @@ done
 
 echo
 echo "What was learned about the sensor, including what did not qualify:"
-curl -s "$API/patterns?mac=$SENSOR&includeWeak=true" | summarise
+curl -s -H "$AUTH" "$API/patterns?mac=$SENSOR&includeWeak=true" | summarise
 echo
 echo "What qualifies anywhere in the mesh:"
-curl -s "$API/patterns?limit=500" | summarise
+curl -s -H "$AUTH" "$API/patterns?limit=500" | summarise
