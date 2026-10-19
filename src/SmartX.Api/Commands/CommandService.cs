@@ -47,38 +47,24 @@ internal sealed record AckResult(AckOutcome Outcome, Command? Command, string? M
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>What a command is, and what it is not.</b> An IoT command is not a change to a value in this process's
-/// memory. It is an instruction sent to a device that may or may not receive it, may or may not apply it, and
-/// may or may not say so. So a command has a life: it is <i>pending</i> until the device collects it,
-/// <i>delivered</i> once it has, and finally <i>acknowledged</i>, <i>failed</i>, <i>cancelled</i> or <i>timed
-/// out</i>. The gateway only ever knows what the device tells it.
+/// <b>A command is not a value change.</b> It is an instruction sent to a device that may not receive it, apply it, or say so.
+/// So it has a life: <i>pending</i> until the device collects it, <i>delivered</i> once it has, then <i>acknowledged</i>,
+/// <i>failed</i>, <i>cancelled</i> or <i>timed out</i>. The gateway only knows what the device tells it.
 /// </para>
 /// <para>
-/// <b>At-least-once delivery, made safe by idempotency.</b> A device can check in twice before its
-/// acknowledgement lands, and networks repeat messages. The gateway never re-sends a delivered command
-/// (<see cref="ICommandStore.Collect"/> moves it out of the pending set under a lock), and the device
-/// remembers the ids it has already applied and will not apply one twice. Either half alone would be enough on a
-/// good day; both together make a repeat harmless whichever side it comes from.
+/// <b>At-least-once delivery, made safe by idempotency.</b> A device can check in twice before its acknowledgement lands. The
+/// gateway never re-sends a delivered command (<see cref="ICommandStore.Collect"/> moves it out of the pending set under a lock)
+/// and the device never applies an id twice, so a repeat is harmless from either side.
 /// </para>
 /// <para>
-/// <b>Why undo restores the previous state instead of doing the opposite.</b> The tempting design gives every
-/// command an opposite: <c>ValveOpen</c> is undone by <c>ValveClose</c>. It is wrong, and easy to see why. If a
-/// valve is already open and an operator sends <c>ValveOpen</c>, nothing changes. Undoing that with the
-/// "opposite" closes the valve, a state it was never in and that the operator never chose. The opposite of an
-/// action is not the state before it.
+/// <b>Undo restores the previous state; it does not do the opposite.</b> If a valve is already open and an operator sends
+/// <c>ValveOpen</c>, undoing it with <c>ValveClose</c> shuts a valve that was never closed. So each command records the state it
+/// replaced (for a dimmer, the previous level) and undo returns to that. If no state was ever observed the undo is refused
+/// rather than guessed.
 /// </para>
 /// <para>
-/// So every command records the state it <i>replaced</i>, taken from the actuator's latest observed state at the
-/// moment the command is issued, and undo returns to that recorded state. Open an already-open valve, undo, and
-/// it is left open. For a dimmer the recorded state is the previous level. If no state was ever observed the
-/// command says so, and its undo is refused rather than guessed: restoring a state the gateway made up could
-/// open a valve nobody meant to open.
-/// </para>
-/// <para>
-/// The recorded state is the one the actuator was <i>about to be in</i>, not merely the last one it reported.
-/// If a command is still in flight, the next command records that one's target as its previous state.
-/// Otherwise two quick commands would both record the old reading, and undoing the second would skip past the
-/// first.
+/// The recorded state is the one the actuator was about to be in: while a command is in flight, the next records that one's
+/// target. Otherwise two quick commands would both record the old reading, and undoing the second would skip the first.
 /// </para>
 /// </remarks>
 internal sealed class CommandService(

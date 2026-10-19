@@ -7,36 +7,23 @@ namespace SmartX.Api.Search;
 /// Secondary indexes over the devices, so a search is a set intersection and never a scan.
 /// </summary>
 /// <remarks>
-/// <b>Why indexes.</b> "Find the valves that are faulted in Zone 3" asked of a plain list is a loop over every
-/// device checking each condition in turn, and the loop gets slower with every device the mesh gains. Here
-/// each condition is answered ahead of time by a set: the devices in each category, of each actuator kind, in
-/// each trust band, with each kind of alert, in each zone. A query then picks the sets its filters name and
-/// intersects them. <see cref="HashSet{T}.IntersectWith"/> costs about the size of the smaller set, so a search
-/// for "valves in the fault band" does not touch a thermometer.
 /// <para>
-/// <b>Smallest first.</b> The sets are intersected starting from the smallest. Intersection cost is driven by
-/// the set being whittled down, so beginning with the rarest condition does the least work, and an empty
-/// result — the common case for "pumps in fault" on a healthy mesh — is reached after one set.
+/// <b>Why indexes.</b> "The valves that are faulted in Zone 3" over a plain list is a loop over every device, slower as the mesh
+/// grows. Here each condition is answered ahead of time by a set (devices per category, actuator kind, trust band, alert kind
+/// and zone), and a query intersects the sets its filters name, smallest first, because <see cref="HashSet{T}.IntersectWith"/>
+/// costs about the size of the set being whittled down. An empty answer, common on a healthy mesh, takes one set.
 /// </para>
 /// <para>
-/// <b>Kept in step, in one lock.</b> An index that disagrees with reality is worse than no index, because it
-/// returns confident wrong answers. So the primary facts about each device (its band and its active alerts)
-/// live in <see cref="DeviceEntry"/>, every index is derived from them, and every change updates the fact and
-/// the index sets together inside <see cref="Gate"/>. The alert tracker takes the same lock for its own
-/// changes, so an alert appearing and the device becoming findable by it are one step that no query can see
-/// half of. <see cref="FindInconsistencies"/> rebuilds every index from the facts and reports any difference,
-/// which is what the consistency test runs after random changes.
+/// <b>Kept in step, in one lock.</b> An index that disagrees with reality returns confident wrong answers. So each device's
+/// facts (band, active alerts) live in <see cref="DeviceEntry"/>, every index is derived from them, and a change updates the fact
+/// and the sets together inside <see cref="Gate"/>. The alert tracker uses the same lock, so an alert appearing and the device
+/// becoming findable by it are one step. <see cref="FindInconsistencies"/> rebuilds every index and reports any difference, which
+/// the consistency test runs after random changes.
 /// </para>
 /// <para>
-/// <b>What still scans.</b> The text filter. Matching "pump" against a MAC or a name cannot be answered by a
-/// set, so it runs last, over only the devices that survived every other filter. With no other filter it scans
-/// everything, which is the honest cost of a free-text search.
-/// </para>
-/// <para>
-/// <b>Zones.</b> Devices are indexed by the zone they are deployed in. A search for a zone must also find
-/// devices in every zone beneath it, so the search asks the Part 1 recursive walk
-/// (<see cref="ZoneTree.ZoneIdsBeneath"/>) which zones those are and unions their sets. The walk is over zones,
-/// of which there are a handful, and not over devices.
+/// <b>What still scans.</b> The text filter, which runs last over only the survivors of the other filters. <b>Zones:</b> a zone
+/// search also needs every zone beneath it, so it asks the Part 1 recursive walk (<see cref="ZoneTree.ZoneIdsBeneath"/>), over a
+/// handful of zones and not over devices, and unions their sets.
 /// </para>
 /// </remarks>
 internal sealed class DeviceIndex

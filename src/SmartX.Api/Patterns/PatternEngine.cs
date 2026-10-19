@@ -150,32 +150,24 @@ internal struct DecayedCount
 /// lift, faded with a half-life, and learned at two levels of generality.
 /// </summary>
 /// <remarks>
-/// <b>The window is a queue.</b> Recent triggers are held in a <see cref="Queue{T}"/> in the order they happened, which is
-/// the same FIFO structure the ingestion pipeline's standard lane uses, put to a different job. When an action arrives,
-/// everything older than the window is removed from the front, which costs one comparison per entry removed because the
-/// oldest is always first, and the action is then paired with every trigger still in the queue. Nothing is searched for.
+/// <b>The window is a queue.</b> Recent triggers sit in a <see cref="Queue{T}"/> in time order, the same FIFO the ingestion lane
+/// uses, for a different job. An action removes everything older than the window from the front (one comparison per entry,
+/// because the oldest is first) and is paired with every trigger left. Nothing is searched for.
 /// <para>
-/// <b>Each pairing is counted once.</b> An operator who opens Pump A four times after one moisture drop has responded
-/// once. A <see cref="HashSet{T}"/> of <c>(trigger instance, action)</c> pairs already counted makes the second to fourth
-/// opening add nothing; <c>Add</c> returning false is the whole decision. Entries are removed when their trigger leaves the
-/// window, so the set is bounded by the window too.
+/// <b>Each pairing is counted once.</b> Opening Pump A four times after one moisture drop is one response. A
+/// <see cref="HashSet{T}"/> of <c>(trigger instance, action)</c> pairs makes the second to fourth opening add nothing, since
+/// <c>Add</c> returning false is the whole decision. Entries leave when their trigger leaves the window, so the set is bounded.
 /// </para>
 /// <para>
-/// <b>Lift is what separates a habit from a coincidence.</b> If an operator has Pump A open all day, it follows nearly every
-/// trigger, and confidence alone would recommend it everywhere. Lift divides confidence by the chance of the action in any
-/// window of the same length, and only a lift above one means the trigger made the difference. That chance is the share of
-/// time that falls within a window of an occurrence of the action (see <see cref="BaselineOf"/>), counted so that a burst is
-/// not many occurrences and constant activity covers everything, over the faded length of time the engine has been watching,
-/// so the two share one clock and one decay.
+/// <b>Lift separates a habit from a coincidence.</b> If Pump A is open all day it follows nearly every trigger, and confidence
+/// alone would recommend it everywhere. Lift divides confidence by the chance of the action in any window of the same length;
+/// only a lift above one means the trigger made the difference. That chance is the share of time within a window of an
+/// occurrence of the action (see <see cref="BaselineOf"/>), so a burst counts once and constant activity covers everything.
 /// </para>
 /// <para>
-/// <b>Two levels.</b> Every event updates a specific key (this device) and a general one (this kind of device, in this zone).
-/// The specific level learns slowly and exactly; the general level learns quickly and loosely, and answers for a device that
-/// has never had an incident of its own.
-/// </para>
-/// <para>
-/// One lock. Every operation is a few dictionary lookups and a walk of the window, which is bounded, so the lock is held for
-/// microseconds.
+/// <b>Two levels.</b> Every event updates a specific key (this device) and a general one (this kind of device in this zone). The
+/// specific level learns slowly and exactly, the general level quickly and loosely, and it answers for a device with no incident
+/// of its own. One lock covers it all: each operation is a few lookups and a walk of the bounded window.
 /// </para>
 /// </remarks>
 internal sealed class PatternEngine : IPatternEngine

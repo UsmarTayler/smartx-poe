@@ -4,54 +4,31 @@ namespace SmartX.Api.History;
 /// Holds history in memory: a dictionary of nodes, each owning a sorted dictionary of its entries.
 /// </summary>
 /// <remarks>
-/// <b>Why two levels, and why each is the structure it is.</b>
-/// <list type="bullet">
-/// <item>
-/// <description>
-/// The <b>outer</b> level is a <see cref="Dictionary{TKey, TValue}"/> keyed by MAC. Every append and every
-/// query starts from "this node", and a hash lookup finds it in O(1) whether the mesh has ten nodes or ten
-/// thousand. Finding the node by scanning a list, or by filtering one big sorted collection on its MAC, would
-/// make every query pay for the size of the whole mesh.
-/// </description>
-/// </item>
-/// <item>
-/// <description>
-/// The <b>inner</b> level is a <see cref="SortedDictionary{TKey, TValue}"/> keyed by
-/// <see cref="HistoryKey"/>. A node's history is only ever read in time order, so keeping it sorted as it is
-/// written means a timeline is a walk and never a sort, and the oldest entries — the ones retention removes —
-/// are at the front. It is a red-black tree underneath, so an insert is O(log n) even when a device stamps a
-/// reading out of order.
-/// </description>
-/// </item>
-/// </list>
-/// <b>A third structure for events.</b> Commands, alerts, trust transitions and searches are also kept in one
-/// mesh-wide sorted dictionary of their own. Answering "what happened across the mesh in the last hour" from the
-/// per-node dictionaries would mean walking every node's readings to find the few events among them. The event
-/// stream holds only events, which are rare, so that question reads a small structure. Entries are held by
-/// reference in both places, so an event costs one extra tree node, not a second copy.
 /// <para>
-/// <b>Collisions.</b> Two entries can share a timestamp, so the timestamp alone cannot be the key. See
-/// <see cref="HistoryKey"/>: the arrival sequence makes every key unique, and <see cref="Append"/> uses
-/// <c>TryAdd</c> so even a repeated sequence number cannot overwrite anything.
+/// <b>Why two levels.</b> The outer <see cref="Dictionary{TKey, TValue}"/> is keyed by MAC, so every append and query finds "this
+/// node" in O(1) whatever the mesh size. The inner <see cref="SortedDictionary{TKey, TValue}"/> is keyed by
+/// <see cref="HistoryKey"/> and is read only in time order, so a timeline is a walk and never a sort, retention removes from the
+/// front, and the red-black tree keeps inserts O(log n) even when a device stamps a reading out of order.
 /// </para>
 /// <para>
-/// <b>Cost of a range query — stated honestly.</b> <see cref="SortedDictionary{TKey, TValue}"/> has no
-/// range-seek: there is no way to ask the tree for "the first entry at or after 14:00". <see cref="GetRange"/>
-/// therefore enumerates from the oldest entry, skips everything before <c>from</c>, collects until it passes
-/// <c>to</c>, and stops. That is O(n) to reach the start of the range in the worst case, plus O(k) for the k
-/// entries returned — not the O(log n + k) a balanced tree with a seek gives. Stopping early means a query for
-/// an old window is cheap and a query for the newest window walks the whole history. This limitation is the
-/// stated reason the next part of the project builds its own tree.
+/// <b>A third structure for events.</b> Commands, alerts, trust transitions and searches also sit in one mesh-wide sorted
+/// dictionary, so "what happened in the last hour" reads a small structure instead of walking every node's readings. Entries are
+/// held by reference in both places, so an event costs one extra tree node, not a copy.
 /// </para>
 /// <para>
-/// <see cref="GetLatest"/> has the same limit for the same reason, and is O(n) too: the tree cannot be walked
-/// backwards, so it walks forward and keeps the last <c>count</c> in a small queue.
+/// <b>Collisions.</b> Two entries can share a timestamp, so the arrival sequence in <see cref="HistoryKey"/> makes every key
+/// unique, and <see cref="Append"/> uses <c>TryAdd</c> so nothing can be overwritten.
 /// </para>
 /// <para>
-/// <b>One lock.</b> Writers are the single ingestion worker and a few services at a few per second, and every
-/// operation is short. A single <see cref="Lock"/> is simpler to reason about than reader-writer locking and
-/// does not measurably contend at this volume. Readers copy their results out under the lock so nothing
-/// iterates a tree that is being changed.
+/// <b>Cost of a range query, stated honestly.</b> <see cref="SortedDictionary{TKey, TValue}"/> cannot seek to "the first entry at
+/// or after 14:00". <see cref="GetRange"/> enumerates from the oldest entry, skips to <c>from</c>, collects until <c>to</c> and
+/// stops: O(n) to reach the range plus O(k) for the k results, not the O(log n + k) of a balanced tree. A query for an old window
+/// is cheap and one for the newest walks everything. This is the stated reason Part 3 builds its own tree.
+/// <see cref="GetLatest"/> has the same limit: it walks forward and keeps the last <c>count</c> in a small queue.
+/// </para>
+/// <para>
+/// <b>One lock.</b> Writers are the ingestion worker and a few services at a few per second, and every operation is short, so a
+/// single <see cref="Lock"/> is simpler than reader-writer locking and does not contend. Readers copy results out under the lock.
 /// </para>
 /// </remarks>
 internal sealed class SortedDictionaryHistoryStore : IHistoryStore

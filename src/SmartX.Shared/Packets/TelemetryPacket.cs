@@ -4,37 +4,25 @@ namespace SmartX.Shared;
 /// A single reading from one node, carrying a payload of type <typeparamref name="T"/>.
 /// </summary>
 /// <typeparam name="T">
-/// The payload type. Constrained to <see langword="struct"/>, which is the whole point of this
-/// design and the reason no boxing occurs.
+/// The payload type, constrained to <see langword="struct"/>, which is why no boxing occurs.
 /// <para>
-/// <b>Why <c>where T : struct</c> prevents boxing.</b> The naive way to handle disparate sensor
-/// payloads uniformly is a single <c>object Value</c> field. Assigning a <see cref="float"/> to
-/// that field <i>boxes</i> it: the runtime allocates a heap object, copies the four bytes into it,
-/// and stores a reference. Reading the value back requires an unbox-and-copy plus a type check.
-/// At telemetry volumes that is an allocation and a GC-tracked object per reading.
+/// <b>Why <c>where T : struct</c> prevents boxing.</b> The naive design is one <c>object Value</c> field, and assigning a
+/// <see cref="float"/> to it <i>boxes</i> it: a heap allocation per reading, and an unbox plus a type check to read it back. A
+/// generic <c>T</c> avoids that because the JIT compiles a separate version of this class for each value type, so
+/// <c>TelemetryPacket&lt;float&gt;</c> has a 4-byte float laid out inline and there is no <c>object</c> to box into.
 /// </para>
 /// <para>
-/// A generic <c>T</c> avoids this because the JIT compiles a <i>separate</i> specialised version of
-/// this class for every value type it is used with. <c>TelemetryPacket&lt;float&gt;</c> has a
-/// literal 4-byte float field laid out inline; <c>TelemetryPacket&lt;int&gt;</c> has an int field.
-/// There is no <c>object</c> anywhere in the layout, so there is nothing to box into.
-/// </para>
-/// <para>
-/// The <c>struct</c> constraint is what makes that guarantee enforceable rather than merely likely.
-/// Without it, <c>T</c> could be instantiated as a reference type, the JIT would share one canonical
-/// implementation across all reference types, and the no-boxing claim would hold only by
-/// convention. With it, the compiler rejects <c>TelemetryPacket&lt;string&gt;</c> outright.
+/// The <c>struct</c> constraint makes that a guarantee and not a habit: without it <c>T</c> could be a reference type, the JIT
+/// would share one implementation across them, and the compiler would accept <c>TelemetryPacket&lt;string&gt;</c>.
 /// </para>
 /// </typeparam>
 /// <remarks>
-/// Abstract because a reading with no semantics is not a thing that exists: a payload is either a
-/// magnitude that can be aggregated (<see cref="NumericPacket{T}"/>) or a state that can be
-/// combined logically (<see cref="StatePacket"/>). The base exists to hold the metadata every
-/// packet shares, the equality contract both subtypes obey, and the guards their operators need.
+/// Abstract because a reading with no semantics does not exist: a payload is either a magnitude that can be aggregated
+/// (<see cref="NumericPacket{T}"/>) or a state that can be combined logically (<see cref="StatePacket"/>). The base holds the
+/// metadata every packet shares, the equality contract, and the guards the operators need.
 /// <para>
-/// Packets are immutable. A reading is a historical fact — the temperature at 14:03 does not later
-/// become a different temperature — and immutability means the operator overloads can hand back
-/// new packets without any risk of aliasing an operand.
+/// Packets are immutable: a reading is a historical fact, and immutability lets the operators return new packets with no risk of
+/// aliasing an operand.
 /// </para>
 /// </remarks>
 public abstract class TelemetryPacket<T> : ITelemetryPacket, IEquatable<TelemetryPacket<T>>

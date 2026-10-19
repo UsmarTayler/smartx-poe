@@ -15,57 +15,34 @@ namespace SmartX.Api.Realtime;
 /// Turns the system's domain events into messages for connected clients. The only place that pushes.
 /// </summary>
 /// <remarks>
-/// <b>Why one broadcaster and not SignalR calls in the domain.</b> The trust engine, the alert set, the command
-/// service and the ingestion worker do not reference SignalR. They raise events (<c>NodeEvaluated</c>,
-/// <c>Changed</c>, <c>Processed</c>), as they would if nobody were listening, and this class subscribes to them and
-/// forwards through <see cref="IHubContext{THub, T}"/>. Two reasons. The domain stays testable without a hub: its
-/// tests construct it with no transport at all. And the transport can change again, as it already has once from
-/// polling to push, without touching code that decides when a node is faulty or an alert is raised.
 /// <para>
-/// <b>What is batched, what is coalesced, what is immediate</b> — chosen by how often a message happens and how
-/// much a delay would cost.
-/// </para>
-/// <list type="bullet">
-/// <item><description>
-/// <b>Readings are batched.</b> They are the highest-volume thing in the system: at 4,800 devices reporting every
-/// few seconds that is over a thousand a second. One message per reading is a thousand sends and a thousand client
-/// re-renders a second. They are collected and sent as one message every flush window (250 ms by default), so the
-/// cost is the same however many arrived. A live chart cannot show the difference between 250 ms and instant.
-/// </description></item>
-/// <item><description>
-/// <b>Trust is coalesced.</b> A node's score moves on every packet. Ten changes to one node inside a window are
-/// not ten facts, they are one: where it is now. A set of "nodes that changed" is kept, and at each flush each is
-/// sent once, at its latest state, and only if it moved by more than a threshold (see
-/// <see cref="RealtimeOptions.TrustScoreEpsilon"/>). Sending the latest state, not the changes, is also what makes
-/// a lost or reordered message harmless.
-/// </description></item>
-/// <item><description>
-/// <b>Alerts, command changes and critical readings are immediate.</b> They are rare and they are the point of the
-/// system. Delaying a critical reading by up to a flush window so it could ride in a batch would undo the
-/// priority lane the ingestion queue exists to provide: the queue lets an alert overtake a backlog of ordinary
-/// readings, and a batch timer would make it wait anyway. They go to the front of the line and are sent the
-/// moment the previous send finishes. One exception inside alerts: when an already-active alert's repeat count
-/// ticks up, that is a counter and not news, so those are coalesced like trust.
-/// </description></item>
-/// <item><description>
-/// <b>Suggestions and insights are immediate, and never per reading.</b> They are recomputed when something that
-/// changes them happens (a trigger, an action, a dismissal, a trend crossing the forecast bar) and announced when the
-/// set or order changed. A new suggestion is the point of the system, and a delay for a batch would be a delay to the
-/// operator. Each message carries the whole list, so a lost one is replaced by the next.
-/// </description></item>
-/// <item><description>
-/// <b>Pipeline statistics are periodic</b>, once a second, because they are a gauge.
-/// </description></item>
-/// </list>
-/// <para>
-/// <b>Order and sequence numbers.</b> One loop sends everything, holding one lock, so messages go out in the order
-/// they were numbered. Each message's content is read <i>before</i> its sequence number is taken, and a snapshot
-/// reads the sequence <i>before</i> its data; together that means a snapshot as of sequence N contains everything
-/// in messages up to N, which is what lets the client discard a message at or below N.
+/// <b>Why one broadcaster and not SignalR calls in the domain.</b> The trust engine, alert set, command service and ingestion
+/// worker do not reference SignalR. They raise events, as they would with nobody listening, and this class subscribes and
+/// forwards through <see cref="IHubContext{THub, T}"/>. The domain stays testable without a hub, and the transport can change
+/// again (it already moved from polling to push) without touching code that decides when a node is faulty.
 /// </para>
 /// <para>
-/// <b>Nothing is done for a topic nobody has joined.</b> Events for it are ignored on entry, so an idle gateway
-/// pays a dictionary lookup per event, and the buffers cannot grow.
+/// <b>Batched, coalesced or immediate</b> is chosen by how often a message happens and what a delay costs. Readings are the
+/// highest volume, so they are <b>batched</b>: one message per flush window (250 ms by default). A node's trust score moves on
+/// every packet, so it is <b>coalesced</b>: each changed node is sent once per window at its latest state, and only if it moved
+/// by more than <see cref="RealtimeOptions.TrustScoreEpsilon"/>. Sending the latest state, not the changes, also makes a lost or
+/// reordered message harmless.
+/// </para>
+/// <para>
+/// Alerts, command changes, critical readings and suggestions are <b>immediate</b>: they are rare and they are the point of the
+/// system, and holding a critical reading for a batch would undo the priority lane the ingestion queue exists to provide. (A
+/// repeat count ticking up on an active alert is a counter, not news, so it is coalesced.) Suggestions are never sent per
+/// reading, and each message carries the whole list so a lost one is replaced by the next. Pipeline statistics are a gauge, sent
+/// once a second.
+/// </para>
+/// <para>
+/// <b>Order.</b> One loop sends everything, under one lock, so messages leave in the order they were numbered. A message's
+/// content is read before its sequence number is taken, and a snapshot reads the sequence before its data, so a snapshot as of N
+/// contains everything up to N, which is what lets the client discard a message at or below N.
+/// </para>
+/// <para>
+/// Events for a topic nobody has joined are ignored on entry, so an idle gateway pays a dictionary lookup per event and the
+/// buffers cannot grow.
 /// </para>
 /// </remarks>
 internal sealed class RealtimeBroadcaster : BackgroundService

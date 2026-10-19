@@ -7,47 +7,24 @@ namespace SmartX.Shared;
 /// A reading whose payload is a magnitude — a temperature, a power draw, a flow rate.
 /// </summary>
 /// <typeparam name="T">
-/// The numeric payload type, such as <see cref="float"/>, <see cref="int"/> or
-/// <see cref="decimal"/>.
+/// The numeric payload type, such as <see cref="float"/>, <see cref="int"/> or <see cref="decimal"/>.
 /// <para>
-/// <b>Why <see cref="INumber{TSelf}"/> is what allows arithmetic without boxing.</b> The problem
-/// this constraint solves is that a plain <c>T</c> supports no operators at all — the compiler has
-/// no reason to believe an arbitrary type can be added. Before generic math there were three ways
-/// out, and all three cost something:
-/// </para>
-/// <list type="bullet">
-/// <item><description>
-/// Store the payload as <c>object</c> and cast at each use. Every store boxes and every read
-/// unboxes: one heap allocation per reading, plus a runtime type check per access.
-/// </description></item>
-/// <item><description>
-/// Use <c>dynamic</c>. The addition is then resolved by the DLR at runtime, which boxes the
-/// operands, allocates call-site caches, and moves what should be a compile-time error into
-/// production.
-/// </description></item>
-/// <item><description>
-/// Abandon generics and write a separate class per numeric type, duplicating every operator.
-/// </description></item>
-/// </list>
-/// <para>
-/// <see cref="INumber{TSelf}"/> removes the need for any of them. It is a static-abstract interface:
-/// it declares that <typeparamref name="T"/> itself provides <c>+</c>, <c>-</c>, <c>&gt;</c> and the
-/// rest as static members. The constraint therefore gives the compiler a static guarantee that
-/// <c>left.Value + right.Value</c> is a legal operation on <typeparamref name="T"/>, and the JIT
-/// emits the specialised instruction for the concrete type — a single <c>add</c> for
-/// <c>NumericPacket&lt;int&gt;</c>, an <c>addss</c> for <c>NumericPacket&lt;float&gt;</c>. The
-/// arithmetic happens on the stack, in registers, with no allocation and no runtime dispatch.
+/// <b>Why <see cref="INumber{TSelf}"/> allows arithmetic without boxing.</b> A plain <c>T</c> supports no operators. Before
+/// generic math the options were <c>object</c> (a boxing allocation per reading plus a type check per access), <c>dynamic</c>
+/// (operands boxed, call-site caches allocated, and a compile-time error turned into a production one) or a separate class per
+/// numeric type with every operator duplicated.
 /// </para>
 /// <para>
-/// The <c>struct</c> half of the constraint is inherited from <see cref="TelemetryPacket{T}"/> and
-/// still does its job: it is what stops <typeparamref name="T"/> being a reference type and forces
-/// the JIT to produce a separately specialised body per payload type.
+/// <see cref="INumber{TSelf}"/> is a static-abstract interface: it declares that <typeparamref name="T"/> itself provides
+/// <c>+</c>, <c>-</c>, <c>&gt;</c> and the rest. The compiler therefore knows <c>left.Value + right.Value</c> is legal, and the
+/// JIT emits the specialised instruction for the concrete type (a single <c>add</c> for <c>int</c>, <c>addss</c> for
+/// <c>float</c>), on the stack, with no allocation and no runtime dispatch. The <c>struct</c> half of the constraint is inherited
+/// from <see cref="TelemetryPacket{T}"/> and still forces a specialised body per payload type.
 /// </para>
 /// </typeparam>
 /// <remarks>
-/// Sealed. The operator overloads below take and return <c>NumericPacket&lt;T&gt;</c> exactly, and
-/// operators are resolved statically rather than virtually — a subclass could not override them, so
-/// allowing one would only create a type whose operators silently discarded its own identity.
+/// Sealed. The operators take and return <c>NumericPacket&lt;T&gt;</c> exactly and are resolved statically, so a subclass could
+/// not override them, and allowing one would create a type whose operators silently discard its own identity.
 /// </remarks>
 public sealed class NumericPacket<T> : TelemetryPacket<T>
     where T : struct, INumber<T>
