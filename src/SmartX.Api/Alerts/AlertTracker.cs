@@ -50,36 +50,24 @@ internal enum AcknowledgeOutcome
 }
 
 /// <summary>
-/// The set of alerts that are on right now, and the rules that stop one problem from being reported a thousand
-/// times.
+/// The set of alerts that are on right now, and the rules that stop one problem from being reported a thousand times.
 /// </summary>
 /// <remarks>
-/// <b>Duplicate prevention is a set.</b> A node that stays disconnected is "disconnected" on every heartbeat
-/// sweep, and a node that keeps sending out-of-range readings is out of range on every packet. Reported naively
-/// that is one alert per sweep, per packet, and the one that matters is buried in the repeats. Here a condition
-/// that fires asks a <see cref="HashSet{T}"/> to <see cref="HashSet{T}.Add"/> its <see cref="AlertKey"/>, and the
-/// answer is the whole decision: <c>true</c> means the key was not there, so this is a new alert; <c>false</c>
-/// means it already was, so this is a repeat. A repeat is counted and nothing more.
 /// <para>
-/// The count is what makes the set visible. "Disconnected on MOIST-02, suppressed ×14" shows the prevention
-/// working; an interface that quietly showed one alert would be claiming it.
+/// <b>Duplicate prevention is a set.</b> A node that stays disconnected is "disconnected" on every sweep, and one that keeps
+/// sending out-of-range readings is out of range on every packet. A firing condition asks a <see cref="HashSet{T}"/> to
+/// <see cref="HashSet{T}.Add"/> its <see cref="AlertKey"/>: <c>true</c> is a new alert, <c>false</c> is a repeat, which is counted
+/// and nothing more. The count ("Disconnected on MOIST-02, suppressed ×14") is what makes the prevention visible.
 /// </para>
 /// <para>
-/// <b>Four sets, four meanings.</b> <c>_active</c> is the alerts that are on. <c>_acknowledged</c> is the active
-/// alerts an operator has seen; acknowledging never clears the condition, because the node is still
-/// disconnected whether or not anybody has noticed. <c>_disconnected</c> is the nodes the heartbeat monitor
-/// currently considers silent, kept in step with the active Disconnected alerts. When a condition clears its
-/// key leaves the set, and the next occurrence is a new alert, as it should be.
+/// <b>The sets.</b> <c>_active</c> is the alerts that are on. <c>_acknowledged</c> is the ones an operator has seen;
+/// acknowledging never clears the condition. <c>_disconnected</c> is the nodes the heartbeat monitor considers silent. When a
+/// condition clears its key leaves the set, so the next occurrence is a new alert.
 /// </para>
 /// <para>
-/// <b>One lock, borrowed.</b> Everything here happens inside the device index's lock, so an alert becoming
-/// active and its device becoming findable by that alert are one step. Alert state has its own sets and its own
-/// details, but not its own lock, because two locks would let a search see the alert in one and not the other.
-/// </para>
-/// <para>
-/// <b>Not a parallel mechanism.</b> Fault alerts come from the trust engine's own fault events, the existing
-/// escalation seam, and the heartbeat monitor decides what is disconnected. This class holds the consequences;
-/// it does not recompute trust or look for silence itself.
+/// <b>One lock, borrowed.</b> Everything runs inside the device index's lock, so an alert becoming active and its device becoming
+/// findable by it are one step; a second lock would let a search see one without the other. Fault alerts come from the trust
+/// engine's own events and the heartbeat monitor decides what is silent: this class holds the consequences and recomputes neither.
 /// </para>
 /// </remarks>
 internal sealed class AlertTracker(

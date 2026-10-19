@@ -61,56 +61,43 @@ internal interface ISuggestionService
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Inputs.</b> The live triggers (those still inside the pattern window, which this service keeps from the engine's own
-/// announcements), and for each the qualified patterns the engine has: the device's own pattern where it has enough
-/// to go on, and the pattern for its kind in its zone where it does not (see <see cref="IPatternEngine.Predict"/>). A
-/// pattern at the general level, "a pump in Zone 1", is turned into the actual pumps in that zone, because a button has to do
-/// something to one device.
+/// <b>Inputs.</b> The live triggers (still inside the pattern window) and, for each, the qualified patterns: the device's own
+/// where it has enough history, otherwise the pattern for its kind in its zone. A general pattern ("a pump in Zone 1") becomes
+/// the actual pumps in that zone, because a button has to act on one device.
 /// </para>
 /// <para>
-/// <b>Ranking.</b> Each candidate action is scored from 0 to 1:
+/// <b>Ranking.</b> Each candidate is scored from 0 to 1:
 /// </para>
 /// <code>
-/// score = weight × ( wL·L + wC·C + wS·S + wR·R ) / ( wL + wC + wS + wR )
-///
-///   L  lift, as ln(lift) / ln(LiftCap), capped at 1:   how much more likely than usual
-///   C  confidence:                                      how reliably it follows the trigger
-///   S  severity of the trigger, 0 to 1:                 a Fault is 1, a critical reading .9, an alert or a
-///                                                       degrading node .6, a threshold crossing .4
-///   R  recency, 1 - age / window:                       1 for a trigger that has just fired, 0 as it leaves the window
-///   weight  what "Not useful" has done to this pattern: 1 down to a floor of .5, never zero
-///
-///   defaults:  wL = .35   wC = .25   wS = .25   wR = .15   LiftCap = 10
+/// score = weight × (wL·L + wC·C + wS·S + wR·R) / (wL + wC + wS + wR)
+///   L  lift, ln(lift) / ln(LiftCap), capped at 1          C  confidence
+///   S  severity of the trigger: Fault 1, critical reading .9, alert or degrading node .6, threshold crossing .4
+///   R  recency: 1 for a trigger that has just fired, 0 as it leaves the window
+///   weight  what "Not useful" has done to the pattern: 1 down to a floor of .5
+///   defaults: wL = .35  wC = .25  wS = .25  wR = .15  LiftCap = 10
 /// </code>
 /// <para>
-/// Lift is weighted most because it is what separates a habit from a coincidence. Recency is weighted least because it only
-/// has to break ties: a suggestion does not become wrong as it ages, and the window ends it anyway. The weights are
-/// configuration (<see cref="SuggestionOptions"/>) and are normalised, so changing one changes the balance and never the range.
+/// Lift counts most because it separates a habit from a coincidence; recency least because it only breaks ties. The weights are
+/// configuration and are normalised, so changing one shifts the balance and never the range.
 /// </para>
 /// <para>
-/// <b>The top K is a <see cref="PriorityQueue{TElement, TPriority}"/>.</b> The same structure the ingestion pipeline's
-/// critical lane is built on, used here for the opposite job: that one hands out the most urgent thing first, this one keeps the
-/// best K. Every candidate is offered to a min-heap capped at K; when it holds more than K the lowest score is removed, so
-/// what is left is the K best. A heap is the right shape because the thing to find at each step is the smallest of what is
-/// kept, which is the root, and removing it is O(log K): the whole selection costs O(n log K), never a sort of everything.
+/// <b>The top K is a <see cref="PriorityQueue{TElement, TPriority}"/>.</b> The ingestion critical lane hands out the most urgent
+/// first; this keeps the best K. Candidates go into a min-heap capped at K and the lowest score is dropped on overflow, so
+/// selection is O(n log K), never a full sort.
 /// </para>
 /// <para>
-/// <b>What is already done is not suggested.</b> Each live trigger has a <see cref="HashSet{T}"/> of the actions taken since it
-/// fired. Opening Pump A, or sending it the command, puts the action in the set, and a candidate that is in the set is skipped.
-/// Opening any pump in the zone also satisfies a pattern about "a pump in the zone".
+/// <b>Done is not suggested.</b> Each live trigger has a <see cref="HashSet{T}"/> of the actions taken since it fired, and a
+/// candidate in the set is skipped.
 /// </para>
 /// <para>
-/// <b>Feedback without a feedback loop.</b> "Not useful" removes the suggestion and multiplies its pattern's weight by a factor
-/// (0.85), never below a floor (0.5), and giving it back is exact because the amount taken is remembered. Accepting a
-/// suggestion is the opposite problem: an operator who clicks "Turn on Pump A" because the system said so has not shown
-/// a habit of turning on Pump A, and counting the click would make the pattern stronger, which would rank it higher, which would
-/// get it clicked more. So an accepted suggestion is registered here first, and the engine counts the action that follows at
-/// a configurable weight that is zero by default (see <see cref="PatternOptions.AcceptedSuggestionWeight"/>).
+/// <b>Feedback without a feedback loop.</b> "Not useful" multiplies the pattern's weight by 0.85 (floor 0.5) and taking it back is
+/// exact. Accepting a suggestion must not count as a habit, or the click would strengthen the pattern, rank it higher and get it
+/// clicked more. So an accepted suggestion is registered here first and the engine counts the action that follows at a weight
+/// that is zero by default (<see cref="PatternOptions.AcceptedSuggestionWeight"/>).
 /// </para>
 /// <para>
-/// <b>When it recomputes.</b> When a trigger fires, when an action is taken, when a suggestion is dismissed or restored, and on
-/// a slow sweep that ends triggers that have aged out. Never per reading. <see cref="Changed"/> is raised only when the set or
-/// the order changed, so a score drifting as a trigger ages sends nothing.
+/// It recomputes on a trigger, an action, a dismissal or restore, and a slow sweep for aged-out triggers, never per reading, and
+/// raises <see cref="Changed"/> only when the set or its order changed.
 /// </para>
 /// </remarks>
 internal sealed class SuggestionService : BackgroundService, ISuggestionService

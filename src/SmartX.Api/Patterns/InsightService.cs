@@ -80,29 +80,19 @@ internal sealed class TrustSampler : IHostedService, IDisposable
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Current.</b> A device in Fault, with an open investigation, or with an active alert, ranked by how severe the worst of
-/// those is. These come from structures that already exist (the trust engine, the investigations, the alert set) and need no
-/// new computation: listing them is the point, because an operator should not have to search to find what is broken.
+/// <b>Current.</b> A device in Fault, with an open investigation, or with an active alert, ranked by its worst severity. These
+/// come from structures that already exist, so listing them needs no new computation.
 /// </para>
 /// <para>
-/// <b>Anticipated.</b> Reporting what is already broken is not anticipating. For each node that is not in Fault, a straight line
-/// is fitted to its recent trust samples (see <see cref="TrustForecaster"/>); if it is falling steeply enough, fits well
-/// enough, and reaches the fault threshold within the horizon, an insight says so, with the time. A node already in Fault is
-/// current and is not forecast.
+/// <b>Anticipated.</b> For each node not in Fault, a straight line is fitted to its recent trust samples (see
+/// <see cref="TrustForecaster"/>). If it falls steeply enough, fits well enough and reaches the fault threshold within the
+/// horizon, an insight says so, with the time. It is raised at one bar and withdrawn at a lower one, so a fit at the edge does
+/// not flicker, and withdrawn at once if the node enters Fault, where it becomes a current insight.
 /// </para>
 /// <para>
-/// <b>It is withdrawn when the trend reverses</b>, and with some give: an insight is raised at one bar and withdrawn at a lower
-/// one, so a fit hovering at the edge does not appear and disappear every pass. It is withdrawn at once if the node enters
-/// Fault, where it is replaced by the current insight.
-/// </para>
-/// <para>
-/// <b>The samples come from the history store's <c>GetRange</c></b>, the sorted structure whose job is exactly "this node
-/// between these two moments". The cost of a pass over the whole fleet is measured in the benchmark: the store walks to the start
-/// of a node's range, which is why it is a measured number and not an assumed one.
-/// </para>
-/// <para>
-/// Announces a change when the set of insights changes, or a projected time moves by more than <see cref="ForecastOptions.EtaChange"/>,
-/// and not otherwise: the countdown on the page is worked out on the page from the projected moment.
+/// The samples come from the history store's <c>GetRange</c>, whose cost over a whole fleet is measured in the benchmark, not
+/// assumed. A change is announced when the set changes or a projected time moves by more than
+/// <see cref="ForecastOptions.EtaChange"/>; the countdown itself is worked out on the page.
 /// </para>
 /// </remarks>
 internal sealed class InsightService : BackgroundService

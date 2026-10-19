@@ -46,31 +46,20 @@ public interface IFeedDiagnostics
 /// </summary>
 /// <typeparam name="TSnapshot">The snapshot message the topic's HTTP endpoint returns.</typeparam>
 /// <remarks>
-/// <b>Snapshot plus stream is the correctness rule.</b> A push sent while the connection was down is lost, and
-/// reconnecting alone does not recover it. So on every connect and every reconnect a feed does three things, in this
-/// order:
-/// <list type="number">
-/// <item><description>Joins the topic, so pushes start arriving.</description></item>
-/// <item><description>Fetches a snapshot of the current state over HTTP.</description></item>
-/// <item><description>
-/// Applies pushed messages only if their sequence number is newer than what it already holds.
-/// </description></item>
-/// </list>
-/// The third step is what the rest depends on. A message sent just before the snapshot was taken can reach the
-/// client just after the snapshot does, and applying it would overwrite newer state with older. So pushes that
-/// arrive while the snapshot is being fetched are held, not applied; when the snapshot lands, those at or below its
-/// sequence number are discarded as already included and the rest are applied in order; from then on a push is
-/// applied only if its sequence is above the last one applied.
+/// <b>Snapshot plus stream is the correctness rule.</b> A push sent while the connection was down is lost, so on every connect
+/// and reconnect a feed (1) joins the topic, (2) fetches a snapshot over HTTP, and (3) applies pushes only if their sequence
+/// number is newer than what it holds. Step 3 matters because a message sent just before the snapshot can arrive just after it
+/// and overwrite newer state with older. So pushes that arrive during the fetch are held; when the snapshot lands, those at or
+/// below its sequence are dropped as already included, the rest are applied in order, and from then on a push must be above the
+/// last one applied.
 /// <para>
-/// <b>Pages start and stop, they never connect.</b> <see cref="StartAsync"/> and <see cref="StopAsync"/> are
-/// reference counted and serialised. Two pages can want the same feed at once, and a page that is disposed after
-/// the next one has already opened (which rapid navigation does) must not take the feed away from it. The hub
-/// handlers are registered once when the first page starts and removed when the last stops, so however a user
-/// clicks around there is exactly one handler per message type, never one per visit.
+/// <b>Pages start and stop, they never connect.</b> <see cref="StartAsync"/> and <see cref="StopAsync"/> are reference counted
+/// and serialised, so a page disposed after the next has opened (which rapid navigation does) cannot take the feed away from it.
+/// Handlers are registered when the first page starts and removed when the last stops: one per message type, never one per visit.
 /// </para>
 /// <para>
-/// <b>The last state is kept.</b> Stopping a feed stops the traffic, not the cache. A page that opens again renders
-/// <c>Current</c> at once and the snapshot refreshes it behind the scenes: no blank frame, no reload.
+/// <b>The last state is kept.</b> Stopping a feed stops traffic, not the cache, so a page that reopens renders <c>Current</c> at
+/// once and the snapshot refreshes it behind the scenes.
 /// </para>
 /// </remarks>
 public abstract class RealtimeFeed<TSnapshot> : IFeed, IFeedDiagnostics
