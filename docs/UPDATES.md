@@ -43,6 +43,7 @@ Entries U1 to U12 each name their own source (a review of the code, a test, a li
 | [U19](#u19-compose-would-not-start-without-an-env-file) | 2026-10-13 | Docker | Default the development key so a fresh clone starts with no `.env` | `ae8a4e1` |
 | [U20](#u20-accessibility-findings-in-the-light-theme) | 2026-10-13 | Client | Contrast, names, landmarks and live regions found by an axe pass | `b62dccc`, `5c23e63`, `7b5e0fc`, `3bd34b4`, `718d7e0` |
 | [U21](#u21-the-api-had-no-authentication) | 2026-10-14 | API, client, simulator | Add a login with roles, per-device keys, a protected hub and a login page; protect every endpoint but health and login | `5b33a2b`, `b845474`, `76355a3`, `3fcb356`, `7920580`, `94be739`, `36d261e`, `fbe6bb3`, `1041e6b` |
+| [U22](#u22-history-range-queries-walked-from-the-oldest-entry) | 2026-10-22 | History | Replace the sorted-dictionary store with an AVL tree as the default, so a time-range query seeks | `6b706e9`, `ea4e45c`, `df974a5`, `ecfefe0` |
 
 ---
 
@@ -630,10 +631,29 @@ Considered and not done: giving the simulator an Operator login to register (a p
 
 ---
 
+## U22. History range queries walked from the oldest entry
+
+**Source:** the Part 3 brief ("pulling all moisture readings between 14:00 and 16:00 for Node A without iterating through a massive, unorganised list"), and a limit this project had already measured and written down in the Part 2 README and in `SortedDictionaryHistoryStore`.
+
+**What was wrong.** History sat in a `SortedDictionary` per node. A `SortedDictionary` cannot seek, so `GetRange` enumerated from the oldest entry and skipped until it reached `from`: O(n + k) for k results. A window near the start was cheap and a window near the end walked everything. `GetLatest` had the same fault and walked the whole history to keep the last few.
+
+**Why it mattered.** The cost of a query grew with the amount of history and not with the amount asked for. At 1,000,000 entries a hundred readings from the middle of the history took about 3.8 ms and from the newest end about 8.7 ms. The Part 3 brief asks for exactly this query, and its rubric names a self-balancing tree for it.
+
+**What changed.** A generic `AvlTree<TKey, TValue>` written from scratch (height stored in each node, four rotations, `Range`, `From`, `Floor`, `Ceiling`, `Min`, `Max`, reverse order, and `ValidateInvariants`), and `AvlHistoryStore`, which has the same layout, key (timestamp, then arrival sequence), lock and results as the old store. A range query descends to the first key at or after `from` and reads forward: O(log n + k). `GetLatest` reads backward from the maximum: O(log n + N). The existing `HistoryStoreContract` suite runs against the new store through one added subclass and was not edited. The AVL store is the default through `History:Store`; `SortedDictionary` stays selectable so the two can be compared. Two new endpoints: `GET /api/history/{mac}/range` (raw readings, paged, Viewer) and `GET /api/history/stats` (entries and tree height against ⌈log₂(n+1)⌉). Measured in Release at 1,000,000 entries, a hundred-reading window takes 1.3 to 1.9 µs on the tree wherever it sits, against 3,841 µs (middle) and 8,705 µs (newest) on the dictionary; the dictionary is level or marginally ahead only for the oldest window. Height at 1,000,000 entries is 20, the minimum possible. A red-black tree was considered and not used: it rotates less on insert, but history is read far more than it is rewritten, and the tighter balance of AVL gives shorter paths.
+
+- `src/SmartX.Shared/Collections/AvlTree.cs`
+- `src/SmartX.Api/History/AvlHistoryStore.cs`, `IHistoryStore.cs` (adds `GetStats`), `HistoryOptions.cs`, `SortedDictionaryHistoryStore.cs`
+- `src/SmartX.Api/Endpoints/HistoryEndpoints.cs`, `src/SmartX.Shared/History/HistoryRangeContracts.cs`, `src/SmartX.Api/Program.cs`
+- `tests/SmartX.Tests/AvlTreeTests.cs`, `AvlHistoryStoreTests.cs`, `HistoryRangeEndpointTests.cs`, `AvlHistoryBenchmarkTests.cs`
+
+**Commits:** `6b706e9` the tree, `ea4e45c` the store and its configuration, `df974a5` the endpoints, `ecfefe0` the benchmark and README
+
+---
+
 ## Entry template
 
 ```markdown
-## U22. Short title of the problem
+## U23. Short title of the problem
 
 **Source:** how it was found: lecturer feedback on Part 1, code review, a test, a live run
 

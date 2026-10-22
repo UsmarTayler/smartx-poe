@@ -352,7 +352,7 @@ the authority on what is a Fault. Tests: `SuggestionServiceTests`, `TrustForecas
 ## Tests
 
 ```bash
-dotnet test                                                                                                   # the whole suite: 1,341 cases
+dotnet test                                                                                                   # the whole suite: 1,414 cases
 dotnet test --filter "FullyQualifiedName~SuggestionServiceTests"                                              # one class
 dotnet test --settings tests/SmartX.Tests/benchmark.runsettings --filter "Category=Benchmark" --logger "console;verbosity=detailed"   # the benchmarks
 ```
@@ -367,6 +367,7 @@ for no fault of the code, and the behaviour they measure is covered by order in 
 | `Stack<T>` (commands and undo) | about 90 | `CommandServiceTests` |
 | `Dictionary` (trust, device index, patterns) | about 80 | `TrustEngineTests`, `PatternEngineTests` |
 | `SortedDictionary` (history) | about 65 | `HistoryStoreContract` (run as `SortedDictionaryHistoryStoreTests`) |
+| AVL tree (history) | about 73 | `AvlTreeTests`, `AvlHistoryStoreContractTests` (the same contract), `HistoryRangeEndpointTests` |
 | `HashSet` (alerts, search) | about 55 | `AlertTrackerTests` |
 | Predictive engine | about 160 | `SuggestionServiceTests`, `TrustForecasterTests` |
 | Real-time push (hub, client feeds) | about 95 | `RealtimeHubTests`, `ClientRealtimeTests` |
@@ -375,7 +376,7 @@ for no fault of the code, and the behaviour they measure is covered by order in 
 | Device simulator | about 20 | `DeviceSimulatorTests` |
 | Attachments (streamed, encrypted) | about 35 | `AttachmentUploadTests` |
 
-Counts are `[Fact]` and `[Theory]` methods; theory rows bring the suite to 1,341 cases. The API tests boot the real API in memory
+Counts are `[Fact]` and `[Theory]` methods; theory rows bring the suite to 1,414 cases. The API tests boot the real API in memory
 with `WebApplicationFactory`, and the browser components are tested with bUnit on a fake hub, a fake API and a fake clock.
 
 ## Where each concept lives
