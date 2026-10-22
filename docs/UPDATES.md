@@ -8,6 +8,41 @@ New entries are appended at the end using the [template](#entry-template). Part 
 updates made from Parts 1 and 2 feedback. This file is that list, kept while the work happens instead of
 reconstructed afterwards.
 
+## Summary
+
+Categories: **feedback** (a lecturer's comment), **fault** (wrong behaviour found by review, a test or a live run), **optimisation** (a cost or
+an inconsistency removed that gave no wrong result), **test cleanup**, and **brief** (a requirement of the assignment brief that the build did
+not yet meet; the one category added to the four usual ones). Commits are in each entry.
+
+| Entry | Part | Category | One line |
+| --- | --- | --- | --- |
+| [U1](#u1-combining-readings-from-different-categories) | 1 | fault | Reject combining readings from different sensor categories |
+| [U2](#u2-new-nodes-reported-as-degrading) | 1 | fault | Add an `Unproven` band so a node with no evidence is not reported as degrading |
+| [U3](#u3-a-rounding-error-could-clear-a-fault) | 1 | fault | Treat fully decayed evidence as unproven, so a rounding error cannot clear a fault |
+| [U4](#u4-inconsistent-configuration-binding) | 1 | optimisation | Bind telemetry retention through `IOptions`, like the rest of the configuration |
+| [U5](#u5-n1-requests-on-the-trust-panel) | 1 | optimisation | Carry recent history in the trust list, removing one request per node |
+| [U6](#u6-attachments-lost-on-restart) | 1 | fault | Persist the attachment index and use a fixed development key, so attachments survive a restart |
+| [U7](#u7-simulated-data-did-not-arrive-like-a-devices) | 2 | brief | Move the simulator out of the API so it reports over HTTP, and queue accepted readings |
+| [U8](#u8-silent-devices-stayed-unregistered-after-an-api-restart) | 2 | fault | Re-register the whole fleet on the first 404 after an API restart |
+| [U9](#u9-a-silent-devices-control-channel-was-implicit-and-untested) | 2 | fault | State and test that a silent device keeps polling its shadow |
+| [U10](#u10-the-command-log-grew-without-bound) | 2 | fault | Move the command log into the retained history store, so it cannot grow without bound |
+| [U11](#u11-one-timing-test-could-fail-a-cold-first-run) | 2 | test cleanup | Keep wall-clock assertions out of the default run |
+| [U12](#u12-the-telemetry-page-made-one-request-per-sensor) | 2 | optimisation | Load every sensor's recent readings in one request |
+| [U13](#u13-a-gateway-error-was-shown-as-an-answer) | 2 | fault | Treat 502 and 504 from the web server as the API being unreachable |
+| [U14](#u14-the-baseline-for-lift-counted-occurrences-not-time) | 2 | fault | Measure the lift baseline as the time an action's windows cover, not a count |
+| [U15](#u15-the-general-level-compared-a-pump-with-every-pump) | 2 | fault | Give the general pattern level a baseline per zone |
+| [U16](#u16-one-click-was-learned-as-twelve-for-twelve) | 2 | fault | Credit an action to the latest trigger of each kind, so one click is one response |
+| [U17](#u17-the-forecast-could-not-see-a-fall-that-began-after-a-flat-stretch) | 2 | fault | Forecast from the most recent straight stretch of a trust series |
+| [U18](#u18-suggestions-deadlocked-with-the-device-index) | 2 | fault | Take suggestion events from an inbox, so ranking never meets the index lock (a deadlock) |
+| [U19](#u19-compose-would-not-start-without-an-env-file) | 2 | fault | Default the development key, so a fresh clone starts with no `.env` |
+| [U20](#u20-accessibility-findings-in-the-light-theme) | 2 | fault | Fix the contrast, names, landmarks and live regions an axe pass found |
+| [U21](#u21-the-api-had-no-authentication) | 2 | feedback | Add login with roles, per-device keys and a protected hub: the Part 1 authentication feedback |
+| [U22](#u22-history-range-queries-walked-from-the-oldest-entry) | 3 | optimisation | Replace the sorted-dictionary history with an AVL tree, so a time-range query seeks |
+| [U23](#u23-the-mesh-was-not-modelled-as-a-network) | 3 | brief | Model the mesh as a weighted graph, with breadth-first reachability and articulation points |
+| [U24](#u24-the-backbone-of-the-mesh-and-what-happens-when-part-of-it-fails) | 3 | brief | Build the minimum spanning tree (Prim's, checked by Kruskal's), route along it, and record routes that heal |
+| [U25](#u25-the-test-suite-had-redundant-and-slow-tests) | 3 | test cleanup | Remove duplicate tests and share hosts: 1,429 tests to 1,347, 26 s to 20 s |
+| [U26](#u26-the-topology-pillar-was-listed-and-disabled) | 3 | brief | Build the topology page, and make "take offline" exclude the node at once |
+
 ## Lecturer feedback on Part 1
 
 **Criterion:** Gateway Startup Layout and API Integration. **Mark: 5/10.** This is the only criterion that lost marks in Part 1.
@@ -18,36 +53,14 @@ reconstructed afterwards.
 
 Entries U1 to U12 each name their own source (a review of the code, a test, a live run); none of them is recorded as lecturer feedback.
 
-## Summary
+## Lecturer feedback on Part 2
 
-| # | Date | Area | Change | Commit |
-| --- | --- | --- | --- | --- |
-| [U1](#u1-combining-readings-from-different-categories) | 2026-08-20 | Packets | Reject combining readings from different sensor categories | `33f0cb4` |
-| [U2](#u2-new-nodes-reported-as-degrading) | 2026-09-11 | Trust | Add an `Unproven` band for nodes with no evidence | `76479dc` |
-| [U3](#u3-a-rounding-error-could-clear-a-fault) | 2026-09-11 | Trust | Treat fully decayed evidence as unproven | `976e3ca` |
-| [U4](#u4-inconsistent-configuration-binding) | 2026-09-11 | API | Bind telemetry retention through `IOptions` | `01d1a19` |
-| [U5](#u5-n1-requests-on-the-trust-panel) | 2026-09-13 | Trust, client | Carry recent history in the trust list | `72596d6` |
-| [U6](#u6-attachments-lost-on-restart) | 2026-09-14 | Attachments | Persist the attachment index and use a fixed development key | `432643a`, `7d08321` |
-| [U7](#u7-simulated-data-did-not-arrive-like-a-devices) | 2026-09-29 | Simulation, ingestion | Move the simulator out of the API so it reports over HTTP, and queue accepted readings | `7216026`, `e6f8f0b` |
-| [U8](#u8-silent-devices-stayed-unregistered-after-an-api-restart) | 2026-09-30 | Simulator | Re-register the whole fleet on the first 404 | `f528e93` |
-| [U9](#u9-a-silent-devices-control-channel-was-implicit-and-untested) | 2026-09-30 | Simulator | State and test that a silent device keeps polling its shadow | `06e1195` |
-| [U10](#u10-the-command-log-grew-without-bound) | 2026-10-04 | Commands, history | Move the command log into the retained history store | `d2039dc` |
-| [U11](#u11-one-timing-test-could-fail-a-cold-first-run) | 2026-10-07 | Tests | Keep wall-clock assertions out of the default run | `a06eec1` |
-| [U12](#u12-the-telemetry-page-made-one-request-per-sensor) | 2026-10-08 | Telemetry, client | Load every sensor's recent readings in one request | `21a315e` |
-| [U13](#u13-a-gateway-error-was-shown-as-an-answer) | 2026-10-07 | Client | Treat 502 and 504 from the web server as the API being unreachable | `34ceca0` |
-| [U14](#u14-the-baseline-for-lift-counted-occurrences-not-time) | 2026-10-07 | Patterns | Measure the lift baseline as the time an action's windows cover | `3fb9dc1` |
-| [U15](#u15-the-general-level-compared-a-pump-with-every-pump) | 2026-10-07 | Patterns | Give the general level a baseline per zone | `2c7c61f` |
-| [U16](#u16-one-click-was-learned-as-twelve-for-twelve) | 2026-10-13 | Patterns | Credit an action to the latest trigger of each kind | `ff6dd24` |
-| [U17](#u17-the-forecast-could-not-see-a-fall-that-began-after-a-flat-stretch) | 2026-10-13 | Insights | Forecast from the most recent straight stretch of a trust series | `bbbde6f` |
-| [U18](#u18-suggestions-deadlocked-with-the-device-index) | 2026-10-13 | Suggestions | Take engine events from an inbox so ranking never meets the index lock | `96c4320` |
-| [U19](#u19-compose-would-not-start-without-an-env-file) | 2026-10-13 | Docker | Default the development key so a fresh clone starts with no `.env` | `ae8a4e1` |
-| [U20](#u20-accessibility-findings-in-the-light-theme) | 2026-10-13 | Client | Contrast, names, landmarks and live regions found by an axe pass | `b62dccc`, `5c23e63`, `7b5e0fc`, `3bd34b4`, `718d7e0` |
-| [U21](#u21-the-api-had-no-authentication) | 2026-10-14 | API, client, simulator | Add a login with roles, per-device keys, a protected hub and a login page; protect every endpoint but health and login | `5b33a2b`, `b845474`, `76355a3`, `3fcb356`, `7920580`, `94be739`, `36d261e`, `fbe6bb3`, `1041e6b` |
-| [U22](#u22-history-range-queries-walked-from-the-oldest-entry) | 2026-10-22 | History | Replace the sorted-dictionary store with an AVL tree as the default, so a time-range query seeks | `6b706e9`, `ea4e45c`, `df974a5`, `ecfefe0` |
-| [U23](#u23-the-mesh-was-not-modelled-as-a-network) | 2026-10-22 | Topology | Model the mesh as a weighted graph built from device-reported neighbours, with breadth-first reachability and articulation points | `e52b330`, `ce6c806`, `39d0dac` |
-| [U24](#u24-the-backbone-of-the-mesh-and-what-happens-when-part-of-it-fails) | 2026-10-22 | Topology | Compute the minimum spanning tree (Prim's, checked by Kruskal's), route devices along it, compare with shortest paths, and record routes that heal | `380db8a`, `69fed7a`, `25d9b52`, `4a15b8a` |
-| [U25](#u25-the-test-suite-had-redundant-and-slow-tests) | 2026-10-22 | Tests | Remove duplicate tests and run theory rows on one host, using the test audit: 1,429 tests to 1,347 and 26 s to 20 s | `4eeb56a`, `5733243`, `2a47ae4`, `89d1fa1`, `16c9582` |
-| [U26](#u26-the-topology-pillar-was-listed-and-disabled) | 2026-10-22 | Client, API, hub | Build the network topology page: the mesh drawn live, routes tracked by MAC, the AVL range query timed on screen, and an operator's "take offline" that excludes the node at once | `a7e694d`, `8d36c18`, `a3a24fe`, `71e1e21`, `9031e08` |
+> **PLACEHOLDER: to be filled in when the Part 2 mark comes back.** Paste each comment below verbatim, one row per comment, and add the entry
+> that answers it as U27 onward (the template is at the end of this file).
+
+| # | Feedback, verbatim | Answered by | Notes |
+| --- | --- | --- | --- |
+| 1 | _Not received yet._ | _U27 onward_ | |
 
 ---
 
