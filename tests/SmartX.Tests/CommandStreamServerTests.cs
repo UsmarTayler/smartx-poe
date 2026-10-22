@@ -157,31 +157,35 @@ public class CommandStreamServerTests
 
     // ---- the simulator's reporting rate -------------------------------------------------------------------
 
-    [Theory]
-    [InlineData(1, 4000)]
-    [InlineData(10, 400)]
-    [InlineData(40, 100)]
-    public async Task The_reporting_rate_multiplier_divides_each_devices_reporting_interval(double multiplier, double expectedMilliseconds)
+    [Fact]
+    public async Task The_reporting_rate_multiplier_divides_each_devices_reporting_interval()
     {
+        // One gateway for the three multipliers (each Theory row used to start its own); each gets a fleet of its own.
         using var api = CommandEndpointTests_Demo();
         var gateway = new GatewayClient(api.CreateClient(), NullLogger<GatewayClient>.Instance, new DeviceKeyring(TestAuth.FleetSecret));
-        var fleet = new DeviceFleet(
-            gateway,
-            Microsoft.Extensions.Options.Options.Create(new SimulatorOptions { DeviceCount = 13, ReportingRateMultiplier = multiplier }),
-            TimeProvider.System,
-            new NoopLifetime(),
-            NullLogger<DeviceFleet>.Instance);
 
-        await fleet.RegisterFleetForTestAsync();
+        foreach (var (multiplier, expectedMilliseconds) in new[] { (1d, 4000d), (10d, 400d), (40d, 100d) })
+        {
+            var fleet = new DeviceFleet(
+                gateway,
+                Microsoft.Extensions.Options.Options.Create(new SimulatorOptions { DeviceCount = 13, ReportingRateMultiplier = multiplier }),
+                TimeProvider.System,
+                new NoopLifetime(),
+                NullLogger<DeviceFleet>.Instance);
 
-        // A nominal thermometer with a five-second heartbeat reports every four seconds at the normal pace.
-        var device = fleet.DevicesForTest.First(candidate => candidate.Scenario == SimulationScenario.Nominal && candidate.Registration.HeartbeatIntervalSeconds == 5);
-        var now = DateTimeOffset.UtcNow;
-        device.NextDue = now;
+            await fleet.RegisterFleetForTestAsync();
 
-        await fleet.TickDeviceForTestAsync(device, now, CancellationToken.None);
+            // A nominal thermometer with a five-second heartbeat reports every four seconds at the normal pace.
+            var device = fleet.DevicesForTest.First(candidate => candidate.Scenario == SimulationScenario.Nominal && candidate.Registration.HeartbeatIntervalSeconds == 5);
+            var now = DateTimeOffset.UtcNow;
+            device.NextDue = now;
 
-        Assert.Equal(expectedMilliseconds, (device.NextDue - now).TotalMilliseconds, precision: 0);
+            await fleet.TickDeviceForTestAsync(device, now, CancellationToken.None);
+
+            Assert.True(
+                Math.Abs(expectedMilliseconds - (device.NextDue - now).TotalMilliseconds) < 0.5,
+                $"x{multiplier}: expected {expectedMilliseconds} ms, got {(device.NextDue - now).TotalMilliseconds} ms.");
+        }
     }
 
     private static Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program> CommandEndpointTests_Demo() =>

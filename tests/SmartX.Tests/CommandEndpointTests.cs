@@ -90,20 +90,27 @@ public class CommandEndpointTests
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
-    [Theory]
-    [InlineData(Valve, "PumpOn", "PumpOn is a Pump command, and this device is a Valve")]
-    [InlineData(Pump, "ValveOpen", "ValveOpen is a Valve command, and this device is a Pump")]
-    [InlineData(Thermometer, "PumpOn", "not an actuator")]
-    public async Task A_mismatched_command_is_a_400_with_a_clear_reason(string mac, string action, string reason)
+    [Fact]
+    public async Task A_mismatched_command_is_a_400_with_a_clear_reason()
     {
+        // One host for the three mismatches; each Theory row used to start its own. The message names the failing case.
         var (api, http) = await HostAsync();
         using var _ = api;
 
-        var response = await http.PostAsync("/api/commands", Issue(mac, action));
+        foreach (var (mac, action, reason) in new[]
+        {
+            (Valve, "PumpOn", "PumpOn is a Pump command, and this device is a Valve"),
+            (Pump, "ValveOpen", "ValveOpen is a Valve command, and this device is a Pump"),
+            (Thermometer, "PumpOn", "not an actuator"),
+        })
+        {
+            var response = await http.PostAsync("/api/commands", Issue(mac, action));
+            var body = await response.Content.ReadAsStringAsync();
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Contains(reason, await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
-        Assert.Empty((await http.GetFromJsonAsync<List<Command>>("/api/commands"))!);
+            Assert.True(response.StatusCode == HttpStatusCode.BadRequest, $"{action} to {mac}: expected 400, got {(int)response.StatusCode}.");
+            Assert.True(body.Contains(reason, StringComparison.Ordinal), $"{action} to {mac}: the reason should say '{reason}' but was {body}");
+            Assert.Empty((await http.GetFromJsonAsync<List<Command>>("/api/commands"))!);
+        }
     }
 
     [Fact]
