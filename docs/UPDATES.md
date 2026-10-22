@@ -44,6 +44,7 @@ not yet meet; the one category added to the four usual ones). Commits are in eac
 | [U26](#u26-the-topology-pillar-was-listed-and-disabled) | 3 | brief | Build the topology page, and make "take offline" exclude the node at once |
 | [U27](#u27-a-feed-test-could-fail-under-load) | 3 | test cleanup | Make the fake topology snapshot hold what it has announced, so a late second sync cannot wipe the first push |
 | [U28](#u28-the-topology-page-built-with-four-warnings) | 3 | fault | Clear four nullable warnings in the topology page, so the solution builds with none |
+| [U29](#u29-a-fresh-clone-built-with-a-vulnerability-warning) | 3 | fault | Move the SignalR client to 10.0.13 for a high-severity advisory only a fresh restore showed, and correct the README on what the live mesh excludes |
 
 ## Lecturer feedback on Part 1
 
@@ -777,10 +778,26 @@ Two faults found by running it in Docker, not by the tests that passed. A compon
 
 ---
 
+## U29. A fresh clone built with a vulnerability warning
+
+**Source:** the Part 3 fresh-clone gate: a clone of `main` from GitHub into a short path, no `.env`, `dotnet build`. It printed four NU1903 warnings; the working copy printed none.
+
+**What was wrong.** `Microsoft.AspNetCore.SignalR.Client` 10.0.11 brings in `Microsoft.AspNetCore.SignalR.Common` 10.0.11, which GitHub advisory GHSA-334f-vvp4-7g6p (a denial of service in ASP.NET Core, published 13 October 2026) lists as vulnerable up to 10.0.12, fixed in 10.0.13. The client and the test project (which references the client) restored it. The working copy most likely restored before the advisory reached NuGet's audit data and has not restored since, so it showed nothing; the CI log for the last merge shows the same warnings on its restore, and CI passes with them.
+
+**Why it mattered.** A marker's first build is a fresh restore, and a high-severity warning on it is the first thing they would see. The gate asks for a build with zero warnings, and the dependency is in the real-time path the project is assessed on.
+
+**What changed.** `SignalR.Client` is 10.0.13, which brings the patched `SignalR.Common`. The build is then free of warnings, `dotnet list package --vulnerable --include-transitive` reports none in any project, and the full suite passes. The API takes SignalR from the ASP.NET Core shared framework, so the server side is patched by the runtime image (the Dockerfiles use the floating `10.0` tags), not by a package reference. A second, smaller difference was found by running the clone: the README said the live topology names devices that started in Disconnect under `excluded`, but a silent device never reports, so it appears in neither list; only a device that reported and then went stale or into Fault is excluded. The README now says that.
+
+- `src/SmartX.Client/SmartX.Client.csproj`, `README.md`
+
+**Commits:** `e6f4c26` the package, `b65ed60` the README correction
+
+---
+
 ## Entry template
 
 ```markdown
-## U29. Short title of the problem
+## U30. Short title of the problem
 
 **Source:** how it was found: lecturer feedback on Part 1, code review, a test, a live run
 
