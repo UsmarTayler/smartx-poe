@@ -48,6 +48,7 @@ internal static class SimulationEndpoints
         ScenarioChangeRequest request,
         ISensorRegistry registry,
         IDeviceShadowStore shadows,
+        SmartX.Api.Topology.TopologyService topology,
         CancellationToken cancellationToken)
     {
         // An enum can carry an undeclared number even when JSON names are expected.
@@ -70,6 +71,20 @@ internal static class SimulationEndpoints
         }
 
         var desired = await shadows.SetAsync(sensor.MacAddress, request.Scenario, cancellationToken);
+
+        // Taking a device offline is shown at once. The mesh would notice by itself after three missed reports, ninety seconds by
+        // default, but an operator who has just pressed the button is looking at the page now. Any other scenario lets the device back
+        // in, and it rejoins with its next report. Reading the snapshot builds it, so the change is recorded and pushed now too.
+        if (request.Scenario == SimulationScenario.Disconnect)
+        {
+            topology.TakeOffline(sensor.MacAddress);
+        }
+        else
+        {
+            topology.BringBack(sensor.MacAddress);
+        }
+
+        _ = topology.Current;
 
         // 202 rather than 200: the gateway has recorded the intention, but the device applies it on its next
         // poll, so the change has not happened yet at the moment this is answered.

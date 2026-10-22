@@ -263,6 +263,19 @@ public sealed class FakeSnapshots : IRealtimeSnapshots
     public Func<SuggestionsUpdate> Suggestions { get; set; } =
         () => new SuggestionsUpdate(0, [], [], [], ClientRealtimeKit.Start);
 
+    public Func<TopologyUpdate> Topology { get; set; } = () => new TopologyUpdate(0, 1, ClientRealtimeKit.Start, []);
+
+    private int _topologyCalls;
+
+    public int TopologyCalls => Volatile.Read(ref _topologyCalls);
+
+    public Task<ApiResult<TopologyUpdate>> GetTopologyAsync(CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _topologyCalls);
+
+        return Task.FromResult(ApiResult<TopologyUpdate>.Success(Topology()));
+    }
+
     private TaskCompletionSource? _suggestionGate;
     private int _suggestionCalls;
 
@@ -471,6 +484,8 @@ public sealed class ClientRig : IAsyncDisposable
 
     public SuggestionFeed Suggestions { get; private set; } = null!;
 
+    public TopologyFeed Topology { get; private set; } = null!;
+
     public PollingTrustFeed Polling { get; private set; } = null!;
 
     /// <summary>A rig whose hub is reachable unless told otherwise.</summary>
@@ -496,6 +511,7 @@ public sealed class ClientRig : IAsyncDisposable
         rig.Stream = new TelemetryStream(rig.Connection, rig.Snapshots, TimeProvider.System, rig.Options);
         rig.Pipeline = new PipelineFeed(rig.Connection, rig.Snapshots, TimeProvider.System, rig.Options);
         rig.Suggestions = new SuggestionFeed(rig.Connection, rig.Snapshots, TimeProvider.System, rig.Options);
+        rig.Topology = new TopologyFeed(rig.Connection, rig.Snapshots, TimeProvider.System, rig.Options);
 
         return rig;
     }
@@ -529,6 +545,7 @@ public sealed class ClientRig : IAsyncDisposable
         await Stream.DisposeAsync();
         await Pipeline.DisposeAsync();
         await Suggestions.DisposeAsync();
+        await Topology.DisposeAsync();
         await Polling.DisposeAsync();
         await Connection.DisposeAsync();
     }

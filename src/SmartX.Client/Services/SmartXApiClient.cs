@@ -172,6 +172,38 @@ public sealed class SmartXApiClient(HttpClient http)
             $"&to={Uri.EscapeDataString(to.ToString("O"))}&maxPoints={maxPoints}",
             cancellationToken);
 
+    /// <summary>Every device and gateway in the mesh, with every link.</summary>
+    public Task<ApiResult<TopologyView>> GetTopologyAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<TopologyView>("api/topology", cancellationToken);
+
+    /// <summary>The spanning tree: the cheapest links that connect every reachable device to a gateway.</summary>
+    public Task<ApiResult<MstView>> GetMstAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<MstView>("api/topology/mst", cancellationToken);
+
+    /// <summary>Each device's nearest gateway and hops, and the devices that cannot reach one.</summary>
+    public Task<ApiResult<ReachabilityView>> GetReachabilityAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<ReachabilityView>("api/topology/reachability", cancellationToken);
+
+    /// <summary>The devices and gateways whose failure would split the mesh.</summary>
+    public Task<ApiResult<ArticulationView>> GetArticulationPointsAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<ArticulationView>("api/topology/articulation-points", cancellationToken);
+
+    /// <summary>One device's route to its gateway along the tree.</summary>
+    public Task<ApiResult<RouteView>> GetRouteAsync(string macAddress, CancellationToken cancellationToken = default) =>
+        GetAsync<RouteView>($"api/topology/route/{Uri.EscapeDataString(macAddress)}", cancellationToken);
+
+    /// <summary>One sensor's raw readings in a window, from the history tree, with how long the tree took to find them.</summary>
+    public Task<ApiResult<HistoryRange>> GetHistoryRangeAsync(
+        string macAddress, DateTimeOffset from, DateTimeOffset to, int limit, CancellationToken cancellationToken = default) =>
+        GetAsync<HistoryRange>(
+            $"api/history/{Uri.EscapeDataString(macAddress)}/range?from={Uri.EscapeDataString(from.ToString("O"))}" +
+            $"&to={Uri.EscapeDataString(to.ToString("O"))}&limit={limit}",
+            cancellationToken);
+
+    /// <summary>The mesh's current revision and recent route changes, with the sequence of the topology topic, for the feed to start from.</summary>
+    public Task<ApiResult<TopologyUpdate>> GetTopologySnapshotAsync(CancellationToken cancellationToken = default) =>
+        GetAsync<TopologyUpdate>("api/realtime/topology", cancellationToken);
+
     /// <summary>One sensor's most recent readings with the sequence of its device topic, for a device feed to start from.</summary>
     public Task<ApiResult<DeviceSnapshot>> GetDeviceSnapshotAsync(string macAddress, CancellationToken cancellationToken = default) =>
         GetAsync<DeviceSnapshot>($"api/realtime/device/{Uri.EscapeDataString(macAddress)}", cancellationToken);

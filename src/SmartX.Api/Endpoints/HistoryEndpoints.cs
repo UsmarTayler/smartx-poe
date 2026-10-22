@@ -86,7 +86,11 @@ internal static class HistoryEndpoints
                 detail: $"No sensor is registered with MAC address '{mac}'.");
         }
 
-        var matching = history.GetRange(sensor.MacAddress, from!.Value, to!.Value)
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var window = history.GetRange(sensor.MacAddress, from!.Value, to!.Value);
+        var queryMicroseconds = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMicroseconds;
+
+        var matching = window
             .Where(entry => entry.Kind == HistoryKind.Reading)
             .Where(entry => string.IsNullOrEmpty(metric) || string.Equals(entry.Unit, metric, StringComparison.Ordinal))
             .Take(page + 1)
@@ -101,6 +105,7 @@ internal static class HistoryEndpoints
             string.IsNullOrEmpty(metric) ? null : metric,
             [.. matching.Take(page).Select(entry => new HistoryReading(entry.Sequence, entry.Timestamp, entry.Value, entry.Unit))],
             truncated,
+            queryMicroseconds,
             truncated ? matching[page].Timestamp : null));
     }
 

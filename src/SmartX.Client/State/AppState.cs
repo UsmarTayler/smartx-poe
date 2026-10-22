@@ -91,6 +91,9 @@ public sealed class AppState
     /// <summary>The device open in the Command Stream page's detail panel, by MAC address.</summary>
     public string? StreamDevice { get; private set; }
 
+    /// <summary>The device the topology page has selected, kept so leaving the page and coming back finds it still chosen.</summary>
+    public string? TopologyDevice { get; private set; }
+
     /// <summary>The filters on the Command Stream page: device search and the live stream share them.</summary>
     public DeviceSearchFilters StreamFilters { get; private set; } = new();
 
@@ -130,6 +133,8 @@ public sealed class AppState
 
         Set(StreamDevice, macAddress, value => StreamDevice = value);
     }
+
+    public void SelectTopologyDevice(string? macAddress) => Set(TopologyDevice, macAddress, value => TopologyDevice = value);
 
     public void SetStreamFilters(DeviceSearchFilters filters) => Set(StreamFilters, filters, value => StreamFilters = value);
 

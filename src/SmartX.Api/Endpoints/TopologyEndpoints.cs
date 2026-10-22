@@ -257,7 +257,7 @@ internal static class TopologyEndpoints
         _ = topology.Current;
 
         return Results.Ok(topology.RouteChanges(count)
-            .Select(change => new RouteChangeView(change.At, change.Device, change.Name, change.OldPath, change.NewPath, change.Reason))
+            .Select(change => change.ToView())
             .ToList());
     }
 }

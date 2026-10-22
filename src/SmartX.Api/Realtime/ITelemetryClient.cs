@@ -33,4 +33,7 @@ public interface ITelemetryClient
 
     /// <summary>The suggestions and insights, whole, because something about them changed. Never sent for a reading.</summary>
     Task SuggestionsUpdated(SuggestionsUpdate update);
+
+    /// <summary>The mesh has a new revision, and these routes healed since the last message.</summary>
+    Task TopologyUpdated(TopologyUpdate update);
 }

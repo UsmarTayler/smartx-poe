@@ -31,6 +31,9 @@ public static class RealtimeTopics
     /// <summary>Suggested actions and automated insights. Immediate when something new appears, and never per reading.</summary>
     public const string Suggestions = "suggestions";
 
+    /// <summary>The mesh: a new revision of the topology, and the route changes since the last message. Immediate, coalesced.</summary>
+    public const string Topology = "topology";
+
     /// <summary>The prefix of a per-device topic, followed by the device's MAC address.</summary>
     public const string DevicePrefix = "device:";
 
@@ -41,7 +44,7 @@ public static class RealtimeTopics
     public static bool IsDevice(string topic) => topic.StartsWith(DevicePrefix, StringComparison.Ordinal);
 
     /// <summary>The topics every client may join by name.</summary>
-    public static IReadOnlyList<string> Fixed { get; } = [Trust, Alerts, Commands, Pipeline, Stream, Suggestions];
+    public static IReadOnlyList<string> Fixed { get; } = [Trust, Alerts, Commands, Pipeline, Stream, Suggestions, Topology];
 }
 
 /// <summary>
@@ -62,6 +65,7 @@ public static class RealtimeMethods
     public const string PipelineUpdated = nameof(PipelineUpdated);
     public const string ReadingsArrived = nameof(ReadingsArrived);
     public const string SuggestionsUpdated = nameof(SuggestionsUpdated);
+    public const string TopologyUpdated = nameof(TopologyUpdated);
 
     // Client to server.
     public const string Subscribe = nameof(Subscribe);
@@ -221,3 +225,19 @@ public sealed record DeviceSnapshot(long Sequence, string MacAddress, IReadOnlyL
 /// <param name="Sequence">The stream topic's sequence when the snapshot was taken.</param>
 /// <param name="Latest">One reading per node that has reported.</param>
 public sealed record StreamSnapshot(long Sequence, IReadOnlyList<ReadingPush> Latest) : IRealtimeMessage;
+
+/// <summary>The mesh changed: which revision of it is current, and the routes that healed since the last message.</summary>
+/// <param name="Sequence">Its place in the topology topic's order.</param>
+/// <param name="Revision">
+/// The revision of the mesh drawing. It moves when something a person would see changes (a device joins, leaves or changes band, a
+/// link appears or goes, a link enters or leaves the spanning tree), not when a score drifts, so a client that refetches on a new
+/// revision is not refetching all day.
+/// </param>
+/// <param name="BuiltAt">When that revision was built.</param>
+/// <param name="NewChanges">Route changes recorded since the previous message, newest first. In a snapshot, the most recent ones.</param>
+/// <remarks>
+/// <b>Small on purpose.</b> It carries the revision number and not the mesh. The mesh is a hundred nodes and links, and sending it on
+/// every change would be most of the traffic; a client that sees a new revision asks for it over HTTP, which is the same snapshot
+/// endpoint it started from. The route changes ride along because they are tiny and are the news.
+/// </remarks>
+public sealed record TopologyUpdate(long Sequence, long Revision, DateTimeOffset BuiltAt, IReadOnlyList<RouteChangeView> NewChanges) : IRealtimeMessage;

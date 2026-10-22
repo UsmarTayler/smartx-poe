@@ -36,8 +36,14 @@ public sealed record TopologyEdge(string A, string B, int Rssi, double Cost);
 
 /// <summary>A device the mesh knows about and has left out.</summary>
 /// <param name="Id">The device.</param>
-/// <param name="Reason"><c>Fault</c> when its trust is in the Fault band, <c>Stale</c> when it has not reported for three intervals.</param>
-public sealed record ExcludedNode(string Id, string Reason);
+/// <param name="Reason">
+/// <c>Fault</c> when its trust is in the Fault band, <c>Stale</c> when it has not reported for three intervals, and
+/// <c>Taken offline by operator</c> when an operator has set it to Disconnect.
+/// </param>
+/// <param name="Name">Its label.</param>
+/// <param name="X">Where it last said it was, in metres on the plan.</param>
+/// <param name="Y">Where it last said it was, in metres on the plan.</param>
+public sealed record ExcludedNode(string Id, string Reason, string Name = "", double X = 0, double Y = 0);
 
 /// <summary>The mesh as it is now.</summary>
 /// <param name="BuiltAt">When this snapshot was built.</param>
@@ -124,6 +130,7 @@ public sealed record RouteView(
     IReadOnlyList<RouteHop> Hops);
 
 /// <summary>A device's route changing, as the history records it.</summary>
+/// <param name="Id">Its number, rising by one with each change. A client that is handed the same change twice can tell.</param>
 /// <param name="At">When the mesh was rebuilt and the change noticed.</param>
 /// <param name="Device">The device.</param>
 /// <param name="Name">Its label.</param>
@@ -131,6 +138,7 @@ public sealed record RouteView(
 /// <param name="NewPath">Its route after. Null if it has none now.</param>
 /// <param name="Reason">What caused it, such as <c>GATEWAY-2 excluded: Stale</c>.</param>
 public sealed record RouteChangeView(
+    long Id,
     DateTimeOffset At,
     string Device,
     string Name,
