@@ -105,23 +105,21 @@ public class LoginTests
         Assert.Equal(username, me!.Username);
         Assert.Equal(role, me.Role);
         Assert.Equal(login.ExpiresAt, me.ExpiresAt);
+
+        // The lifetime is an option, not a constant. Checked once, on the first row, because each row starts its own host.
+        if (role == "Operator")
+        {
+            using var short5 = Host(new() { ["Auth:TokenLifetime"] = "00:05:00" }, clock);
+            var shortLogin = await (await LoginAsync(short5.Anonymous(), "operator", OperatorPassword)).Content.ReadFromJsonAsync<LoginResponse>();
+
+            Assert.Equal(clock.GetUtcNow().AddMinutes(5), shortLogin!.ExpiresAt);
+        }
     }
 
     [Fact]
-    public async Task The_token_lifetime_is_an_option()
+    public async Task A_wrong_password_and_an_unknown_user_get_exactly_the_same_answer_and_both_lock_the_same_way()
     {
-        var clock = new FakeTimeProvider(new DateTimeOffset(2026, 10, 14, 9, 0, 0, TimeSpan.Zero));
-        using var api = Host(new() { ["Auth:TokenLifetime"] = "00:05:00" }, clock);
-
-        var login = await (await LoginAsync(api.Anonymous(), "operator", OperatorPassword)).Content.ReadFromJsonAsync<LoginResponse>();
-
-        Assert.Equal(clock.GetUtcNow().AddMinutes(5), login!.ExpiresAt);
-    }
-
-    [Fact]
-    public async Task A_wrong_password_and_an_unknown_user_get_exactly_the_same_answer()
-    {
-        using var api = Host();
+        using var api = Host(new() { ["Auth:MaxFailedAttempts"] = "2" });
         var http = api.Anonymous();
 
         var wrongPassword = await LoginAsync(http, "operator", "not-the-password");
@@ -130,12 +128,17 @@ public class LoginTests
         Assert.Equal(HttpStatusCode.Unauthorized, wrongPassword.StatusCode);
         Assert.Equal(wrongPassword.StatusCode, unknownUser.StatusCode);
 
-        // Same title, same detail, same everything the caller can see: otherwise the form is a way to ask which names exist.
         var first = await wrongPassword.Content.ReadAsStringAsync();
         var second = await unknownUser.Content.ReadAsStringAsync();
 
+        // Nothing in the answer, down to the wording, says which of the two it was.
         Assert.Equal(Normalise(first), Normalise(second));
         Assert.Contains("Incorrect username or password.", first, StringComparison.Ordinal);
+
+        // And a name that does not exist is locked after the same number of failures as one that does.
+        await LoginAsync(http, "ghost", "wrong");
+        await LoginAsync(http, "ghost", "wrong");
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await LoginAsync(http, "ghost", "wrong")).StatusCode);
     }
 
     private static string Normalise(string problem)
@@ -179,19 +182,6 @@ public class LoginTests
         clock.Advance(TimeSpan.FromMinutes(2) + TimeSpan.FromSeconds(1));
 
         Assert.Equal(HttpStatusCode.OK, (await LoginAsync(http, "operator", OperatorPassword)).StatusCode);
-    }
-
-    [Fact]
-    public async Task A_name_that_does_not_exist_locks_exactly_like_one_that_does()
-    {
-        using var api = Host(new() { ["Auth:MaxFailedAttempts"] = "2" });
-        var http = api.Anonymous();
-
-        await LoginAsync(http, "ghost", "wrong");
-        await LoginAsync(http, "ghost", "wrong");
-
-        // If only real accounts locked, this would still be a 401, and the difference would say which names are real.
-        Assert.Equal(HttpStatusCode.TooManyRequests, (await LoginAsync(http, "ghost", "wrong")).StatusCode);
     }
 
     [Fact]
