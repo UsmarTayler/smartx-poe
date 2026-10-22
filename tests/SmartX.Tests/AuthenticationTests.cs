@@ -288,87 +288,17 @@ public class TokenValidationTests
         return new JsonWebTokenHandler().CreateToken(descriptor);
     }
 
-    private static async Task<HttpStatusCode> ReadWithAsync(string token)
+    private static async Task<HttpStatusCode> ReadWithAsync(HttpClient http, string token)
     {
-        using var api = new AuthenticatedFactory();
-        var http = api.Anonymous();
-        http.DefaultRequestHeaders.Authorization = TestAuth.Bearer(token);
+        // The token goes on this request alone, so one host can be asked about many tokens.
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/auth/me");
+        request.Headers.Authorization = TestAuth.Bearer(token);
 
-        return (await http.GetAsync("/api/auth/me")).StatusCode;
+        return (await http.SendAsync(request)).StatusCode;
     }
 
-    [Fact]
-    public async Task A_good_token_is_accepted_which_is_what_makes_the_refusals_below_mean_something()
-    {
-        Assert.Equal(HttpStatusCode.OK, await ReadWithAsync(Signed()));
-    }
-
-    [Fact]
-    public async Task An_expired_token_is_refused()
-    {
-        var token = Signed(expires: DateTime.UtcNow.AddMinutes(-5));
-
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync(token));
-    }
-
-    [Fact]
-    public async Task A_token_made_by_the_api_an_hour_ago_with_a_one_hour_life_is_refused_now()
-    {
-        var then = new FakeTimeProvider(DateTimeOffset.UtcNow.AddMinutes(-61));
-
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync(TestAuth.Token(time: then)));
-    }
-
-    [Fact]
-    public async Task A_token_signed_with_another_key_is_refused()
-    {
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync(Signed(key: "some-other-key-that-is-long-enough-to-sign-with")));
-    }
-
-    [Fact]
-    public async Task A_token_for_another_issuer_or_audience_is_refused()
-    {
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync(Signed(issuer: "someone-else")));
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync(Signed(audience: "someone-else")));
-    }
-
-    [Fact]
-    public async Task A_token_signed_with_a_different_algorithm_is_refused()
-    {
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync(Signed(algorithm: SecurityAlgorithms.HmacSha384)));
-    }
-
-    [Fact]
-    public async Task An_unsigned_token_with_the_algorithm_none_is_refused()
-    {
-        static string B64(string json) => Convert.ToBase64String(Encoding.UTF8.GetBytes(json)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-
-        var exp = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeSeconds();
-        var token = B64("""{"alg":"none","typ":"JWT"}""") + "." +
-            B64($$"""{"iss":"smartx-api","aud":"smartx-operators","name":"forger","role":"Operator","exp":{{exp}}}""") + ".";
-
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync(token));
-    }
-
-    [Fact]
-    public async Task A_token_whose_signature_has_been_altered_is_refused()
-    {
-        var token = Signed(role: UserRoles.Viewer);
-        var last = token[^1];
-        var tampered = token[..^1] + (last == 'A' ? 'B' : 'A');
-
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync(tampered));
-    }
-
-    [Fact]
-    public async Task A_viewers_token_with_its_payload_edited_to_say_operator_is_refused()
-    {
-        var parts = Signed(role: UserRoles.Viewer).Split('.');
-        var payload = Encoding.UTF8.GetString(Convert.FromBase64String(Pad(parts[1]))).Replace("Viewer", "Operator", StringComparison.Ordinal);
-        var edited = Convert.ToBase64String(Encoding.UTF8.GetBytes(payload)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync($"{parts[0]}.{edited}.{parts[2]}"));
-    }
+    private static string Base64Url(string text) =>
+        Convert.ToBase64String(Encoding.UTF8.GetBytes(text)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
     private static string Pad(string base64Url)
     {
@@ -378,10 +308,54 @@ public class TokenValidationTests
     }
 
     [Fact]
-    public async Task Garbage_where_a_token_should_be_is_refused()
+    public async Task A_good_token_is_accepted_which_is_what_makes_the_refusals_below_mean_something()
     {
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync("not.a.token"));
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync("x"));
+        using var api = new AuthenticatedFactory();
+
+        Assert.Equal(HttpStatusCode.OK, await ReadWithAsync(api.Anonymous(), Signed()));
+    }
+
+    /// <summary>
+    /// Every way of forging or damaging a token, each of which must be a 401. One host and a loop: these used to be eleven
+    /// tests, each starting its own host to ask one question. The message names the failing case.
+    /// </summary>
+    [Fact]
+    public async Task A_token_that_is_expired_forged_or_damaged_in_any_way_is_refused()
+    {
+        using var api = new AuthenticatedFactory();
+        var http = api.Anonymous();
+
+        var exp = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeSeconds();
+        var unsigned = Base64Url("""{"alg":"none","typ":"JWT"}""") + "." +
+            Base64Url($$"""{"iss":"smartx-api","aud":"smartx-operators","name":"forger","role":"Operator","exp":{{exp}}}""") + ".";
+
+        var signature = Signed(role: UserRoles.Viewer);
+        var altered = signature[..^1] + (signature[^1] == 'A' ? 'B' : 'A');
+
+        var parts = Signed(role: UserRoles.Viewer).Split('.');
+        var promoted = Base64Url(Encoding.UTF8.GetString(Convert.FromBase64String(Pad(parts[1]))).Replace("Viewer", "Operator", StringComparison.Ordinal));
+
+        (string Case, string Token)[] cases =
+        [
+            ("expired five minutes ago", Signed(expires: DateTime.UtcNow.AddMinutes(-5))),
+            ("made by the API an hour ago with a one hour life", TestAuth.Token(time: new FakeTimeProvider(DateTimeOffset.UtcNow.AddMinutes(-61)))),
+            ("signed with another key", Signed(key: "some-other-key-that-is-long-enough-to-sign-with")),
+            ("another issuer", Signed(issuer: "someone-else")),
+            ("another audience", Signed(audience: "someone-else")),
+            ("a different algorithm", Signed(algorithm: SecurityAlgorithms.HmacSha384)),
+            ("unsigned, algorithm none", unsigned),
+            ("signature altered", altered),
+            ("a viewer's payload edited to say operator", $"{parts[0]}.{promoted}.{parts[2]}"),
+            ("garbage with three parts", "not.a.token"),
+            ("garbage", "x"),
+        ];
+
+        foreach (var (name, token) in cases)
+        {
+            var status = await ReadWithAsync(http, token);
+
+            Assert.True(status == HttpStatusCode.Unauthorized, $"{name}: expected 401, got {(int)status}.");
+        }
     }
 
     [Fact]

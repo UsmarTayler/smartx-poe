@@ -39,23 +39,27 @@ public class ActuatorRegistrationTests
         Assert.All(sensors!, sensor => Assert.Null(sensor.ActuatorKind));
     }
 
-    [Theory]
-    [InlineData("Pump", "State")]
-    [InlineData("Relay", "State")]
-    [InlineData("Valve", "State")]
-    [InlineData("Dimmer", "Integer")]
-    [InlineData("Dimmer", "Real")]
-    public async Task An_actuator_registered_with_a_kind_keeps_it(string kind, string payload)
+    [Fact]
+    public async Task An_actuator_registered_with_a_kind_keeps_it()
     {
+        // One host, one device per case: each Theory row used to boot its own host. The message names the failing case.
         using var api = New();
         var client = api.CreateClient();
+        (string Kind, string Payload)[] cases = [("Pump", "State"), ("Relay", "State"), ("Valve", "State"), ("Dimmer", "Integer"), ("Dimmer", "Real")];
 
-        var response = await client.PostAsync("/api/sensors", Actuator(Valve, payload, kind));
+        for (var i = 0; i < cases.Length; i++)
+        {
+            var (kind, payload) = cases[i];
+            var mac = $"AA:BB:CC:DD:EE:{0x20 + i:X2}";
 
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+            var response = await client.PostAsync("/api/sensors", Actuator(mac, payload, kind));
 
-        var stored = await client.GetFromJsonAsync<SensorRegistration>($"/api/sensors/{Valve}");
-        Assert.Equal(Enum.Parse<ActuatorKind>(kind), stored?.ActuatorKind);
+            Assert.True(response.StatusCode == HttpStatusCode.Created, $"{kind} as {payload}: expected 201, got {(int)response.StatusCode}.");
+
+            var stored = await client.GetFromJsonAsync<SensorRegistration>($"/api/sensors/{mac}");
+
+            Assert.True(stored?.ActuatorKind == Enum.Parse<ActuatorKind>(kind), $"{kind} as {payload}: stored as {stored?.ActuatorKind}.");
+        }
     }
 
     [Fact]
@@ -70,19 +74,24 @@ public class ActuatorRegistrationTests
         Assert.Null((await client.GetFromJsonAsync<SensorRegistration>($"/api/sensors/{Valve}"))?.ActuatorKind);
     }
 
-    [Theory]
-    [InlineData("Dimmer", "State", "Dimmer reports a level")]
-    [InlineData("Valve", "Real", "either on or off")]
-    [InlineData("Pump", "Integer", "either on or off")]
-    public async Task A_kind_that_does_not_suit_the_payload_is_rejected_with_a_reason(string kind, string payload, string reason)
+    [Fact]
+    public async Task A_kind_that_does_not_suit_the_payload_is_rejected_with_a_reason()
     {
         using var api = New();
         var client = api.CreateClient();
+        (string Kind, string Payload, string Reason)[] cases =
+            [("Dimmer", "State", "Dimmer reports a level"), ("Valve", "Real", "either on or off"), ("Pump", "Integer", "either on or off")];
 
-        var response = await client.PostAsync("/api/sensors", Actuator(Valve, payload, kind));
+        for (var i = 0; i < cases.Length; i++)
+        {
+            var (kind, payload, reason) = cases[i];
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Contains(reason, await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+            var response = await client.PostAsync("/api/sensors", Actuator($"AA:BB:CC:DD:EE:{0x30 + i:X2}", payload, kind));
+            var body = await response.Content.ReadAsStringAsync();
+
+            Assert.True(response.StatusCode == HttpStatusCode.BadRequest, $"{kind} as {payload}: expected 400, got {(int)response.StatusCode}.");
+            Assert.True(body.Contains(reason, StringComparison.Ordinal), $"{kind} as {payload}: the reason should say '{reason}' but was {body}");
+        }
     }
 
     [Fact]
