@@ -20,6 +20,7 @@ public class UnprovenBandTests
         var trust = Trust(engine, NodeA);
         Assert.Equal(TrustBand.Unproven, trust.Band);
         Assert.Equal(0.5, trust.Score);
+        Assert.Equal("no telemetry yet", trust.Reason);
     }
 
     [Fact]

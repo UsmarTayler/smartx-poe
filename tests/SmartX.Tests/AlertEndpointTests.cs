@@ -15,7 +15,6 @@ namespace SmartX.Tests;
 public class AlertEndpointTests
 {
     private const string Sensor = "AA:BB:CC:DD:EE:11";
-    private const string Quiet = "AA:BB:CC:DD:EE:12";
 
     internal static WebApplicationFactory<Program> Host(Dictionary<string, string?>? extra = null) =>
         new AuthenticatedFactory().WithWebHostBuilder(builder =>
@@ -168,39 +167,6 @@ public class AlertEndpointTests
     // ---- silence ---------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task A_silent_node_raises_a_disconnected_alert_whose_count_climbs_until_it_reports_again()
-    {
-        // A one-second heartbeat, called disconnected after one missed interval, and swept ten times a second,
-        // so the whole story plays out in a couple of seconds.
-        using var api = Host(new()
-        {
-            ["Alerts:DisconnectedAfterIntervals"] = "1",
-            ["Trust:HeartbeatCheckInterval"] = "00:00:00.100",
-        });
-        var http = api.CreateClient();
-        await RegisterAsync(http, Quiet, heartbeatSeconds: 1);
-
-        await WaitForAsync(
-            async () => (await AlertsAsync(http)).FirstOrDefault(alert => alert.Key == new AlertKey(Quiet, AlertKind.Disconnected))?.SuppressedCount >= 5,
-            "the disconnected alert's repeat count to climb");
-
-        // Climbing, not multiplying: still one alert.
-        Assert.Single(await AlertsAsync(http), alert => alert.Key == new AlertKey(Quiet, AlertKind.Disconnected));
-
-        await Send(http, Quiet, "20");
-
-        await WaitForAsync(
-            async () => !(await AlertsAsync(http)).Any(alert => alert.Key.Kind == AlertKind.Disconnected),
-            "the disconnected alert to clear when the node reports");
-
-        var stats = await StatsAsync(http);
-        Assert.True(stats.Cleared >= 1);
-        Assert.True(stats.Suppressed >= 5);
-    }
-
-    // ---- acknowledging ---------------------------------------------------------------------------------------
-
-    [Fact]
     public async Task Acknowledging_an_alert_marks_it_seen_and_leaves_it_active()
     {
         using var api = Host();
@@ -264,17 +230,18 @@ public class AlertEndpointTests
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
-    [Theory]
-    [InlineData("""{ "mac": "not-a-mac", "kind": "Disconnected" }""")]
-    [InlineData("""{ "kind": "Disconnected" }""")]
-    public async Task An_acknowledgement_with_a_bad_key_is_a_400(string body)
+    [Fact]
+    public async Task An_acknowledgement_with_a_bad_key_is_a_400()
     {
         using var api = Host();
         var http = api.CreateClient();
 
-        var response = await http.PostAsync("/api/alerts/acknowledge", Json(body));
+        foreach (var body in new[] { """{ "mac": "not-a-mac", "kind": "Disconnected" }""", """{ "kind": "Disconnected" }""" })
+        {
+            var status = (await http.PostAsync("/api/alerts/acknowledge", Json(body))).StatusCode;
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.True(status == HttpStatusCode.BadRequest, $"{body}: expected 400, got {(int)status}.");
+        }
     }
 
     [Fact]

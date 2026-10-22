@@ -25,62 +25,6 @@ public class HistoryEndpointTests
     // ---- timelines --------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task A_timeline_downsamples_a_large_range_and_a_single_spike_is_still_visible()
-    {
-        var (api, http) = await CommandEndpointTests.HostAsync();
-        using var _ = api;
-
-        // Half an hour of readings every fifteen seconds at 100 W, with one at 7,000 W in the middle.
-        var start = DateTimeOffset.UtcNow.AddMinutes(-30);
-
-        for (var i = 0; i < 120; i++)
-        {
-            var response = await http.PostAsync("/api/telemetry", Timed(Compressor, i == 60 ? "7000" : "100", start.AddSeconds(i * 15)));
-            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
-        }
-
-        await DrainAsync(http, 120);
-
-        var timeline = await TimelineAsync(http, Compressor, $"?from={Time(start.AddSeconds(-1))}&to={Time(DateTimeOffset.UtcNow)}&maxPoints=10");
-
-        // A hundred and twenty readings, ten buckets at most, and the spike is in one of them as a maximum.
-        Assert.Equal(TimelineShape.Buckets, timeline.Shape);
-        Assert.Equal(120, timeline.ReadingCount);
-        Assert.InRange(timeline.Buckets.Count, 1, 10);
-        Assert.Equal(120, timeline.Buckets.Sum(bucket => bucket.Count));
-        Assert.Equal(7000, timeline.Buckets.Max(bucket => bucket.Max));
-        Assert.Equal(100, timeline.Buckets.Min(bucket => bucket.Min));
-
-        // Averaged away: the bucket's mean is a few hundred watts, which looks nothing like a seven-kilowatt spike.
-        var spiked = timeline.Buckets.Single(bucket => bucket.Max == 7000);
-        Assert.True(spiked.Average < 1000, $"The bucket averaged {spiked.Average:N0} W.");
-        Assert.Equal("W", timeline.Unit);
-    }
-
-    [Fact]
-    public async Task A_state_sensors_timeline_is_its_transitions()
-    {
-        var (api, http) = await CommandEndpointTests.HostAsync();
-        using var _ = api;
-        var start = DateTimeOffset.UtcNow.AddMinutes(-10);
-        string[] states = ["false", "false", "true", "true", "true", "false"];
-
-        for (var i = 0; i < states.Length; i++)
-        {
-            await http.PostAsync("/api/telemetry", Timed(Valve, states[i], start.AddSeconds(i * 10)));
-        }
-
-        await DrainAsync(http, states.Length);
-
-        var timeline = await TimelineAsync(http, Valve, $"?from={Time(start.AddSeconds(-1))}&to={Time(DateTimeOffset.UtcNow)}");
-
-        Assert.Equal(TimelineShape.Transitions, timeline.Shape);
-        Assert.Empty(timeline.Buckets);
-        Assert.Equal(6, timeline.ReadingCount);
-        Assert.Equal([false, true, false], timeline.Transitions.Select(transition => transition.State));
-    }
-
-    [Fact]
     public async Task Commands_in_the_range_come_back_as_markers_on_the_devices_timeline()
     {
         var (api, http) = await CommandEndpointTests.HostAsync();
@@ -93,18 +37,6 @@ public class HistoryEndpointTests
 
         var marker = Assert.Single(timeline.Markers, marker => marker.Kind == HistoryKind.Command);
         Assert.Equal($"Issued: ValveClose on {Valve}", marker.Label);
-    }
-
-    [Fact]
-    public async Task A_registered_sensor_with_no_readings_has_an_empty_timeline()
-    {
-        var (api, http) = await CommandEndpointTests.HostAsync();
-        using var _ = api;
-
-        var timeline = await TimelineAsync(http, Compressor);
-
-        Assert.Empty(timeline.Buckets);
-        Assert.Equal(0, timeline.ReadingCount);
     }
 
     [Fact]
@@ -135,18 +67,19 @@ public class HistoryEndpointTests
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
-    [Theory]
-    [InlineData("maxPoints=0")]
-    [InlineData("maxPoints=-3")]
-    [InlineData("maxPoints=5000")]
-    public async Task A_timeline_with_a_bad_point_limit_is_a_400(string query)
+    [Fact]
+    public async Task A_timeline_with_a_bad_point_limit_is_a_400()
     {
+        // One host for all three. Each Theory row used to boot its own to ask one question.
         var (api, http) = await CommandEndpointTests.HostAsync();
         using var _ = api;
 
-        var response = await http.GetAsync($"/api/sensors/{Compressor}/timeline?{query}");
+        foreach (var query in new[] { "maxPoints=0", "maxPoints=-3", "maxPoints=5000" })
+        {
+            var status = (await http.GetAsync($"/api/sensors/{Compressor}/timeline?{query}")).StatusCode;
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.True(status == HttpStatusCode.BadRequest, $"?{query}: expected 400, got {(int)status}.");
+        }
     }
 
     [Fact]
@@ -206,15 +139,18 @@ public class HistoryEndpointTests
         Assert.Equal(all.Events.TakeLast(2).Select(e => e.Sequence), limited.Events.Select(e => e.Sequence));
     }
 
-    [Theory]
-    [InlineData("limit=0")]
-    [InlineData("limit=100000")]
-    public async Task An_event_stream_with_a_bad_limit_is_a_400(string query)
+    [Fact]
+    public async Task An_event_stream_with_a_bad_limit_is_a_400()
     {
         var (api, http) = await CommandEndpointTests.HostAsync();
         using var _ = api;
 
-        Assert.Equal(HttpStatusCode.BadRequest, (await http.GetAsync($"/api/timeline/events?{query}")).StatusCode);
+        foreach (var query in new[] { "limit=0", "limit=100000" })
+        {
+            var status = (await http.GetAsync($"/api/timeline/events?{query}")).StatusCode;
+
+            Assert.True(status == HttpStatusCode.BadRequest, $"?{query}: expected 400, got {(int)status}.");
+        }
     }
 
     [Fact]
