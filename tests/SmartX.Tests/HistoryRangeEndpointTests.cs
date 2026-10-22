@@ -72,6 +72,19 @@ public class HistoryRangeEndpointTests
     }
 
     [Fact]
+    public async Task The_response_says_how_long_the_query_took_in_microseconds()
+    {
+        using var api = await HostWithHistoryAsync();
+
+        // Read as raw JSON, so it is the name on the wire that is checked and not a property of a type the test shares with the API.
+        var json = await api.AsViewer().GetStringAsync($"/api/history/{Thermometer}/range?{Window(T0, T0.AddHours(1))}");
+        using var document = System.Text.Json.JsonDocument.Parse(json);
+
+        Assert.True(document.RootElement.TryGetProperty("queryMicroseconds", out var microseconds), json);
+        Assert.True(microseconds.GetDouble() >= 0);
+    }
+
+    [Fact]
     public async Task A_window_with_no_readings_is_an_empty_answer_and_not_an_error()
     {
         using var api = await HostWithHistoryAsync();
