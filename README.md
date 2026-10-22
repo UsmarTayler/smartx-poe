@@ -3,8 +3,8 @@
 An IoT telemetry ingestion and mesh-management system, built as a university Portfolio of Evidence. **Part 1** ingests sensor
 readings without boxing and scores each node's trust. **Part 2** adds a device simulator that reports over HTTP, FIFO and priority
 ingestion queues, commands with undo, history, alerts, real-time push, a prediction engine and authentication. **Part 3** (network
-topology) is in progress: the AVL history store and the mesh graph, with its breadth-first and depth-first traversals, are built. The topology
-page is not built, and its menu entry is still visibly disabled.
+topology and mesh routing) adds an AVL-tree history store, the mesh as a graph with breadth-first and depth-first traversals, a minimum
+spanning tree with routes that heal, and a live topology page.
 
 ## Contents
 
@@ -108,7 +108,7 @@ The first build takes a few minutes. Open <http://localhost:8080> and sign in:
 The dashboard fills in about half a minute: 55 devices, and **Suggested Actions** is not empty from the first moment because the
 engine starts with a labelled, seeded operator history. Check it is up with `docker compose ps` (three containers, the API
 `healthy`) and `curl http://localhost:5266/api/health` (`{"status":"ok"}`). The pages are `/` (trust panel), `/sensors`,
-`/telemetry` and `/command-stream`.
+`/telemetry`, `/command-stream` and `/topology`.
 
 ## Docker
 
@@ -346,6 +346,41 @@ device to Disconnect (`POST /api/simulation/{mac}/scenario`, `{"scenario":"Disco
 under `excluded` as `Stale` and is gone from `nodes` and `edges`. Tests: `TopologyTests` (both traversals against brute force on 200
 random graphs each).
 
+### Network topology page
+
+Open **Mesh topology** in the menu (`/topology`), the third pillar, which is open and behaves like the other two. It draws the mesh from
+`/api/topology` and keeps itself current: when the hub announces a new revision of the mesh the page fetches it again, and if the hub
+cannot be reached it polls.
+
+**What the drawing means.** Every node is where it reported itself, and the picture scales with the window.
+
+| Mark | Meaning |
+| --- | --- |
+| Circle | A device |
+| Square with a router icon | A gateway, where packets leave the mesh |
+| Fill colour and icon | Trust band: green tick Nominal, grey question mark Unproven, amber triangle Degrading, red cross Fault |
+| Thick ring and the words "weak point" | A device (or gateway) whose failure would split the mesh |
+| Solid dark line | A link the spanning tree keeps: the cheapest backbone |
+| Thin faint line | Any other link |
+| Blue line over the others, and a ring on the node | The selected device's route |
+| Greyed and dashed | Cut off from every gateway, or left out of the mesh (stale, in Fault, or taken offline), with the reason in its tooltip and the side panel |
+
+Every node is focusable and Enter or Space selects it; hovering or focusing shows the band's word and the reason. Beneath the map the same
+facts are a table (zone, band, nearest gateway, hops, weak point, status), so the page works with a screen reader.
+
+**Tracking a route.** Type a MAC address or a name in *Track a device*, or click a node or a table row. The side panel lists the route hop
+by hop with names, and shows the cost along the spanning tree beside the cheapest cost the device could have had by any path. When they
+differ it says why: the tree keeps the whole network cheapest, so a device's own route isn't the cheapest possible.
+
+**The historical log.** For the selected device, *Reading history* shows its readings over 15 minutes, 1, 2 or 24 hours, or any from and to,
+in the same chart (and table) as the Command Stream, and says "Found 156 readings in 20 µs": how long the AVL tree took to find the window.
+
+**Simulating a failure (Operators only).** *Take offline* sets the device to the Disconnect scenario. The API leaves it out of the mesh
+at once, with the reason "Taken offline by operator", and the routes through it heal; they appear in *Route changes* with the old and the new
+path, and choosing an entry selects its device. *Bring back* returns it to Nominal, and it rejoins with its next report. Take a weak point
+offline and the devices that depended on it grey out as cut off. A Viewer sees both buttons disabled with "Operators only". Tests:
+`TopologyPageTests`, `TakeOfflineTests`.
+
 ### Spanning tree and routes
 
 The backbone of the mesh is its **minimum spanning tree**: the cheapest set of links that connects every device to a gateway, so the
@@ -435,6 +470,7 @@ for no fault of the code, and the behaviour they measure is covered by order in 
 | AVL tree (history) | about 73 | `AvlTreeTests`, `AvlHistoryStoreContractTests` (the same contract), `HistoryRangeEndpointTests` |
 | Graph, BFS, articulation points (topology) | about 15 | `TopologyTests` |
 | Spanning tree, routes, self-healing | about 8 | `MeshRoutingTests` |
+| Topology page, taking a device offline | about 10 | `TopologyPageTests`, `TakeOfflineTests` |
 | `HashSet` (alerts, search) | about 55 | `AlertTrackerTests` |
 | Predictive engine | about 160 | `SuggestionServiceTests`, `TrustForecasterTests` |
 | Real-time push (hub, client feeds) | about 95 | `RealtimeHubTests`, `ClientRealtimeTests` |

@@ -839,7 +839,7 @@ h1:focus {
 .smartx-mesh__icon { pointer-events: none; }
 .smartx-mesh__icon--light { fill: #ffffff; }
 .smartx-mesh__icon--dark { fill: #1b1b1b; }
-.smartx-mesh__node--weak .smartx-mesh__shape, .smartx-mesh__legend-weak { stroke-width: 1.5; }
+.smartx-mesh__weakring { fill: none; stroke: var(--mud-palette-text-primary); stroke-width: 1.1; pointer-events: none; }
 .smartx-mesh__weak { font-size: 2.3px; font-weight: 700; fill: var(--mud-palette-text-primary); paint-order: stroke; stroke: var(--mud-palette-surface); stroke-width: 0.7px; pointer-events: none; }
 .smartx-mesh__node--out { opacity: 0.55; }
 .smartx-mesh__node--out .smartx-mesh__shape, .smartx-mesh__legend-out { fill: var(--mud-palette-background-gray) !important; stroke-dasharray: 1.1 0.8; }
