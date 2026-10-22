@@ -55,8 +55,8 @@ public class TrustSamplingHostTests
     {
         await using var host = RealtimeHost.Create(new Dictionary<string, string?>
         {
-            ["Forecast:SampleInterval"] = "00:00:00.020",
-            ["Forecast:Interval"] = "00:00:00.050",
+            ["Forecast:SampleInterval"] = "00:00:00.005",
+            ["Forecast:Interval"] = "00:00:00.020",
             ["Forecast:EtaChange"] = "00:00:00",
         });
 
@@ -93,8 +93,8 @@ public class TrustSamplingHostTests
         // line is fitted to however many samples there are inside the lookback, so the shape is the same as over minutes.
         await using var host = RealtimeHost.Create(new Dictionary<string, string?>
         {
-            ["Forecast:SampleInterval"] = "00:00:00.020",
-            ["Forecast:Interval"] = "00:00:00.050",
+            ["Forecast:SampleInterval"] = "00:00:00.005",
+            ["Forecast:Interval"] = "00:00:00.020",
             ["Forecast:EtaChange"] = "00:00:00",
         });
 

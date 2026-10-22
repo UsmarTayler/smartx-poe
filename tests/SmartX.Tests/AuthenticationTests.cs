@@ -568,12 +568,12 @@ public class DeviceKeyDerivationTests
 /// <summary>The lockout's bookkeeping, on a clock a test controls.</summary>
 public class LoginThrottleTests
 {
-    private static (LoginThrottle Throttle, FakeTimeProvider Clock) Make(int max = 3, int lockoutSeconds = 60)
+    private static (LoginThrottle Throttle, FakeTimeProvider Clock) Make(int max = 3, int lockoutSeconds = 60, int maxTracked = LoginThrottle.DefaultMaxTracked)
     {
         var clock = new FakeTimeProvider(new DateTimeOffset(2026, 10, 14, 9, 0, 0, TimeSpan.Zero));
         var options = Options.Create(new AuthOptions { MaxFailedAttempts = max, LockoutDuration = TimeSpan.FromSeconds(lockoutSeconds) });
 
-        return (new LoginThrottle(options, clock), clock);
+        return (new LoginThrottle(options, clock, maxTracked), clock);
     }
 
     [Fact]
@@ -623,15 +623,31 @@ public class LoginThrottleTests
     [Fact]
     public void A_flood_of_made_up_names_does_not_grow_the_table_without_limit()
     {
-        var (throttle, _) = Make(max: 5);
+        // A table of 100 and a flood of 500, not 10,000 and 25,000: at the production size every new name past the cap scans the
+        // whole table for expired entries, which took three seconds here. The behaviour being proved is the same at any size.
+        var (throttle, _) = Make(max: 5, maxTracked: 100);
 
-        for (var name = 0; name < 25_000; name++)
+        for (var name = 0; name < 500; name++)
         {
             throttle.RecordFailure("name-" + name);
         }
 
-        // Never locked and never an exception: past the bound, new names are simply not tracked.
-        Assert.Null(throttle.LockedFor("name-24999"));
-        Assert.Null(throttle.LockedFor("name-0"));
+        // Past the cap, a new name is not tracked, so however often it fails it is never locked by the throttle...
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            throttle.RecordFailure("late-arrival");
+        }
+
+        Assert.Null(throttle.LockedFor("late-arrival"));
+        Assert.Null(throttle.LockedFor("name-499"));
+
+        // ...while a name that was already tracked still locks as before.
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            throttle.RecordFailure("name-0");
+        }
+
+        Assert.NotNull(throttle.LockedFor("name-0"));
     }
+
 }

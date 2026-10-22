@@ -10,13 +10,14 @@ namespace SmartX.Api.Security;
 /// failures per submitted name and not per real user, so a name that does not exist locks exactly as one that does, and the response
 /// cannot be used to find out which names are real.
 /// <para>
-/// In memory and bounded. A flood of made-up names must not grow a dictionary without limit, so past <c>MaxTracked</c> entries
+/// In memory and bounded. A flood of made-up names must not grow a dictionary without limit, so past <c>maxTracked</c> entries
 /// the expired ones are dropped, and if that does not make room new names are simply not tracked: the rate limiter is still in front.
 /// </para>
 /// </remarks>
-internal sealed class LoginThrottle(IOptions<AuthOptions> options, TimeProvider time)
+internal sealed class LoginThrottle(IOptions<AuthOptions> options, TimeProvider time, int maxTracked = LoginThrottle.DefaultMaxTracked)
 {
-    private const int MaxTracked = 10_000;
+    /// <summary>How many names are tracked at once. A parameter so a test can use a small table; production uses this.</summary>
+    internal const int DefaultMaxTracked = 10_000;
 
     private readonly Lock _gate = new();
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.OrdinalIgnoreCase);
@@ -52,7 +53,7 @@ internal sealed class LoginThrottle(IOptions<AuthOptions> options, TimeProvider 
         {
             if (!_entries.TryGetValue(username, out var entry))
             {
-                if (_entries.Count >= MaxTracked)
+                if (_entries.Count >= maxTracked)
                 {
                     var now = time.GetUtcNow();
                     var expired = _entries.Where(pair => pair.Value.LockedUntil is { } until && until <= now).Select(pair => pair.Key).ToList();
@@ -62,7 +63,7 @@ internal sealed class LoginThrottle(IOptions<AuthOptions> options, TimeProvider 
                         _entries.Remove(key);
                     }
 
-                    if (_entries.Count >= MaxTracked)
+                    if (_entries.Count >= maxTracked)
                     {
                         return;
                     }
