@@ -236,8 +236,15 @@ internal sealed class TopologyService(ITrustEngine trust, TimeProvider time, IOp
     /// </summary>
     /// <remarks>
     /// The first snapshot has nothing to be compared with, a device seen for the first time has no earlier route, and a device
-    /// getting its first route is starting up, so none of those is a change. A route that is the same list of vertices is not a change however much its cost has drifted: trust scores move all the
-    /// time, and a change recorded for every wobble would bury the ones that matter. Called with the lock held.
+    /// getting its first route is starting up, so none of those is a change.
+    /// <para>
+    /// <b>Only a broken route is a change.</b> The tree is worked out again from every snapshot, and trust scores move all the time, so
+    /// when two routes cost nearly the same the tree flips between them with each wobble. The first version of this recorded every
+    /// flip: seventy-nine changes in forty seconds on a healthy mesh, every one of them "a link on the route changed". A route is only
+    /// healing if what it was made of has gone, a device left the graph or a link was lost, so a new path is recorded only when the old
+    /// one no longer holds. The path is still tracked when it changes without breaking, so the next comparison is with the current one.
+    /// </para>
+    /// Called with the lock held.
     /// </remarks>
     private void RecordRouteChanges(TopologySnapshot built)
     {
@@ -251,7 +258,8 @@ internal sealed class TopologyService(ITrustEngine trust, TimeProvider time, IOp
         {
             IReadOnlyList<string>? newPath = routes.TryGetValue(mac, out var route) ? route.Path : null;
 
-            if (!settling && _lastPaths.TryGetValue(mac, out var oldPath) && !SamePath(oldPath, newPath) && (oldPath is not null || _routedBefore.Contains(mac)))
+            if (!settling && _lastPaths.TryGetValue(mac, out var oldPath) && !SamePath(oldPath, newPath)
+                && (oldPath is null ? _routedBefore.Contains(mac) : !PathHolds(oldPath, built.Graph)))
             {
                 _changes.Add(new RouteChange(built.BuiltAt, mac, entry.Name, oldPath, newPath, ReasonFor(mac, oldPath, newPath, built)));
             }
@@ -263,6 +271,20 @@ internal sealed class TopologyService(ITrustEngine trust, TimeProvider time, IOp
                 _routedBefore.Add(mac);
             }
         }
+    }
+
+    /// <summary>Whether every vertex and every link on a path is still in the graph.</summary>
+    private static bool PathHolds(IReadOnlyList<string> path, MeshGraph graph)
+    {
+        for (var i = 0; i < path.Count; i++)
+        {
+            if (!graph.Contains(path[i]) || (i > 0 && !graph.NeighboursOf(path[i - 1]).Any(link => link.To == path[i])))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool SamePath(IReadOnlyList<string>? left, IReadOnlyList<string>? right) =>
@@ -286,6 +308,10 @@ internal sealed class TopologyService(ITrustEngine trust, TimeProvider time, IOp
             return newPath is null && missing != device ? $"{text}; {device} cut off" : text;
         }
 
-        return newPath is null ? $"{device} cut off: a link on its route was lost" : "a link on the route changed";
+        // Every vertex is still there, so a link between two of them has gone: the first one on the old route that no longer exists.
+        var lost = Enumerable.Range(1, oldPath.Count - 1).First(i => !now.Graph.NeighboursOf(oldPath[i - 1]).Any(link => link.To == oldPath[i]));
+        var link = $"link {oldPath[lost - 1]} to {oldPath[lost]} lost";
+
+        return newPath is null ? $"{link}; {device} cut off" : link;
     }
 }
