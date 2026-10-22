@@ -186,7 +186,7 @@ public class AttachmentUploadTests
             var attachment = (await response.Content.ReadFromJsonAsync<AttachmentMetadata>())!;
 
             // Stored under a generated name, inside the storage directory, and nowhere else. Each upload adds exactly one file.
-            var stored = Assert.Single(host.StoredFiles().Where(path => !known.Contains(path)));
+            var stored = Assert.Single(host.StoredFiles(), path => !known.Contains(path));
             known.Add(stored);
             Assert.True(host.StorageDirectory == Path.GetDirectoryName(stored), $"{fileName}: stored outside the storage directory.");
             Assert.True(System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(stored), "^[0-9a-f]{32}\\.smxa$"), $"{fileName}: stored under {Path.GetFileName(stored)}.");

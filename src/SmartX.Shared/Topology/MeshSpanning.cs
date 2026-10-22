@@ -89,7 +89,9 @@ public static class MeshSpanning
 
             if (candidate.From != VirtualRoot)
             {
-                kept.Add(new MeshEdge(candidate.From, candidate.To, candidate.Rssi, candidate.Cost));
+                // The lower id first, as in the graph's own edges, so the same link is the same MeshEdge whichever way it was found.
+                var (low, high) = string.CompareOrdinal(candidate.From, candidate.To) < 0 ? (candidate.From, candidate.To) : (candidate.To, candidate.From);
+                kept.Add(new MeshEdge(low, high, candidate.Rssi, candidate.Cost));
             }
 
             foreach (var link in graph.NeighboursOf(candidate.To))
