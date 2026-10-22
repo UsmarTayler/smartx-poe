@@ -47,6 +47,7 @@ Entries U1 to U12 each name their own source (a review of the code, a test, a li
 | [U23](#u23-the-mesh-was-not-modelled-as-a-network) | 2026-10-22 | Topology | Model the mesh as a weighted graph built from device-reported neighbours, with breadth-first reachability and articulation points | `e52b330`, `ce6c806`, `39d0dac` |
 | [U24](#u24-the-backbone-of-the-mesh-and-what-happens-when-part-of-it-fails) | 2026-10-22 | Topology | Compute the minimum spanning tree (Prim's, checked by Kruskal's), route devices along it, compare with shortest paths, and record routes that heal | `380db8a`, `69fed7a`, `25d9b52`, `4a15b8a` |
 | [U25](#u25-the-test-suite-had-redundant-and-slow-tests) | 2026-10-22 | Tests | Remove duplicate tests and run theory rows on one host, using the test audit: 1,429 tests to 1,347 and 26 s to 20 s | `4eeb56a`, `5733243`, `2a47ae4`, `89d1fa1`, `16c9582` |
+| [U26](#u26-the-topology-pillar-was-listed-and-disabled) | 2026-10-22 | Client, API, hub | Build the network topology page: the mesh drawn live, routes tracked by MAC, the AVL range query timed on screen, and an operator's "take offline" that excludes the node at once | `a7e694d`, `8d36c18`, `a3a24fe`, `71e1e21`, `9031e08` |
 
 ---
 
@@ -708,10 +709,31 @@ The first version recorded every change of path, and in Docker produced 79 route
 
 ---
 
+## U26. The topology pillar was listed and disabled
+
+**Source:** the Part 3 brief ("a dedicated dashboard view that visualises the active IoT mesh network", "track the routing paths of specific sensor nodes using their unique MAC addresses", "a well-organised historical log of a selected sensor's telemetry data", and all three menu options fully active), and U23 to U25, which built the data and nothing to look at it with.
+
+**What was wrong.** The third pillar was a greyed-out menu entry with a "Part 3" chip, and a landing-page card that said "Not built yet". The mesh graph, spanning tree, routes and the history tree could only be seen through curl. A device could be set to Disconnect, but the mesh only noticed after three missed reports (ninety seconds by default), so nothing visible followed the operator's action.
+
+**Why it mattered.** Main menu integration is a marked criterion, and the graph and tree work is only half visible without a page. A mesh view that is ninety seconds behind the button that changed it does not show what it claims to.
+
+**What changed.** The pillar is open and behaves like the other two, with a `/topology` page (a refresh on it works because nginx falls back to `index.html`). The map is SVG with no library: nodes at their reported positions, devices as circles and gateways as squares, filled by trust band with the band's icon inside, weak points ringed and labelled, spanning-tree links solid and the rest faint, cut-off and left-out devices greyed and dashed, a selected device's route drawn over the rest, a legend, and a table beneath with the same facts. Nodes are focusable and Enter selects. Choosing a device (by search, map or table) shows its route hop by hop with the tree cost beside Dijkstra's, and a sentence when they differ; the history log shows its readings over 15 minutes to 24 hours or a custom range in the Command Stream's chart, with "Found N readings in X µs" from a new `queryMicroseconds` on the range endpoint. *Take offline* and *Bring back* use the existing scenario change (Operators only; a Viewer sees them disabled with the reason), and the API now leaves a device out of the graph as soon as it is set to Disconnect, with the reason "Taken offline by operator"; it rejoins with its next report after Nominal. A `topology` hub topic pushes a small message (the revision and the new route changes) through the same one-message-waiting coalescing as suggestions; the page refetches the mesh when the revision changes, and the existing polling fallback applies. The revision moves only when something visible differs (membership, band, links, tree, exclusions), and the scores that set a link's cost are rounded to a tenth when the graph is built, so the page does not redraw for a score drifting. Route changes are listed newest first in a polite live region.
+
+Two faults found by running it in Docker, not by the tests that passed. A component parameter written as plain text in Razor is a string literal, so `Mac="SelectedNode?.Id"` sent the text "SelectedNode?.Id" to the history log and `Selected="State.TopologyDevice"` marked nothing selected; they are now written `@...`, and the select test checks both. And a weak point drawn with a thicker stroke covered its own band colour and icon at this size, so it is now a separate ring outside the node. Checked live in Docker with no `.env` and a 5-second report interval: a device on 13 routes taken offline from the page showed greyed, with its routes healed in the Route changes list, 124 ms after the click; bringing it back showed it in the mesh again after 4.4 s (its next report); taking a weak point offline greyed the 7 devices behind it as cut off in 53 ms; a Viewer saw both buttons disabled; rapid navigation across all pages, `/topology` included, produced no failed requests and no API warnings. Axe was not run: Playwright is not installed here.
+
+- `src/SmartX.Client/Pages/TopologyPage.razor`, `Components/Topology/`, `Topology/MeshPicture.cs`, `Realtime/TopologyFeed.cs`, `Services/ITopologyApi.cs`, `Layout/NavMenu.razor`, `Components/Common/PillarCards.razor`, `wwwroot/css/app.css`
+- `src/SmartX.Api/Topology/TopologyService.cs`, `Realtime/RealtimeBroadcaster.cs`, `Endpoints/SimulationEndpoints.cs`, `Endpoints/HistoryEndpoints.cs`, `Endpoints/RealtimeEndpoints.cs`
+- `src/SmartX.Shared/Realtime/RealtimeContracts.cs`, `Topology/TopologyContracts.cs`, `History/HistoryRangeContracts.cs`
+- `tests/SmartX.Tests/TopologyPageTests.cs`, `HistoryRangeEndpointTests.cs`
+
+**Commits:** `a7e694d` hub topic, immediate exclusion and range timing, `8d36c18` the page, `a3a24fe` tests, `71e1e21` string parameters, `9031e08` weak-point ring
+
+---
+
 ## Entry template
 
 ```markdown
-## U26. Short title of the problem
+## U27. Short title of the problem
 
 **Source:** how it was found: lecturer feedback on Part 1, code review, a test, a live run
 

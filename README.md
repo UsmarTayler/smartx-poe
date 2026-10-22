@@ -452,7 +452,7 @@ the authority on what is a Fault. Tests: `SuggestionServiceTests`, `TrustForecas
 ## Tests
 
 ```bash
-dotnet test                                                                                                   # the whole suite: 1,355 cases
+dotnet test                                                                                                   # the whole suite: 1,365 cases
 dotnet test --filter "FullyQualifiedName~SuggestionServiceTests"                                              # one class
 dotnet test --settings tests/SmartX.Tests/benchmark.runsettings --filter "Category=Benchmark" --logger "console;verbosity=detailed"   # the benchmarks
 ```
@@ -479,7 +479,7 @@ for no fault of the code, and the behaviour they measure is covered by order in 
 | Device simulator | about 20 | `DeviceSimulatorTests` |
 | Attachments (streamed, encrypted) | about 35 | `AttachmentUploadTests` |
 
-Counts are `[Fact]` and `[Theory]` methods; theory rows bring the suite to 1,355 cases. The API tests boot the real API in memory
+Counts are `[Fact]` and `[Theory]` methods; theory rows bring the suite to 1,365 cases. The API tests boot the real API in memory
 with `WebApplicationFactory`, and the browser components are tested with bUnit on a fake hub, a fake API and a fake clock.
 
 ## Where each concept lives
