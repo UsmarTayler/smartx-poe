@@ -8,6 +8,13 @@ public sealed class HistoryOptions
     /// <summary>The configuration section these options bind from.</summary>
     public const string SectionName = "History";
 
+    /// <summary>Which store holds history.</summary>
+    /// <remarks>
+    /// The AVL tree, because a range query on it is O(log n + k). The sorted-dictionary store is kept, selectable here, so the
+    /// two can be compared: the benchmark in the README runs both, and it is the only reason to choose it.
+    /// </remarks>
+    public HistoryStoreKind Store { get; set; } = HistoryStoreKind.Avl;
+
     /// <summary>How long an entry is kept before retention removes it.</summary>
     /// <remarks>
     /// A day: long enough to answer "what happened overnight" on a morning check, short enough that the
@@ -41,4 +48,24 @@ public sealed class HistoryOptions
 
     /// <summary>The most events a caller may ask the stream for.</summary>
     public int MaxEventLimit { get; set; } = 5000;
+
+    /// <summary>How many readings the range endpoint returns when the caller gives no <c>limit</c>.</summary>
+    public int DefaultRangeLimit { get; set; } = 500;
+
+    /// <summary>The most readings the range endpoint returns in one page.</summary>
+    /// <remarks>
+    /// Bounds the size of one response, not the amount of history that can be reached: a longer window is read page by page
+    /// from <c>nextFrom</c>. Each page costs one O(log n) seek.
+    /// </remarks>
+    public int MaxRangeLimit { get; set; } = 5000;
+}
+
+/// <summary>The implementations of <see cref="IHistoryStore"/> that configuration can select.</summary>
+public enum HistoryStoreKind
+{
+    /// <summary>A self-balancing AVL tree per node. Range queries seek.</summary>
+    Avl,
+
+    /// <summary>A <see cref="System.Collections.Generic.SortedDictionary{TKey, TValue}"/> per node. Range queries walk from the oldest entry.</summary>
+    SortedDictionary,
 }

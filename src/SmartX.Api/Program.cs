@@ -96,8 +96,8 @@ builder.Services.AddSingleton<CommandService>();
 builder.Services.AddHostedService<CommandTimeoutMonitor>();
 
 // History. One time-ordered record of readings, commands, alerts, trust transitions and searches, behind an
-// interface because the sorted-dictionary store is the implementation for now and a balanced tree replaces it
-// later. ArrivalSequence is the one counter every entry takes its number from.
+// interface so the AVL tree (the default) and the sorted dictionary it replaced can both be run, and compared.
+// ArrivalSequence is the one counter every entry takes its number from.
 builder.Services
     .AddOptions<HistoryOptions>()
     .Bind(builder.Configuration.GetSection(HistoryOptions.SectionName))
@@ -108,10 +108,17 @@ builder.Services
     .Validate(options => options.MaxPointsLimit >= options.DefaultMaxPoints, "History:MaxPointsLimit must be at least DefaultMaxPoints.")
     .Validate(options => options.DefaultEventLimit >= 1, "History:DefaultEventLimit must be at least 1.")
     .Validate(options => options.MaxEventLimit >= options.DefaultEventLimit, "History:MaxEventLimit must be at least DefaultEventLimit.")
+    .Validate(options => Enum.IsDefined(options.Store), "History:Store must be Avl or SortedDictionary.")
+    .Validate(options => options.DefaultRangeLimit >= 1, "History:DefaultRangeLimit must be at least 1.")
+    .Validate(options => options.MaxRangeLimit >= options.DefaultRangeLimit, "History:MaxRangeLimit must be at least DefaultRangeLimit.")
     .ValidateOnStart();
 
 builder.Services.AddSingleton<ArrivalSequence>();
-builder.Services.AddSingleton<IHistoryStore, SortedDictionaryHistoryStore>();
+builder.Services.AddSingleton<IHistoryStore>(services => services.GetRequiredService<IOptions<HistoryOptions>>().Value.Store switch
+{
+    HistoryStoreKind.SortedDictionary => new SortedDictionaryHistoryStore(),
+    _ => new AvlHistoryStore(),
+});
 builder.Services.AddHostedService<HistoryEvictionService>();
 
 // Alerts and search. One lock covers the active alert set and the device indexes, so an alert appearing and the

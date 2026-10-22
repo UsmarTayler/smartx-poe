@@ -1,3 +1,5 @@
+using SmartX.Shared;
+
 namespace SmartX.Api.History;
 
 /// <summary>
@@ -5,12 +7,10 @@ namespace SmartX.Api.History;
 /// searches.
 /// </summary>
 /// <remarks>
-/// <b>This interface is a contract with the next part of the project.</b> The sorted-dictionary store below is
-/// the implementation that exists now, and it has a known limit: it cannot jump to the middle of a node's
-/// history, so a range query walks from the start. Part 3 replaces it with a balanced tree where the same query
-/// is O(log n + k). Everything that depends on history depends on this interface, and the contract tests in
-/// the test project run against it, so the replacement is proven safe by adding one subclass to the same
-/// suite rather than by hoping.
+/// <b>This interface is a contract.</b> Two stores implement it. The sorted-dictionary store cannot jump to the middle of a
+/// node's history, so a range query walks from the start. The AVL store, the default, seeks to the start of the range, so the
+/// same query is O(log n + k). Everything that depends on history depends on this interface, and the contract tests in the test
+/// project run against both, so the replacement was proven safe by adding one subclass to the same suite and not by hoping.
 /// <para>
 /// <b>Not the Part 1 ring buffer.</b> The ring buffer behind trust scoring keeps a fixed count of the most
 /// recent <i>outcomes</i> and forgets the rest, because trust only needs recent behaviour. This store keeps
@@ -61,4 +61,8 @@ internal interface IHistoryStore
     /// <summary>Removes every entry with <c>Timestamp &lt; cutoff</c>, and nothing else.</summary>
     /// <returns>How many entries were removed.</returns>
     int EvictOlderThan(DateTimeOffset cutoff);
+
+    /// <summary>How many entries the store holds and, for each of its biggest trees, how tall it is.</summary>
+    /// <param name="largest">How many node trees to describe, biggest first. The event stream is always described.</param>
+    HistoryStoreStats GetStats(int largest = 10);
 }

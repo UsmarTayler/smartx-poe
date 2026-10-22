@@ -15,8 +15,108 @@ internal static class HistoryEndpoints
         api.MapGet("/sensors/{mac}/timeline", GetTimelineAsync).WithName("GetSensorTimeline");
         api.MapGet("/timeline/events", GetEvents).WithName("GetTimelineEvents");
         api.MapGet("/activity", GetActivity).WithName("GetActivity");
+        api.MapGet("/history/{mac}/range", GetRangeAsync).WithName("GetHistoryRange");
+        api.MapGet("/history/stats", GetStats).WithName("GetHistoryStats");
 
         return api;
+    }
+
+    /// <summary>
+    /// One sensor's raw readings in a window, oldest first: "the moisture readings between 14:00 and 16:00 for Node A".
+    /// </summary>
+    /// <remarks>
+    /// The timeline endpoint downsamples for a chart; this returns the readings themselves, one page at a time. The window is
+    /// half-open like every range in the store, and both ends are required, since an unbounded query is exactly what the tree
+    /// is there to avoid. <c>metric</c> keeps only readings in that unit, so a sensor that changed its unit does not mix two
+    /// quantities in one answer. Only readings are returned: trust samples and events live in the same tree and are not
+    /// measurements. A window with more readings than <c>limit</c> comes back truncated, with <c>nextFrom</c> to continue from.
+    /// <para>
+    /// The store finds the window with one seek. The page is then taken from it, so the cost is O(log n) plus the size of the
+    /// window and not of the page, which is bounded by retention (a day of history) and not by what a caller asks for.
+    /// </para>
+    /// </remarks>
+    private static async Task<IResult> GetRangeAsync(
+        string mac,
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        string? metric,
+        int? limit,
+        ISensorRegistry registry,
+        IHistoryStore history,
+        IOptions<HistoryOptions> options,
+        CancellationToken cancellationToken)
+    {
+        var settings = options.Value;
+        var page = limit ?? settings.DefaultRangeLimit;
+
+        Dictionary<string, string[]> errors = [];
+
+        if (from is null)
+        {
+            errors["from"] = ["'from' is required. The range includes 'from' and excludes 'to'."];
+        }
+
+        if (to is null)
+        {
+            errors["to"] = ["'to' is required. The range includes 'from' and excludes 'to'."];
+        }
+
+        if (from is { } start && to is { } end && start >= end)
+        {
+            errors["from"] = ["'from' must be earlier than 'to'. The range includes 'from' and excludes 'to'."];
+        }
+
+        if (page < 1 || page > settings.MaxRangeLimit)
+        {
+            errors["limit"] = [$"'limit' must be between 1 and {settings.MaxRangeLimit}."];
+        }
+
+        if (errors.Count > 0)
+        {
+            return Results.ValidationProblem(errors, title: "The history range is not valid");
+        }
+
+        var sensor = await registry.FindAsync(mac, cancellationToken);
+
+        if (sensor is null)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status404NotFound,
+                title: "Sensor not registered",
+                detail: $"No sensor is registered with MAC address '{mac}'.");
+        }
+
+        var matching = history.GetRange(sensor.MacAddress, from!.Value, to!.Value)
+            .Where(entry => entry.Kind == HistoryKind.Reading)
+            .Where(entry => string.IsNullOrEmpty(metric) || string.Equals(entry.Unit, metric, StringComparison.Ordinal))
+            .Take(page + 1)
+            .ToList();
+
+        var truncated = matching.Count > page;
+
+        return Results.Ok(new HistoryRange(
+            sensor.MacAddress,
+            from.Value,
+            to.Value,
+            string.IsNullOrEmpty(metric) ? null : metric,
+            [.. matching.Take(page).Select(entry => new HistoryReading(entry.Sequence, entry.Timestamp, entry.Value, entry.Unit))],
+            truncated,
+            truncated ? matching[page].Timestamp : null));
+    }
+
+    /// <summary>How big the history store is and how tall its trees are, next to the shortest a tree of that size could be.</summary>
+    private static IResult GetStats(int? largest, IHistoryStore history)
+    {
+        var count = largest ?? 10;
+
+        if (count < 0 || count > 100)
+        {
+            return Results.ValidationProblem(
+                new Dictionary<string, string[]> { ["largest"] = ["'largest' must be between 0 and 100."] },
+                title: "The history statistics request is not valid");
+        }
+
+        return Results.Ok(history.GetStats(count));
     }
 
     /// <summary>
