@@ -188,7 +188,13 @@ public static class MeshLayout
                 }
             }
 
-            Hear(best!.Value.Reporter, best.Value.Heard);
+            if (best is null)
+            {
+                // No device exists to do the reporting (an empty fleet), so there is nothing left to join.
+                break;
+            }
+
+            Hear(best.Value.Reporter, best.Value.Heard);
         }
 
         return new MeshPlan(positions, tables);
