@@ -40,7 +40,7 @@ flowchart LR
             CRIT["PriorityQueue<br/>critical lane"]
             WORK["Worker<br/>BackgroundService"]
             TRUST["Trust engine<br/>Dictionary, HashSet"]
-            HIST["History store<br/>SortedDictionary"]
+            HIST["History store<br/>AVL tree"]
             ALERT["Alerts and device index<br/>HashSet, set intersection"]
             CMD["Commands<br/>Stack#lt;T#gt; for undo"]
             PAT["Pattern engine<br/>Queue window, HashSet,<br/>Dictionary of dictionaries"]
@@ -272,8 +272,47 @@ curl -H "Authorization: Bearer $TOKEN" "http://localhost:5266/api/sensors/B8:27:
 **Expect:** `"shape":"Buckets"`, at most 20 buckets in time order with `min`, `max`, `average` and `count`; a spike survives
 downsampling as a bucket's `max`. In the page, open a device on `/command-stream` for the chart, with commands, alerts and trust
 changes as markers. A range read walks from the start of a node's keys (a `SortedDictionary` cannot seek): on 200,000 entries the
-oldest 100 take about 18 µs and the newest 100 about 10.8 ms. That cost is why Part 3 builds a balanced tree. Tests:
+oldest 100 take about 18 µs and the newest 100 about 10.8 ms. That cost is why Part 3 replaced it with an AVL tree, which is now
+the default store (`History:Store`); the dictionary store stays selectable for comparison. Tests:
 `SortedDictionaryHistoryStoreTests` (through the shared contract suite), `TimelineBuilderTests`.
+
+### AVL tree vs SortedDictionary
+
+`AvlHistoryStore` keeps the same layout and key, with a hand-written `AvlTree<TKey, TValue>` ([`AvlTree.cs`](src/SmartX.Shared/Collections/AvlTree.cs))
+in place of the dictionary. A range query descends to the first key at or after `from` and reads forward until it passes `to`, so it
+costs O(log n + k). Try it on a registered sensor, with the window ends required and `to` excluded:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:5266/api/history/B8:27:EB:10:00:0C/range?from=2026-03-01T14:00:00Z&to=2026-03-01T16:00:00Z&limit=100"
+curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/history/stats
+```
+
+**Expect:** readings oldest first with `truncated` and `nextFrom` when more match; from `stats`, each tree's `height` next to
+`minimumHeight` (⌈log₂(n+1)⌉), which stay equal or one apart. Benchmark (Release, one node, a hundred readings returned,
+microseconds per query, AVL / `SortedDictionary`):
+
+| Entries | Oldest window | Middle window | Newest window |
+| ---: | ---: | ---: | ---: |
+| 10,000 | 1.5 / 1.3 | 1.7 / 16.6 | 1.4 / 43.1 |
+| 100,000 | 2.1 / 1.3 | 1.3 / 184.8 | 1.5 / 440.6 |
+| 1,000,000 | 1.4 / 1.8 | 1.3 / 3,841.4 | 1.9 / 8,704.7 |
+
+Insert cost, nanoseconds per insert, AVL / `SortedDictionary`:
+
+| Entries | Arriving in time order | Arriving shuffled |
+| ---: | ---: | ---: |
+| 10,000 | 70 / 111 | 139 / 216 |
+| 100,000 | 92 / 124 | 303 / 453 |
+| 1,000,000 | 138 / 189 | 1,109 / 1,201 |
+
+The tree's query time does not move with the size of the history or where the window sits, because it pays one comparison per
+level (20 at a million entries, which is also the best a tree of that size can do), while the dictionary pays for every key before
+the window, so it grows with the amount of history. The dictionary ties or wins only on the oldest window, by under a microsecond,
+because it starts there and never has to seek. Inserts are somewhat cheaper on the tree in these runs and the two converge when
+keys arrive shuffled; the dictionary was not faster anywhere by enough to matter, but treat differences under about 30 % as noise.
+Run it with `dotnet test -c Release --settings tests/SmartX.Tests/benchmark.runsettings --filter "FullyQualifiedName~AvlHistoryBenchmarkTests" --logger "console;verbosity=detailed"`.
+Tests: `AvlTreeTests` (invariants after every operation, the four rotations, ranges against a sorted list), `AvlHistoryStoreContractTests`
+(the whole contract suite, unchanged), `HistoryRangeEndpointTests`.
 
 ### `HashSet`: duplicates and "already done"
 
@@ -359,6 +398,7 @@ with `WebApplicationFactory`, and the browser components are tested with bUnit o
 | Command lifecycle | [`CommandService.cs`](src/SmartX.Api/Commands/CommandService.cs), [`CommandStore.cs`](src/SmartX.Api/Commands/CommandStore.cs) | states and transitions; `Collect` hands each command over once; `TryTransition` is the compare-and-swap |
 | Recursion, reused | [`CommandService.cs`](src/SmartX.Api/Commands/CommandService.cs), [`ZoneTree.cs`](src/SmartX.Shared/Zones/ZoneTree.cs) | `IssueForZone` calls the same `NodesBeneath` walk as Part 1 to find every actuator under a zone, and the device search asks `ZoneIdsBeneath`, which shares the same private `Descend` |
 | Sorted dictionary | [`SortedDictionaryHistoryStore.cs`](src/SmartX.Api/History/SortedDictionaryHistoryStore.cs), [`HistoryKey.cs`](src/SmartX.Api/History/HistoryKey.cs) | a dictionary of nodes, each owning a `SortedDictionary<HistoryKey, HistoryEntry>`; the key is `(Timestamp, Sequence)` so equal timestamps cannot collide, and the class comment states the cost of a range query honestly |
+| AVL tree | [`AvlTree.cs`](src/SmartX.Shared/Collections/AvlTree.cs), [`AvlHistoryStore.cs`](src/SmartX.Api/History/AvlHistoryStore.cs) | a generic tree with the height stored in each node, four rotations (LL, RR, LR, RL), and `Range`, `Floor`, `Ceiling`, `Min`, `Max`; the default history store, whose range query is O(log n + k) |
 | Downsampling | [`TimelineBuilder.cs`](src/SmartX.Api/History/TimelineBuilder.cs) | one pass into at most `maxPoints` buckets with min, max, average and count, so a spike survives |
 | HashSet for duplicate prevention | [`AlertTracker.cs`](src/SmartX.Api/Alerts/AlertTracker.cs), [`AlertKey.cs`](src/SmartX.Shared/Alerts/AlertKey.cs) | `HashSet<AlertKey>` where `Add` returning `false` is the suppress decision; the key is a `readonly record struct` so value equality works |
 | Secondary indexes and set intersection | [`DeviceIndex.cs`](src/SmartX.Api/Search/DeviceIndex.cs) | `Dictionary<TKey, HashSet<string>>` per category, kind, band, alert and zone; `Search` intersects the smallest set first, and `FindInconsistencies` is what the consistency test runs |
@@ -405,6 +445,7 @@ an environment variable uses `__` for `:` (`Trust:HalfLife` is `Trust__HalfLife`
 | `Ingestion:SimulatedGatewayCost` | `00:00:00` | Per-reading delay in the worker, to build a backlog |
 | `Ingestion:MaxQueueDepth` | `10000` | Bound of the standard queue |
 | `Commands:MaxUndoDepth` | `20` | Depth of the undo stack |
+| `History:Store` | `Avl` | `Avl` or `SortedDictionary`: which store holds history |
 | `Auth:SigningKey`, `Auth:FleetSecret` | published development values | Required outside Development; at least 32 and 16 bytes |
 | `Auth:SeedDemoUsers` | `true` in Development and Docker | The `operator` and `viewer` logins |
 | `Auth:TokenLifetime` | `01:00:00` | How long a login lasts |
