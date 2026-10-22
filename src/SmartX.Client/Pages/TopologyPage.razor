@@ -37,19 +37,19 @@ else
                     <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="my-2" role="status">Showing the last map: @_problem.Message</MudAlert>
                 }
 
-                <MeshMap Picture="_picture" Selected="State.TopologyDevice" RoutePath="RoutePath" OnSelect="Toggle" />
+                <MeshMap Picture="_picture" Selected="@State.TopologyDevice" RoutePath="RoutePath" OnSelect="Toggle" />
             </MudPaper>
 
             <MudPaper Outlined="true" Class="pa-3 mt-3">
                 <MudText Typo="Typo.h6" HtmlTag="h2" Class="mb-1">Devices as a table</MudText>
-                <TopologyTable Picture="_picture" Selected="State.TopologyDevice" OnSelect="Choose" />
+                <TopologyTable Picture="_picture" Selected="@State.TopologyDevice" OnSelect="Choose" />
             </MudPaper>
         </div>
 
         <div class="smartx-topo__side">
             <DevicePicker OnPick="Choose" />
             <RoutePanel Node="SelectedNode" Route="_route" />
-            <DeviceHistoryLog Mac="SelectedNode?.Id" Name="SelectedNode?.Name" />
+            <DeviceHistoryLog Mac="@SelectedNode?.Id" Name="@SelectedNode?.Name" />
             <RouteChangesFeed Changes="Feed.Current.Changes" OnSelect="OnChangeChosen" />
         </div>
     </div>

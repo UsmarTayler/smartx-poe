@@ -165,6 +165,11 @@ public class TopologyPageTests : StreamComponentTests
         Assert.Contains("8.00", costs, StringComparison.Ordinal);
         Assert.Contains("6.50", costs, StringComparison.Ordinal);
         Assert.Contains("The spanning tree keeps the whole network cheapest, so this device's own route isn't the cheapest possible.", page.Markup, StringComparison.Ordinal);
+
+        // The selection is on the map, and the history log is for the same device: it says how many readings it found and how long the
+        // tree took. (A parameter written as plain text in Razor is a string literal, not an expression; this was once broken that way.)
+        Assert.Single(page.FindAll("g.smartx-mesh__node--selected"));
+        page.WaitForAssertion(() => Assert.Contains("in 3 µs", System.Text.RegularExpressions.Regex.Replace(page.Find("[aria-label='Reading history']").TextContent, "[ \r\n\t]+", " "), StringComparison.Ordinal));
     }
 
     [Fact]
