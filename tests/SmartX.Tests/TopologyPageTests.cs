@@ -230,14 +230,21 @@ public class TopologyPageTests : StreamComponentTests
     [Fact]
     public async Task The_feed_keeps_each_route_change_once_newest_first()
     {
+        RouteChangeView Change(long id) => new(id, ClientRealtimeKit.Start, FakeTopologyApi.B, "Room B", [FakeTopologyApi.B, "GATEWAY-1"], null, $"change {id}");
+
+        // The server's snapshot always holds what it has already announced. Without this, a second sync that lands between the two
+        // messages (the connection can start one late under load) would answer with an empty list and wipe the first message.
+        var announced = new TopologyUpdate(0, 1, ClientRealtimeKit.Start, []);
+        Rig.Snapshots.Topology = () => announced;
+
         await Rig.Topology.StartAsync();
         await ClientRig.UntilAsync(() => Rig.Topology.Current.IsLoaded, "the topology snapshot");
         await ListeningAsync(Rig, RealtimeMethods.TopologyUpdated);
 
-        RouteChangeView Change(long id) => new(id, ClientRealtimeKit.Start, FakeTopologyApi.B, "Room B", [FakeTopologyApi.B, "GATEWAY-1"], null, $"change {id}");
-
         // The second message repeats change 2, as a push just after a snapshot can.
-        Rig.Hub.Deliver(RealtimeMethods.TopologyUpdated, new TopologyUpdate(1, 2, ClientRealtimeKit.Start, [Change(2), Change(1)]));
+        announced = new TopologyUpdate(1, 2, ClientRealtimeKit.Start, [Change(2), Change(1)]);
+        Rig.Hub.Deliver(RealtimeMethods.TopologyUpdated, announced);
+        announced = new TopologyUpdate(2, 3, ClientRealtimeKit.Start, [Change(3), Change(2), Change(1)]);
         Rig.Hub.Deliver(RealtimeMethods.TopologyUpdated, new TopologyUpdate(2, 3, ClientRealtimeKit.Start, [Change(3), Change(2)]));
 
         await ClientRig.UntilAsync(() => Rig.Topology.Current.Revision == 3, "the second message");
