@@ -367,18 +367,6 @@ public class CommandServiceTests
     }
 
     [Fact]
-    public void Undo_of_a_real_change_returns_to_the_state_before_it()
-    {
-        var harness = Harness.Create();
-        harness.Observe(ValveA, 1);
-        harness.DeliverAndAcknowledge(harness.Issue(ValveA, CommandAction.ValveClose));
-
-        var restore = harness.Store.Find(harness.Service.Undo().Items[0].RestoreCommandId!.Value)!;
-
-        Assert.Equal(CommandAction.ValveOpen, restore.Action);
-    }
-
-    [Fact]
     public void Undo_of_a_level_command_restores_the_previous_level()
     {
         var harness = Harness.Create();

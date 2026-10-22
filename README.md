@@ -3,8 +3,8 @@
 An IoT telemetry ingestion and mesh-management system, built as a university Portfolio of Evidence. **Part 1** ingests sensor
 readings without boxing and scores each node's trust. **Part 2** adds a device simulator that reports over HTTP, FIFO and priority
 ingestion queues, commands with undo, history, alerts, real-time push, a prediction engine and authentication. **Part 3** (network
-topology) is in progress: the AVL history store and the mesh graph, with its breadth-first and depth-first traversals, are built. The minimum
-spanning tree and the topology page are not, and its menu entry is still visibly disabled.
+topology) is in progress: the AVL history store and the mesh graph, with its breadth-first and depth-first traversals, are built. The topology
+page is not built, and its menu entry is still visibly disabled.
 
 ## Contents
 
@@ -346,6 +346,39 @@ device to Disconnect (`POST /api/simulation/{mac}/scenario`, `{"scenario":"Disco
 under `excluded` as `Stale` and is gone from `nodes` and `edges`. Tests: `TopologyTests` (both traversals against brute force on 200
 random graphs each).
 
+### Spanning tree and routes
+
+The backbone of the mesh is its **minimum spanning tree**: the cheapest set of links that connects every device to a gateway, so the
+least radio power and airtime is spent keeping everything connected. Two algorithms compute it, from scratch, and check each other.
+**Prim's** ([`MeshSpanning.cs`](src/SmartX.Shared/Topology/MeshSpanning.cs)) grows a tree outward, always adding the cheapest link from
+the tree to a vertex outside it, using a `PriorityQueue` and skipping stale entries instead of updating them: O(E log E).
+**Kruskal's** sorts every link and takes them cheapest first unless they would close a cycle, asking a union-find (path compression and
+union by rank) whether two ends are already connected: O(E log E) for the sort. They can pick different trees when links tie, but never
+trees of different weight, and a test compares them on 200 random graphs. Several gateways are handled with a **virtual root** joined to
+every gateway at cost 0: run Prim's from the root, then drop it, and the result is one tree per gateway, which is the standard way to
+get a forest out of an algorithm that grows a single tree. Devices with no path to a gateway are not in it.
+
+A device is routed **along the tree**, not along its own cheapest path. The tree minimises the cost of the *whole network*, so a device's
+route through it can cost more than the best it could have had alone: Dijkstra's algorithm (also here, with a `PriorityQueue`) is run on
+the same graph and its cost is returned beside the tree's, to show the difference and not to route by it. In the seeded layout the tree
+weighs 74.95 over 55 links (17.90, 27.30 and 29.75 for the three gateways), and for 29 of the 55 devices the tree route costs more than the
+shortest path: Pump A is 12.50 along the tree, over 11 hops, against 8.30 by its own best path.
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/topology/mst
+curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/topology/route/B8:27:EB:10:00:34
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:5266/api/topology/route-changes?limit=20"
+```
+
+**Expect:** from `mst`, the kept links, a `weight` and device count per gateway tree, and a `totalWeight`. From `route`, the hops with
+their names, the gateway, `mstCost` and `shortestCost` (never lower than the shortest). A route is recomputed from every snapshot, so the
+mesh heals by itself; `route-changes` is the record of it. To watch one: set a device that other routes pass through to Disconnect
+(`POST /api/simulation/{mac}/scenario`, `{"scenario":"Disconnect"}`), and about three report intervals later its dependants appear in
+`route-changes` with the old and new path and a reason such as `B8:27:EB:10:00:28 excluded: Stale`. A route is recorded as changed only when
+the old one no longer holds (a device left or a link was lost): trust scores move all the time and the tree flips between near-equal
+routes, and recording every flip filled the history with noise on a healthy mesh. The last 200 are kept. Nothing is recorded in the
+first 30 seconds (`Topology:SettleTime`), while the fleet's first reports are still arriving. Tests: `MeshRoutingTests`.
+
 ### `HashSet`: duplicates and "already done"
 
 An alert is a `readonly record struct AlertKey(Mac, Kind)`. A firing condition calls `HashSet<AlertKey>.Add`: `true` is a new
@@ -384,7 +417,7 @@ the authority on what is a Fault. Tests: `SuggestionServiceTests`, `TrustForecas
 ## Tests
 
 ```bash
-dotnet test                                                                                                   # the whole suite: 1,429 cases
+dotnet test                                                                                                   # the whole suite: 1,355 cases
 dotnet test --filter "FullyQualifiedName~SuggestionServiceTests"                                              # one class
 dotnet test --settings tests/SmartX.Tests/benchmark.runsettings --filter "Category=Benchmark" --logger "console;verbosity=detailed"   # the benchmarks
 ```
@@ -401,6 +434,7 @@ for no fault of the code, and the behaviour they measure is covered by order in 
 | `SortedDictionary` (history) | about 65 | `HistoryStoreContract` (run as `SortedDictionaryHistoryStoreTests`) |
 | AVL tree (history) | about 73 | `AvlTreeTests`, `AvlHistoryStoreContractTests` (the same contract), `HistoryRangeEndpointTests` |
 | Graph, BFS, articulation points (topology) | about 15 | `TopologyTests` |
+| Spanning tree, routes, self-healing | about 8 | `MeshRoutingTests` |
 | `HashSet` (alerts, search) | about 55 | `AlertTrackerTests` |
 | Predictive engine | about 160 | `SuggestionServiceTests`, `TrustForecasterTests` |
 | Real-time push (hub, client feeds) | about 95 | `RealtimeHubTests`, `ClientRealtimeTests` |
@@ -409,7 +443,7 @@ for no fault of the code, and the behaviour they measure is covered by order in 
 | Device simulator | about 20 | `DeviceSimulatorTests` |
 | Attachments (streamed, encrypted) | about 35 | `AttachmentUploadTests` |
 
-Counts are `[Fact]` and `[Theory]` methods; theory rows bring the suite to 1,429 cases. The API tests boot the real API in memory
+Counts are `[Fact]` and `[Theory]` methods; theory rows bring the suite to 1,355 cases. The API tests boot the real API in memory
 with `WebApplicationFactory`, and the browser components are tested with bUnit on a fake hub, a fake API and a fake clock.
 
 ## Where each concept lives
@@ -434,6 +468,8 @@ with `WebApplicationFactory`, and the browser components are tested with bUnit o
 | Sorted dictionary | [`SortedDictionaryHistoryStore.cs`](src/SmartX.Api/History/SortedDictionaryHistoryStore.cs), [`HistoryKey.cs`](src/SmartX.Api/History/HistoryKey.cs) | a dictionary of nodes, each owning a `SortedDictionary<HistoryKey, HistoryEntry>`; the key is `(Timestamp, Sequence)` so equal timestamps cannot collide, and the class comment states the cost of a range query honestly |
 | Graph (adjacency list) | [`MeshGraph.cs`](src/SmartX.Shared/Topology/MeshGraph.cs), [`LinkCost.cs`](src/SmartX.Shared/Topology/LinkCost.cs) | `Dictionary<string, List<MeshLink>>`, an edge if either end reports it with the weaker RSSI, and the cost formula with its reasoning |
 | BFS and DFS | [`MeshTraversal.cs`](src/SmartX.Shared/Topology/MeshTraversal.cs) | multi-source breadth-first search with a `Queue<T>` from every gateway; Tarjan's low-link search for articulation points |
+| Prim, Kruskal, union-find, Dijkstra | [`MeshSpanning.cs`](src/SmartX.Shared/Topology/MeshSpanning.cs) | lazy `PriorityQueue` Prim's with a virtual root over the gateways; Kruskal's with `DisjointSet` (path compression, union by rank) as the independent check; multi-source Dijkstra for the comparison |
+| Route record | [`TopologyService.cs`](src/SmartX.Api/Topology/TopologyService.cs) | each snapshot's routes compared with the last; a change is recorded only when the old route no longer holds; kept in a `TelemetryRingBuffer<T>` of 200 |
 | Immutable snapshot | [`TopologyService.cs`](src/SmartX.Api/Topology/TopologyService.cs) | reports mark it stale, the next read rebuilds it, readers traverse without locking |
 | AVL tree | [`AvlTree.cs`](src/SmartX.Shared/Collections/AvlTree.cs), [`AvlHistoryStore.cs`](src/SmartX.Api/History/AvlHistoryStore.cs) | a generic tree with the height stored in each node, four rotations (LL, RR, LR, RL), and `Range`, `Floor`, `Ceiling`, `Min`, `Max`; the default history store, whose range query is O(log n + k) |
 | Downsampling | [`TimelineBuilder.cs`](src/SmartX.Api/History/TimelineBuilder.cs) | one pass into at most `maxPoints` buckets with min, max, average and count, so a spike survives |
@@ -485,6 +521,7 @@ an environment variable uses `__` for `:` (`Trust:HalfLife` is `Trust__HalfLife`
 | `History:Store` | `Avl` | `Avl` or `SortedDictionary`: which store holds history |
 | `Topology:ReportInterval`, `Simulator:NeighbourReportInterval` | `00:00:30` | How often a device reports its neighbours, and the interval the gateway counts silence in (keep them equal) |
 | `Topology:PenaltyFactor` | `4` | How hard low trust raises a link's cost |
+| `Topology:SettleTime`, `RouteChangeHistory`, `RefreshInterval` | `00:00:30`, `200`, `00:00:05` | No route change is recorded for this long after the first report; how many are kept; how often the mesh is rebuilt when nobody is reading it |
 | `Auth:SigningKey`, `Auth:FleetSecret` | published development values | Required outside Development; at least 32 and 16 bytes |
 | `Auth:SeedDemoUsers` | `true` in Development and Docker | The `operator` and `viewer` logins |
 | `Auth:TokenLifetime` | `01:00:00` | How long a login lasts |

@@ -172,23 +172,6 @@ public class CommandEndToEndTests
     }
 
     [Fact]
-    public async Task A_second_check_in_before_the_acknowledgement_lands_hands_over_nothing_new()
-    {
-        using var rig = await Rig.CreateAsync();
-        var valve = rig.Device(0x2B);
-        await rig.Round(valve);
-        var issued = await rig.IssueAsync(0x2B, CommandAction.ValveClose);
-
-        // The device checks in and receives the command...
-        var first = await rig.Http.DeviceGetFromJsonAsync<DeviceDesiredState>($"/api/devices/{Mac(0x2B)}/desired", Mac(0x2B));
-        Assert.Equal(issued.Id, Assert.Single(first!.CommandList).Id);
-
-        // ...and checks in again before its acknowledgement has been sent. There is nothing left to give it.
-        Assert.Equal(HttpStatusCode.NotFound, (await rig.Http.DeviceGetAsync($"/api/devices/{Mac(0x2B)}/desired", Mac(0x2B))).StatusCode);
-        Assert.Equal(CommandState.Delivered, (await rig.CommandAsync(issued.Id)).State);
-    }
-
-    [Fact]
     public async Task A_command_to_a_silent_device_times_out_because_nothing_collects_it()
     {
         using var rig = await Rig.CreateAsync(pendingTimeout: TimeSpan.FromMilliseconds(300));

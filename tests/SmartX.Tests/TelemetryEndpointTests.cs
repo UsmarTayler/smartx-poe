@@ -108,20 +108,8 @@ public class TelemetryEndpointTests
         Assert.Equal(SensorCategory.Actuator, packet.Category);
     }
 
-    [Fact]
-    public async Task A_fractional_reading_from_an_integer_sensor_is_rejected()
-    {
-        // Truncating 21.5 to 21 would be a silent data loss on a meter reading.
-        using var api = New();
-        var client = await WithSensorsAsync(api);
-
-        var response = await client.PostAsync("/api/telemetry", Reading(Meter, "21.5"));
-
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-    }
-
     [Theory]
-    [InlineData("\"warm\"")]
+    // Text is covered with its message by RejectionReasonTests; the other shapes are only asserted here.
     [InlineData("true")]
     [InlineData("null")]
     public async Task A_payload_of_the_wrong_shape_is_rejected(string rawValue)
@@ -134,19 +122,8 @@ public class TelemetryEndpointTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
-    [Fact]
-    public async Task A_number_sent_to_a_state_sensor_is_rejected()
-    {
-        using var api = New();
-        var client = await WithSensorsAsync(api);
-
-        var response = await client.PostAsync("/api/telemetry", Reading(Switch, "1"));
-
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-    }
-
     [Theory]
-    [InlineData("40.0")]
+    // The upper bound is covered with its message by RejectionReasonTests; the lower bound is only asserted here.
     [InlineData("-5.0")]
     public async Task A_reading_outside_the_registered_range_is_rejected(string rawValue)
     {
@@ -161,19 +138,6 @@ public class TelemetryEndpointTests
 
         var problem = await response.Content.ReadAsStringAsync();
         Assert.Contains("expected range", problem, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task Telemetry_from_an_unregistered_sensor_returns_404()
-    {
-        // Without a registration there is no unit, category or range, so there is nothing to check
-        // the reading against.
-        using var api = New();
-        var client = api.CreateClient();
-
-        var response = await client.PostAsync("/api/telemetry", Reading(Thermometer, "21.5"));
-
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     [Fact]

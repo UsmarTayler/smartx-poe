@@ -244,8 +244,12 @@ builder.Services
     .Validate(options => options.PenaltyFactor >= 0, "Topology:PenaltyFactor cannot be negative.")
     .Validate(options => options.SnapshotMaxAge >= TimeSpan.Zero, "Topology:SnapshotMaxAge cannot be negative.")
     .Validate(options => options.MaxNeighbours >= 1, "Topology:MaxNeighbours must be at least 1.")
+    .Validate(options => options.RouteChangeHistory >= 1, "Topology:RouteChangeHistory must be at least 1.")
+    .Validate(options => options.SettleTime >= TimeSpan.Zero, "Topology:SettleTime cannot be negative.")
+    .Validate(options => options.RefreshInterval >= TimeSpan.Zero, "Topology:RefreshInterval cannot be negative.")
     .ValidateOnStart();
 builder.Services.AddSingleton<TopologyService>();
+builder.Services.AddHostedService<TopologyRefreshService>();
 
 // Attachments. The encryption key is read from configuration but is deliberately absent from every
 // committed settings file: it comes from user secrets in development and the environment or a key vault

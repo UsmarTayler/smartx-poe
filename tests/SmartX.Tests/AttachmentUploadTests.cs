@@ -86,18 +86,19 @@ public class AttachmentUploadTests
         Assert.Equal(HttpStatusCode.Created, upload.StatusCode);
     }
 
-    [Theory]
-    [InlineData("photo.txt", "text/plain")]
-    [InlineData("photo.png", "text/plain")]
-    [InlineData("photo.jpg", "image/jpeg")]
-    public async Task Png_bytes_are_rejected_when_anything_claims_otherwise(string fileName, string declared)
+    [Fact]
+    public async Task Png_bytes_are_rejected_when_anything_claims_otherwise()
     {
+        // One host for the three claims; each Theory row used to boot its own. The message names the failing claim.
         using var host = await AttachmentTestHost.CreateAsync();
 
-        var response = await host.UploadAsync(PngBytes, fileName, declared);
+        foreach (var (fileName, declared) in new[] { ("photo.txt", "text/plain"), ("photo.png", "text/plain"), ("photo.jpg", "image/jpeg") })
+        {
+            var response = await host.UploadAsync(PngBytes, fileName, declared);
 
-        Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
-        Assert.Empty(host.StoredFiles());
+            Assert.True(response.StatusCode == HttpStatusCode.UnsupportedMediaType, $"{fileName} declared {declared}: expected 415, got {(int)response.StatusCode}.");
+            Assert.True(host.StoredFiles().Length == 0, $"{fileName} declared {declared}: something was stored.");
+        }
     }
 
     [Fact]
@@ -127,17 +128,17 @@ public class AttachmentUploadTests
         Assert.Empty(host.StoredFiles());
     }
 
-    [Theory]
-    [InlineData("payload.exe")]
-    [InlineData("page.html")]
-    [InlineData("noextension")]
-    public async Task Extensions_outside_the_policy_are_rejected(string fileName)
+    [Fact]
+    public async Task Extensions_outside_the_policy_are_rejected()
     {
         using var host = await AttachmentTestHost.CreateAsync();
 
-        var response = await host.UploadAsync("hello"u8.ToArray(), fileName, "text/plain");
+        foreach (var fileName in new[] { "payload.exe", "page.html", "noextension" })
+        {
+            var response = await host.UploadAsync("hello"u8.ToArray(), fileName, "text/plain");
 
-        Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
+            Assert.True(response.StatusCode == HttpStatusCode.UnsupportedMediaType, $"{fileName}: expected 415, got {(int)response.StatusCode}.");
+        }
     }
 
     [Fact]
@@ -164,31 +165,38 @@ public class AttachmentUploadTests
         Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
     }
 
-    [Theory]
-    [InlineData(@"..\..\Windows\System32\evil.log")]
-    [InlineData("../../etc/passwd.txt")]
-    [InlineData(@"C:\fakepath\con.txt")]
-    [InlineData("..\\..\\..\\..\\..\\..\\..\\escape.log")]
-    public async Task A_filename_with_path_traversal_is_stored_safely(string fileName)
+    [Fact]
+    public async Task A_filename_with_path_traversal_is_stored_safely()
     {
         using var host = await AttachmentTestHost.CreateAsync();
         var outside = Path.GetDirectoryName(host.StorageDirectory)!;
+        var known = new HashSet<string>(host.StoredFiles());
 
-        var response = await host.UploadAsync("line one\n"u8.ToArray(), fileName, "text/plain");
+        foreach (var fileName in new[]
+        {
+            @"..\..\Windows\System32\evil.log",
+            "../../etc/passwd.txt",
+            @"C:\fakepath\con.txt",
+            "..\\..\\..\\..\\..\\..\\..\\escape.log",
+        })
+        {
+            var response = await host.UploadAsync("line one\n"u8.ToArray(), fileName, "text/plain");
 
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        var attachment = (await response.Content.ReadFromJsonAsync<AttachmentMetadata>())!;
+            Assert.True(response.StatusCode == HttpStatusCode.Created, $"{fileName}: expected 201, got {(int)response.StatusCode}.");
+            var attachment = (await response.Content.ReadFromJsonAsync<AttachmentMetadata>())!;
 
-        // Stored under a generated name, inside the storage directory, and nowhere else.
-        var stored = Assert.Single(host.StoredFiles());
-        Assert.Equal(host.StorageDirectory, Path.GetDirectoryName(stored));
-        Assert.Matches("^[0-9a-f]{32}\\.smxa$", Path.GetFileName(stored));
-        Assert.Empty(Directory.GetFiles(outside));
+            // Stored under a generated name, inside the storage directory, and nowhere else. Each upload adds exactly one file.
+            var stored = Assert.Single(host.StoredFiles(), path => !known.Contains(path));
+            known.Add(stored);
+            Assert.True(host.StorageDirectory == Path.GetDirectoryName(stored), $"{fileName}: stored outside the storage directory.");
+            Assert.True(System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(stored), "^[0-9a-f]{32}\\.smxa$"), $"{fileName}: stored under {Path.GetFileName(stored)}.");
+            Assert.True(Directory.GetFiles(outside).Length == 0, $"{fileName}: something was written beside the storage directory.");
 
-        // The remembered name keeps nothing that could be read as a path.
-        Assert.DoesNotContain("/", attachment.OriginalFileName, StringComparison.Ordinal);
-        Assert.DoesNotContain("\\", attachment.OriginalFileName, StringComparison.Ordinal);
-        Assert.DoesNotContain("..", attachment.OriginalFileName, StringComparison.Ordinal);
+            // The remembered name keeps nothing that could be read as a path.
+            Assert.DoesNotContain("/", attachment.OriginalFileName, StringComparison.Ordinal);
+            Assert.DoesNotContain("\\", attachment.OriginalFileName, StringComparison.Ordinal);
+            Assert.DoesNotContain("..", attachment.OriginalFileName, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

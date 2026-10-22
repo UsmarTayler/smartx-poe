@@ -105,23 +105,21 @@ public class LoginTests
         Assert.Equal(username, me!.Username);
         Assert.Equal(role, me.Role);
         Assert.Equal(login.ExpiresAt, me.ExpiresAt);
+
+        // The lifetime is an option, not a constant. Checked once, on the first row, because each row starts its own host.
+        if (role == "Operator")
+        {
+            using var short5 = Host(new() { ["Auth:TokenLifetime"] = "00:05:00" }, clock);
+            var shortLogin = await (await LoginAsync(short5.Anonymous(), "operator", OperatorPassword)).Content.ReadFromJsonAsync<LoginResponse>();
+
+            Assert.Equal(clock.GetUtcNow().AddMinutes(5), shortLogin!.ExpiresAt);
+        }
     }
 
     [Fact]
-    public async Task The_token_lifetime_is_an_option()
+    public async Task A_wrong_password_and_an_unknown_user_get_exactly_the_same_answer_and_both_lock_the_same_way()
     {
-        var clock = new FakeTimeProvider(new DateTimeOffset(2026, 10, 14, 9, 0, 0, TimeSpan.Zero));
-        using var api = Host(new() { ["Auth:TokenLifetime"] = "00:05:00" }, clock);
-
-        var login = await (await LoginAsync(api.Anonymous(), "operator", OperatorPassword)).Content.ReadFromJsonAsync<LoginResponse>();
-
-        Assert.Equal(clock.GetUtcNow().AddMinutes(5), login!.ExpiresAt);
-    }
-
-    [Fact]
-    public async Task A_wrong_password_and_an_unknown_user_get_exactly_the_same_answer()
-    {
-        using var api = Host();
+        using var api = Host(new() { ["Auth:MaxFailedAttempts"] = "2" });
         var http = api.Anonymous();
 
         var wrongPassword = await LoginAsync(http, "operator", "not-the-password");
@@ -130,12 +128,17 @@ public class LoginTests
         Assert.Equal(HttpStatusCode.Unauthorized, wrongPassword.StatusCode);
         Assert.Equal(wrongPassword.StatusCode, unknownUser.StatusCode);
 
-        // Same title, same detail, same everything the caller can see: otherwise the form is a way to ask which names exist.
         var first = await wrongPassword.Content.ReadAsStringAsync();
         var second = await unknownUser.Content.ReadAsStringAsync();
 
+        // Nothing in the answer, down to the wording, says which of the two it was.
         Assert.Equal(Normalise(first), Normalise(second));
         Assert.Contains("Incorrect username or password.", first, StringComparison.Ordinal);
+
+        // And a name that does not exist is locked after the same number of failures as one that does.
+        await LoginAsync(http, "ghost", "wrong");
+        await LoginAsync(http, "ghost", "wrong");
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await LoginAsync(http, "ghost", "wrong")).StatusCode);
     }
 
     private static string Normalise(string problem)
@@ -179,19 +182,6 @@ public class LoginTests
         clock.Advance(TimeSpan.FromMinutes(2) + TimeSpan.FromSeconds(1));
 
         Assert.Equal(HttpStatusCode.OK, (await LoginAsync(http, "operator", OperatorPassword)).StatusCode);
-    }
-
-    [Fact]
-    public async Task A_name_that_does_not_exist_locks_exactly_like_one_that_does()
-    {
-        using var api = Host(new() { ["Auth:MaxFailedAttempts"] = "2" });
-        var http = api.Anonymous();
-
-        await LoginAsync(http, "ghost", "wrong");
-        await LoginAsync(http, "ghost", "wrong");
-
-        // If only real accounts locked, this would still be a 401, and the difference would say which names are real.
-        Assert.Equal(HttpStatusCode.TooManyRequests, (await LoginAsync(http, "ghost", "wrong")).StatusCode);
     }
 
     [Fact]
@@ -298,87 +288,17 @@ public class TokenValidationTests
         return new JsonWebTokenHandler().CreateToken(descriptor);
     }
 
-    private static async Task<HttpStatusCode> ReadWithAsync(string token)
+    private static async Task<HttpStatusCode> ReadWithAsync(HttpClient http, string token)
     {
-        using var api = new AuthenticatedFactory();
-        var http = api.Anonymous();
-        http.DefaultRequestHeaders.Authorization = TestAuth.Bearer(token);
+        // The token goes on this request alone, so one host can be asked about many tokens.
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/auth/me");
+        request.Headers.Authorization = TestAuth.Bearer(token);
 
-        return (await http.GetAsync("/api/auth/me")).StatusCode;
+        return (await http.SendAsync(request)).StatusCode;
     }
 
-    [Fact]
-    public async Task A_good_token_is_accepted_which_is_what_makes_the_refusals_below_mean_something()
-    {
-        Assert.Equal(HttpStatusCode.OK, await ReadWithAsync(Signed()));
-    }
-
-    [Fact]
-    public async Task An_expired_token_is_refused()
-    {
-        var token = Signed(expires: DateTime.UtcNow.AddMinutes(-5));
-
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync(token));
-    }
-
-    [Fact]
-    public async Task A_token_made_by_the_api_an_hour_ago_with_a_one_hour_life_is_refused_now()
-    {
-        var then = new FakeTimeProvider(DateTimeOffset.UtcNow.AddMinutes(-61));
-
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync(TestAuth.Token(time: then)));
-    }
-
-    [Fact]
-    public async Task A_token_signed_with_another_key_is_refused()
-    {
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync(Signed(key: "some-other-key-that-is-long-enough-to-sign-with")));
-    }
-
-    [Fact]
-    public async Task A_token_for_another_issuer_or_audience_is_refused()
-    {
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync(Signed(issuer: "someone-else")));
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync(Signed(audience: "someone-else")));
-    }
-
-    [Fact]
-    public async Task A_token_signed_with_a_different_algorithm_is_refused()
-    {
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync(Signed(algorithm: SecurityAlgorithms.HmacSha384)));
-    }
-
-    [Fact]
-    public async Task An_unsigned_token_with_the_algorithm_none_is_refused()
-    {
-        static string B64(string json) => Convert.ToBase64String(Encoding.UTF8.GetBytes(json)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-
-        var exp = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeSeconds();
-        var token = B64("""{"alg":"none","typ":"JWT"}""") + "." +
-            B64($$"""{"iss":"smartx-api","aud":"smartx-operators","name":"forger","role":"Operator","exp":{{exp}}}""") + ".";
-
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync(token));
-    }
-
-    [Fact]
-    public async Task A_token_whose_signature_has_been_altered_is_refused()
-    {
-        var token = Signed(role: UserRoles.Viewer);
-        var last = token[^1];
-        var tampered = token[..^1] + (last == 'A' ? 'B' : 'A');
-
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync(tampered));
-    }
-
-    [Fact]
-    public async Task A_viewers_token_with_its_payload_edited_to_say_operator_is_refused()
-    {
-        var parts = Signed(role: UserRoles.Viewer).Split('.');
-        var payload = Encoding.UTF8.GetString(Convert.FromBase64String(Pad(parts[1]))).Replace("Viewer", "Operator", StringComparison.Ordinal);
-        var edited = Convert.ToBase64String(Encoding.UTF8.GetBytes(payload)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync($"{parts[0]}.{edited}.{parts[2]}"));
-    }
+    private static string Base64Url(string text) =>
+        Convert.ToBase64String(Encoding.UTF8.GetBytes(text)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
     private static string Pad(string base64Url)
     {
@@ -388,10 +308,54 @@ public class TokenValidationTests
     }
 
     [Fact]
-    public async Task Garbage_where_a_token_should_be_is_refused()
+    public async Task A_good_token_is_accepted_which_is_what_makes_the_refusals_below_mean_something()
     {
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync("not.a.token"));
-        Assert.Equal(HttpStatusCode.Unauthorized, await ReadWithAsync("x"));
+        using var api = new AuthenticatedFactory();
+
+        Assert.Equal(HttpStatusCode.OK, await ReadWithAsync(api.Anonymous(), Signed()));
+    }
+
+    /// <summary>
+    /// Every way of forging or damaging a token, each of which must be a 401. One host and a loop: these used to be eleven
+    /// tests, each starting its own host to ask one question. The message names the failing case.
+    /// </summary>
+    [Fact]
+    public async Task A_token_that_is_expired_forged_or_damaged_in_any_way_is_refused()
+    {
+        using var api = new AuthenticatedFactory();
+        var http = api.Anonymous();
+
+        var exp = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeSeconds();
+        var unsigned = Base64Url("""{"alg":"none","typ":"JWT"}""") + "." +
+            Base64Url($$"""{"iss":"smartx-api","aud":"smartx-operators","name":"forger","role":"Operator","exp":{{exp}}}""") + ".";
+
+        var signature = Signed(role: UserRoles.Viewer);
+        var altered = signature[..^1] + (signature[^1] == 'A' ? 'B' : 'A');
+
+        var parts = Signed(role: UserRoles.Viewer).Split('.');
+        var promoted = Base64Url(Encoding.UTF8.GetString(Convert.FromBase64String(Pad(parts[1]))).Replace("Viewer", "Operator", StringComparison.Ordinal));
+
+        (string Case, string Token)[] cases =
+        [
+            ("expired five minutes ago", Signed(expires: DateTime.UtcNow.AddMinutes(-5))),
+            ("made by the API an hour ago with a one hour life", TestAuth.Token(time: new FakeTimeProvider(DateTimeOffset.UtcNow.AddMinutes(-61)))),
+            ("signed with another key", Signed(key: "some-other-key-that-is-long-enough-to-sign-with")),
+            ("another issuer", Signed(issuer: "someone-else")),
+            ("another audience", Signed(audience: "someone-else")),
+            ("a different algorithm", Signed(algorithm: SecurityAlgorithms.HmacSha384)),
+            ("unsigned, algorithm none", unsigned),
+            ("signature altered", altered),
+            ("a viewer's payload edited to say operator", $"{parts[0]}.{promoted}.{parts[2]}"),
+            ("garbage with three parts", "not.a.token"),
+            ("garbage", "x"),
+        ];
+
+        foreach (var (name, token) in cases)
+        {
+            var status = await ReadWithAsync(http, token);
+
+            Assert.True(status == HttpStatusCode.Unauthorized, $"{name}: expected 401, got {(int)status}.");
+        }
     }
 
     [Fact]
@@ -604,12 +568,12 @@ public class DeviceKeyDerivationTests
 /// <summary>The lockout's bookkeeping, on a clock a test controls.</summary>
 public class LoginThrottleTests
 {
-    private static (LoginThrottle Throttle, FakeTimeProvider Clock) Make(int max = 3, int lockoutSeconds = 60)
+    private static (LoginThrottle Throttle, FakeTimeProvider Clock) Make(int max = 3, int lockoutSeconds = 60, int maxTracked = LoginThrottle.DefaultMaxTracked)
     {
         var clock = new FakeTimeProvider(new DateTimeOffset(2026, 10, 14, 9, 0, 0, TimeSpan.Zero));
         var options = Options.Create(new AuthOptions { MaxFailedAttempts = max, LockoutDuration = TimeSpan.FromSeconds(lockoutSeconds) });
 
-        return (new LoginThrottle(options, clock), clock);
+        return (new LoginThrottle(options, clock, maxTracked), clock);
     }
 
     [Fact]
@@ -659,15 +623,31 @@ public class LoginThrottleTests
     [Fact]
     public void A_flood_of_made_up_names_does_not_grow_the_table_without_limit()
     {
-        var (throttle, _) = Make(max: 5);
+        // A table of 100 and a flood of 500, not 10,000 and 25,000: at the production size every new name past the cap scans the
+        // whole table for expired entries, which took three seconds here. The behaviour being proved is the same at any size.
+        var (throttle, _) = Make(max: 5, maxTracked: 100);
 
-        for (var name = 0; name < 25_000; name++)
+        for (var name = 0; name < 500; name++)
         {
             throttle.RecordFailure("name-" + name);
         }
 
-        // Never locked and never an exception: past the bound, new names are simply not tracked.
-        Assert.Null(throttle.LockedFor("name-24999"));
-        Assert.Null(throttle.LockedFor("name-0"));
+        // Past the cap, a new name is not tracked, so however often it fails it is never locked by the throttle...
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            throttle.RecordFailure("late-arrival");
+        }
+
+        Assert.Null(throttle.LockedFor("late-arrival"));
+        Assert.Null(throttle.LockedFor("name-499"));
+
+        // ...while a name that was already tracked still locks as before.
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            throttle.RecordFailure("name-0");
+        }
+
+        Assert.NotNull(throttle.LockedFor("name-0"));
     }
+
 }

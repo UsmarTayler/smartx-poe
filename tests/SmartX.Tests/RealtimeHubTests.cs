@@ -102,19 +102,19 @@ public class RealtimeHubTests
         Assert.Single(await client.WaitForAsync<ReadingsBatch>(RealtimeMethods.ReadingsArrived));
     }
 
-    [Theory]
-    [InlineData("nonsense")]
-    [InlineData("device:not-a-mac")]
-    [InlineData("device:AA:BB:CC:DD:EE:99")]
-    [InlineData("")]
-    public async Task A_topic_that_does_not_exist_is_refused_with_a_reason(string topic)
+    [Fact]
+    public async Task A_topic_that_does_not_exist_is_refused_with_a_reason()
     {
+        // One hub and one connection for the four topics: a refused subscription is an error to the caller, not a dropped connection.
         await using var host = RealtimeHost.Create();
         var client = await host.ConnectAsync();
 
-        var error = await Assert.ThrowsAsync<HubException>(() => client.Connection.InvokeAsync(RealtimeMethods.Subscribe, topic));
+        foreach (var topic in new[] { "nonsense", "device:not-a-mac", "device:AA:BB:CC:DD:EE:99", "" })
+        {
+            var error = await Assert.ThrowsAsync<HubException>(() => client.Connection.InvokeAsync(RealtimeMethods.Subscribe, topic));
 
-        Assert.False(string.IsNullOrWhiteSpace(error.Message));
+            Assert.False(string.IsNullOrWhiteSpace(error.Message), $"topic '{topic}': the refusal gave no reason.");
+        }
     }
 
     [Fact]

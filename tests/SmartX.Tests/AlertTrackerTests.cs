@@ -54,6 +54,15 @@ public class AlertTrackerTests
         Assert.Equal(14, stats.Suppressed);
         Assert.Equal(0, stats.Cleared);
         Assert.Equal(1, stats.Active);
+
+        // The same suppression through the path a rejected reading takes: counted, and the latest reason is the one kept.
+        var (rejected, _) = Create();
+        rejected.Alerts.ReadingRejected(NodeA, TrustOutcome.RangeViolation, "31 is above 30");
+        rejected.Alerts.ReadingRejected(NodeA, TrustOutcome.RangeViolation, "45 is above 30");
+
+        var kept = Assert.Single(rejected.Alerts.Active());
+        Assert.Equal(1, kept.SuppressedCount);
+        Assert.Equal("45 is above 30", kept.Detail);
     }
 
     [Fact]
@@ -135,43 +144,30 @@ public class AlertTrackerTests
     // ---- the key --------------------------------------------------------------------------------------------
 
     [Fact]
-    public void Two_separately_built_identical_keys_are_equal_and_hash_alike()
+    public void Identical_keys_are_equal_hash_alike_and_one_entry_in_a_hash_set()
     {
-        // Built separately, as two different readings would build them.
         var first = new AlertKey("AA:BB:CC:00:00:01", AlertKind.Disconnected);
         var second = new AlertKey(string.Concat("AA:BB:CC:00:", "00:01"), AlertKind.Disconnected);
 
         Assert.False(ReferenceEquals(first.Mac, second.Mac));
         Assert.Equal(first, second);
         Assert.Equal(first.GetHashCode(), second.GetHashCode());
-    }
 
-    [Fact]
-    public void A_hash_set_treats_two_identical_keys_as_one()
-    {
+        // The set is what the alert tracker uses: Add returning false is the "already raised" decision.
         var set = new HashSet<AlertKey>();
-
-        Assert.True(set.Add(new AlertKey("AA:BB:CC:00:00:01", AlertKind.Fault)));
-
-        // The check the alert set relies on: a second Add of the same key reports false.
-        Assert.False(set.Add(new AlertKey(string.Concat("AA:BB:CC:00:", "00:01"), AlertKind.Fault)));
+        Assert.True(set.Add(first));
+        Assert.False(set.Add(second));
         Assert.Single(set);
     }
 
     [Fact]
-    public void Keys_differing_in_either_member_are_different()
+    public void Keys_differing_in_either_member_are_different_and_a_class_key_would_not_be_compared_by_value()
     {
         Assert.NotEqual(new AlertKey(NodeA, AlertKind.Fault), new AlertKey(NodeB, AlertKind.Fault));
         Assert.NotEqual(new AlertKey(NodeA, AlertKind.Fault), new AlertKey(NodeA, AlertKind.Disconnected));
-    }
 
-    [Fact]
-    public void A_class_key_would_compare_by_reference_and_defeat_the_set()
-    {
-        // The failure the record struct avoids, shown rather than described: with reference equality every
-        // construction is a different key, so nothing is ever suppressed.
+        // Why the key is a record struct: the same two members in a class compare by reference and defeat the set.
         var set = new HashSet<ClassKey>();
-
         Assert.True(set.Add(new ClassKey(NodeA, AlertKind.Fault)));
         Assert.True(set.Add(new ClassKey(NodeA, AlertKind.Fault)));
         Assert.Equal(2, set.Count);
@@ -314,19 +310,6 @@ public class AlertTrackerTests
 
         Assert.Contains(mesh.Alerts.Active(), alert => alert.Key == new AlertKey(NodeA, AlertKind.OutOfRange));
         Assert.Contains(mesh.Alerts.Active(), alert => alert.Key == new AlertKey(NodeB, AlertKind.TypeViolation));
-    }
-
-    [Fact]
-    public void Repeated_rejections_are_suppressed_and_the_latest_reason_is_kept()
-    {
-        var (mesh, _) = Create();
-
-        mesh.Alerts.ReadingRejected(NodeA, TrustOutcome.RangeViolation, "31 is above 30");
-        mesh.Alerts.ReadingRejected(NodeA, TrustOutcome.RangeViolation, "45 is above 30");
-
-        var alert = Assert.Single(mesh.Alerts.Active());
-        Assert.Equal(1, alert.SuppressedCount);
-        Assert.Equal("45 is above 30", alert.Detail);
     }
 
     [Fact]

@@ -126,71 +126,32 @@ public class NumericPacketTests
     }
 
     [Fact]
-    public void Adding_readings_in_different_units_throws()
+    public void Adding_subtracting_or_ordering_readings_in_different_units_throws()
     {
-        // Both Environmental, so the units are the only thing that differ and the unit check is
-        // genuinely what fires.
         var temperature = Numeric(21.5f, unit: "°C", category: SensorCategory.Environmental);
         var humidity = Numeric(48.0f, unit: "%", category: SensorCategory.Environmental);
 
         var error = Assert.Throws<InvalidOperationException>(() => temperature + humidity);
-
-        // The message has to name both units, because the whole point of failing here is to tell
-        // the caller what they got wrong.
         Assert.Contains("°C", error.Message, StringComparison.Ordinal);
         Assert.Contains("%", error.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Adding_readings_from_different_categories_throws()
-    {
-        // The case the unit check alone misses. Relative humidity and a battery charge level are
-        // both "%", so nothing about the unit distinguishes them — but their sum is meaningless.
-        var humidity = Numeric(48.0f, unit: "%", category: SensorCategory.Environmental);
-        var battery = Numeric(80.0f, unit: "%", category: SensorCategory.PowerConsumption);
-
-        var error = Assert.Throws<InvalidOperationException>(() => humidity + battery);
-
-        Assert.Contains(nameof(SensorCategory.Environmental), error.Message, StringComparison.Ordinal);
-        Assert.Contains(nameof(SensorCategory.PowerConsumption), error.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Subtracting_readings_in_different_units_throws()
-    {
-        var temperature = Numeric(21.5f, unit: "°C", category: SensorCategory.Environmental);
-        var humidity = Numeric(48.0f, unit: "%", category: SensorCategory.Environmental);
 
         Assert.Throws<InvalidOperationException>(() => temperature - humidity);
-    }
-
-    [Fact]
-    public void Subtracting_readings_from_different_categories_throws()
-    {
-        var humidity = Numeric(48.0f, unit: "%", category: SensorCategory.Environmental);
-        var battery = Numeric(80.0f, unit: "%", category: SensorCategory.PowerConsumption);
-
-        Assert.Throws<InvalidOperationException>(() => humidity - battery);
-    }
-
-    [Fact]
-    public void Ordering_readings_in_different_units_throws()
-    {
-        var temperature = Numeric(21.5f, unit: "°C", category: SensorCategory.Environmental);
-        var humidity = Numeric(48.0f, unit: "%", category: SensorCategory.Environmental);
-
         Assert.Throws<InvalidOperationException>(() => temperature > humidity);
         Assert.Throws<InvalidOperationException>(() => temperature < humidity);
     }
 
     [Fact]
-    public void Ordering_readings_from_different_categories_throws()
+    public void Adding_subtracting_or_ordering_readings_from_different_categories_throws()
     {
-        // "Is the room more humid than the battery is charged" is not a question, even though both
-        // sides are a percentage.
         var humidity = Numeric(48.0f, unit: "%", category: SensorCategory.Environmental);
         var battery = Numeric(80.0f, unit: "%", category: SensorCategory.PowerConsumption);
 
+        // The message names both categories, so a caller can see what was mixed.
+        var error = Assert.Throws<InvalidOperationException>(() => humidity + battery);
+        Assert.Contains(nameof(SensorCategory.Environmental), error.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(SensorCategory.PowerConsumption), error.Message, StringComparison.Ordinal);
+
+        Assert.Throws<InvalidOperationException>(() => humidity - battery);
         Assert.Throws<InvalidOperationException>(() => humidity > battery);
         Assert.Throws<InvalidOperationException>(() => humidity < battery);
     }

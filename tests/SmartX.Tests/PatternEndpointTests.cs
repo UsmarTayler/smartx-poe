@@ -70,19 +70,20 @@ public class PatternEndpointTests
         Assert.Equal(TimeSpan.FromDays(7), response.Settings.HalfLife);
     }
 
-    [Theory]
-    [InlineData("trigger=weather", "trigger")]
-    [InlineData("level=sideways", "level")]
-    [InlineData("limit=0", "limit")]
-    public async Task A_bad_pattern_filter_is_a_400_that_names_it(string query, string field)
+    [Fact]
+    public async Task A_bad_pattern_filter_is_a_400_that_names_it()
     {
         var (api, http) = await CommandEndpointTests.HostAsync();
         using var _ = api;
 
-        var response = await http.GetAsync($"/api/patterns?{query}");
+        foreach (var (query, field) in new[] { ("trigger=weather", "trigger"), ("level=sideways", "level"), ("limit=0", "limit") })
+        {
+            var response = await http.GetAsync($"/api/patterns?{query}");
+            var body = await response.Content.ReadAsStringAsync();
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Contains(field, await response.Content.ReadAsStringAsync(), StringComparison.OrdinalIgnoreCase);
+            Assert.True(response.StatusCode == HttpStatusCode.BadRequest, $"?{query}: expected 400, got {(int)response.StatusCode}.");
+            Assert.True(body.Contains(field, StringComparison.OrdinalIgnoreCase), $"?{query}: the answer should name '{field}' but was {body}");
+        }
     }
 
     [Fact]

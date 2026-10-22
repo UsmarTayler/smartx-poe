@@ -96,21 +96,30 @@ public class HistoryRangeEndpointTests
         Assert.Equal(HttpStatusCode.Unauthorized, stats.StatusCode);
     }
 
-    [Theory]
-    [InlineData("from=2026-03-01T13:00:00Z&to=2026-03-01T12:00:00Z")]   // backwards
-    [InlineData("from=2026-03-01T12:00:00Z&to=2026-03-01T12:00:00Z")]   // empty
-    [InlineData("from=2026-03-01T12:00:00Z")]                           // no end
-    [InlineData("to=2026-03-01T12:00:00Z")]                             // no start
-    [InlineData("from=yesterday&to=today")]                             // not instants
-    [InlineData("from=2026-03-01T12:00:00Z&to=2026-03-01T13:00:00Z&limit=0")]
-    [InlineData("from=2026-03-01T12:00:00Z&to=2026-03-01T13:00:00Z&limit=999999")]
-    public async Task A_bad_window_or_limit_is_a_400(string query)
+    [Fact]
+    public async Task A_bad_window_or_limit_is_a_400()
     {
+        // One host for all seven. Each Theory row used to start its own, about a second each.
         using var api = await HostWithHistoryAsync();
+        var http = api.AsViewer();
 
-        var response = await api.AsViewer().GetAsync($"/api/history/{Thermometer}/range?{query}");
+        string[] queries =
+        [
+            "from=2026-03-01T13:00:00Z&to=2026-03-01T12:00:00Z",                   // backwards
+            "from=2026-03-01T12:00:00Z&to=2026-03-01T12:00:00Z",                   // empty
+            "from=2026-03-01T12:00:00Z",                                           // no end
+            "to=2026-03-01T12:00:00Z",                                             // no start
+            "from=yesterday&to=today",                                             // not instants
+            "from=2026-03-01T12:00:00Z&to=2026-03-01T13:00:00Z&limit=0",
+            "from=2026-03-01T12:00:00Z&to=2026-03-01T13:00:00Z&limit=999999",
+        ];
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        foreach (var query in queries)
+        {
+            var status = (await http.GetAsync($"/api/history/{Thermometer}/range?{query}")).StatusCode;
+
+            Assert.True(status == HttpStatusCode.BadRequest, $"?{query}: expected 400, got {(int)status}.");
+        }
     }
 
     [Fact]

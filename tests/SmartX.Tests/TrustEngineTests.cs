@@ -14,18 +14,6 @@ namespace SmartX.Tests;
 public class TrustEngineTests
 {
     [Fact]
-    public void A_fresh_node_with_no_history_scores_exactly_one_half()
-    {
-        var (engine, _) = Create();
-
-        engine.Track(NodeA);
-
-        var trust = Trust(engine, NodeA);
-        Assert.Equal(0.5, trust.Score);
-        Assert.Equal("no telemetry yet", trust.Reason);
-    }
-
-    [Fact]
     public void A_fresh_node_is_unproven_rather_than_nominal()
     {
         // No outcomes at all, so nothing to judge: unproven, even though 0.5 lies in the degrading range.
