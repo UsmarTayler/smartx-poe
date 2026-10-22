@@ -508,9 +508,9 @@ failure and how many devices each would strand: seven or eight in the seeded lay
 checked against brute force on 200 random graphs each (`TopologyTests`).
 
 Try `GET /api/topology/reachability` and `/api/topology/articulation-points` with the token from [Authentication](#authentication).
-**Expect:** the seeded layout is 55 devices and 3 gateways on 141 links in one network (the live graph shows about 50 devices after
-a few start in Disconnect or Fault, with `excluded` naming the rest). `reachability` gives every device a nearest gateway at most
-four hops away, and `cutOff` is empty.
+**Expect:** the seeded layout is 55 devices and 3 gateways on 141 links in one network. Live, about 51 devices report (four start
+silent, in Disconnect, and never appear); those that fall into Fault or go stale are named in `excluded` and left out of the graph.
+`reachability` gives every device a nearest gateway at most four hops away, and `cutOff` is empty.
 
 ### Prim's, Kruskal's and Dijkstra's algorithms
 
