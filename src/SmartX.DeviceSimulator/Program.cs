@@ -23,6 +23,7 @@ internal static class SimulatorHost
             .Validate(options => options.DeviceCount > 0, "Simulator:DeviceCount must be positive.")
             .Validate(options => options.TickInterval > TimeSpan.Zero, "Simulator:TickInterval must be positive.")
             .Validate(options => options.ShadowPollInterval > TimeSpan.Zero, "Simulator:ShadowPollInterval must be positive.")
+            .Validate(options => options.NeighbourReportInterval > TimeSpan.Zero, "Simulator:NeighbourReportInterval must be positive.")
             .ValidateOnStart();
 
         // Injected rather than read from DateTimeOffset.UtcNow, matching the API, so the fleet can be driven by a

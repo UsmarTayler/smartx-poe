@@ -26,6 +26,9 @@ services:
       Patterns__Window: ${SMARTX_PATTERN_WINDOW:-00:10:00}
       Patterns__HalfLife: ${SMARTX_PATTERN_HALFLIFE:-7.00:00:00}
       SeededHistory__Enabled: ${SMARTX_SEED_HISTORY:-true}
+      # How often a device reports its neighbours. The API takes a device out of the mesh graph after three missed intervals; the simulator
+      # below must report at the same interval.
+      Topology__ReportInterval: ${SMARTX_NEIGHBOUR_INTERVAL:-00:00:30}
       # Who may call the API. Like the attachment key, the defaults are the development values published in the README, so a fresh
       # clone works with no .env; they protect nothing, and the API logs a warning at start-up for each one still in use. Set
       # SMARTX_AUTH_SIGNING_KEY (openssl rand -base64 48), SMARTX_FLEET_SECRET (openssl rand -base64 32) and
@@ -77,6 +80,7 @@ services:
       Simulator__BackfillDuration: ${SMARTX_BACKFILL:-00:10:00}
       Simulator__ReportingRateMultiplier: ${SMARTX_RATE:-1}
       Simulator__TickInterval: ${SMARTX_TICK:-00:00:00.500}
+      Simulator__NeighbourReportInterval: ${SMARTX_NEIGHBOUR_INTERVAL:-00:00:30}
     depends_on:
       api:
         # Health checks narrow the start-up race, they do not remove it: the API can still restart later,

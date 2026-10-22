@@ -10,6 +10,7 @@ using SmartX.Api.Realtime;
 using SmartX.Api.Search;
 using SmartX.Api.Security;
 using SmartX.Api.Storage;
+using SmartX.Api.Topology;
 using SmartX.Api.Trust;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -233,6 +234,19 @@ builder.Services.AddSingleton<IValidateOptions<TrustOptions>, TrustOptionsValida
 builder.Services.AddSingleton<ITrustEngine, TrustEngine>();
 builder.Services.AddHostedService<HeartbeatMonitor>();
 
+// Topology. The mesh graph is built from the neighbour tables devices report, and rebuilt as an immutable snapshot that readers
+// traverse without locking. Trust decides who is left out of it, so it is registered after trust.
+builder.Services
+    .AddOptions<TopologyOptions>()
+    .Bind(builder.Configuration.GetSection(TopologyOptions.SectionName))
+    .Validate(options => options.ReportInterval > TimeSpan.Zero, "Topology:ReportInterval must be positive.")
+    .Validate(options => options.StaleAfterIntervals >= 1, "Topology:StaleAfterIntervals must be at least 1.")
+    .Validate(options => options.PenaltyFactor >= 0, "Topology:PenaltyFactor cannot be negative.")
+    .Validate(options => options.SnapshotMaxAge >= TimeSpan.Zero, "Topology:SnapshotMaxAge cannot be negative.")
+    .Validate(options => options.MaxNeighbours >= 1, "Topology:MaxNeighbours must be at least 1.")
+    .ValidateOnStart();
+builder.Services.AddSingleton<TopologyService>();
+
 // Attachments. The encryption key is read from configuration but is deliberately absent from every
 // committed settings file: it comes from user secrets in development and the environment or a key vault
 // elsewhere. ValidateOnStart refuses to start outside Development without one.
@@ -281,10 +295,12 @@ console.MapSearchEndpoints();
 console.MapPatternEndpoints();
 console.MapSuggestionEndpoints();
 console.MapRealtimeEndpoints();
+console.MapTopologyReadEndpoints();
 
 var ingest = api.MapGroup("").RequireAuthorization(Policies.OperatorOrDevice);
 ingest.MapSensorRegistrationEndpoint();
 ingest.MapTelemetryIngestEndpoints();
+ingest.MapNeighbourReportEndpoint();
 
 var device = api.MapGroup("").RequireAuthorization(Policies.Device);
 device.MapDeviceShadowEndpoint();

@@ -246,6 +246,21 @@ internal sealed class GatewayClient(HttpClient http, ILogger<GatewayClient> logg
     /// hardware that is off. The desired scenario is still read, so it can be told to come back.
     /// </param>
     /// <returns><see langword="null"/> when nothing has been asked of it, which means "carry on".</returns>
+    /// <summary>Sends a device's neighbour table. A failure is not worth stopping for: the next report is an interval away.</summary>
+    public async Task<bool> ReportNeighboursAsync(string macAddress, NeighbourReport report, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var response = await PostAsync($"api/devices/{Uri.EscapeDataString(macAddress)}/neighbours", macAddress, report, cancellationToken);
+
+            return response.IsSuccessStatusCode;
+        }
+        catch (Exception exception) when (IsTransient(exception, cancellationToken))
+        {
+            return false;
+        }
+    }
+
     public async Task<DeviceDesiredState?> GetDesiredStateAsync(
         string macAddress,
         CancellationToken cancellationToken,
