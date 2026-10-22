@@ -486,3 +486,6 @@ App_Data/
 
 # Local assistant instructions. Kept on this machine, not part of the submission.
 CLAUDE.md
+
+# Local test audit, written for the next prompt. Kept on this machine, not part of the submission.
+TEST_AUDIT.md

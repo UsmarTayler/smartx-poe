@@ -96,6 +96,9 @@ internal sealed class SimulatedDevice(DemoDevice definition)
     /// <summary>When this device next asks the gateway what it should be doing.</summary>
     public DateTimeOffset NextShadowPoll { get; set; }
 
+    /// <summary>When this device next reports its neighbour table. The default is in the past, so the first tick reports at once.</summary>
+    public DateTimeOffset NextNeighbourReport { get; set; }
+
     public TimeSpan Interval => TimeSpan.FromSeconds(Registration.HeartbeatIntervalSeconds ?? 60);
 
     /// <summary>How often the device actually reports: a little inside its heartbeat interval.</summary>

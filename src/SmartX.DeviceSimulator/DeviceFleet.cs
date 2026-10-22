@@ -24,6 +24,7 @@ internal sealed class DeviceFleet(
     private readonly Random _random = new(options.Value.RandomSeed);
     private readonly Lock _gate = new();
     private readonly List<SimulatedDevice> _devices = [];
+    private MeshPlan _plan = MeshLayout.Create([]);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -98,6 +99,9 @@ internal sealed class DeviceFleet(
             _devices.Add(device);
             registered++;
         }
+
+        // Where each device sits and who it can hear, decided once from a fixed seed so the mesh is the same on every start.
+        _plan = MeshLayout.Create(fleet);
 
         logger.LogInformation("Registered {Count} devices with the gateway.", registered);
 
@@ -243,6 +247,14 @@ internal sealed class DeviceFleet(
 
         await FlushAcknowledgementsAsync(device, cancellationToken);
 
+        // The neighbour table is part of the data plane: a device that has gone silent reports nothing, which is how the
+        // gateway notices (three missed intervals) and takes it out of the mesh graph.
+        if (device.Scenario != SimulationScenario.Disconnect && device.NextNeighbourReport <= now)
+        {
+            device.NextNeighbourReport = now + _options.NeighbourReportInterval;
+            await gateway.ReportNeighboursAsync(device.MacAddress, BuildNeighbourReport(device), cancellationToken);
+        }
+
         if (device.Scenario == SimulationScenario.Disconnect || device.NextDue > now)
         {
             return;
@@ -275,6 +287,32 @@ internal sealed class DeviceFleet(
     /// and tries once more; if it is still busy, the reading is dropped and the next one is along shortly.
     /// Dropping is the honest behaviour for a device with no storage of its own.
     /// </remarks>
+    /// <summary>
+    /// What a device hears right now: its planned neighbours, less any that have gone silent.
+    /// </summary>
+    /// <remarks>
+    /// A device in the Disconnect scenario is off the air, so no other device hears it and it drops out of their tables. A
+    /// gateway is always up. The plan is the radio environment; this is the part of it that is currently transmitting.
+    /// </remarks>
+    internal NeighbourReport BuildNeighbourReport(SimulatedDevice device)
+    {
+        HashSet<string> transmitting;
+
+        lock (_gate)
+        {
+            transmitting = [.. _devices.Where(other => other.Scenario != SimulationScenario.Disconnect).Select(other => other.MacAddress)];
+        }
+
+        var (x, y) = _plan.PositionOf(device.MacAddress) ?? (0, 0);
+
+        return new NeighbourReport(
+            x,
+            y,
+            [.. _plan.TableOf(device.MacAddress)
+                .Where(link => MeshGateways.IsGateway(link.To) || transmitting.Contains(link.To))
+                .Select(link => new NeighbourLink(link.To, link.Rssi))]);
+    }
+
     internal async Task<bool> SendWithBackpressureAsync(
         SimulatedDevice device,
         JsonElement reading,

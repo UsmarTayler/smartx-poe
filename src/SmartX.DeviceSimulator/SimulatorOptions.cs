@@ -53,6 +53,14 @@ public sealed class SimulatorOptions
     /// </remarks>
     public TimeSpan ShadowPollInterval { get; set; } = TimeSpan.FromSeconds(5);
 
+    /// <summary>How often each device reports its neighbour table to the gateway.</summary>
+    /// <remarks>
+    /// Must match the gateway's <c>Topology:ReportInterval</c>, which decides when a silent device is taken out of the mesh graph: that
+    /// is three of these intervals without a report. Thirty seconds is slow enough to be cheap (one small request per device) and
+    /// fast enough that a device going quiet leaves the graph within a minute and a half.
+    /// </remarks>
+    public TimeSpan NeighbourReportInterval { get; set; } = TimeSpan.FromSeconds(30);
+
     /// <summary>How often the fleet checks which devices are due to report.</summary>
     public TimeSpan TickInterval { get; set; } = TimeSpan.FromMilliseconds(500);
 

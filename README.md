@@ -3,7 +3,8 @@
 An IoT telemetry ingestion and mesh-management system, built as a university Portfolio of Evidence. **Part 1** ingests sensor
 readings without boxing and scores each node's trust. **Part 2** adds a device simulator that reports over HTTP, FIFO and priority
 ingestion queues, commands with undo, history, alerts, real-time push, a prediction engine and authentication. **Part 3** (network
-topology) is not built; its menu entry is visibly disabled.
+topology) is in progress: the AVL history store and the mesh graph, with its breadth-first and depth-first traversals, are built. The minimum
+spanning tree and the topology page are not, and its menu entry is still visibly disabled.
 
 ## Contents
 
@@ -314,6 +315,37 @@ Run it with `dotnet test -c Release --settings tests/SmartX.Tests/benchmark.runs
 Tests: `AvlTreeTests` (invariants after every operation, the four rotations, ranges against a sorted list), `AvlHistoryStoreContractTests`
 (the whole contract suite, unchanged), `HistoryRangeEndpointTests`.
 
+### Mesh graph
+
+Every device reports its neighbour table (who it can hear, and at what signal strength in dBm) to `POST /api/devices/{mac}/neighbours`
+every 30 seconds, using its own device key. The gateway builds a graph from those reports: devices and the three gateways
+(`GATEWAY-1` to `GATEWAY-3`) are vertices, links are undirected edges, held as an adjacency list
+([`MeshGraph.cs`](src/SmartX.Shared/Topology/MeshGraph.cs)). A link exists if either end reports it, and uses the weaker of the two
+readings. Its cost is
+
+```
+cost = rssiCost × (1 + penaltyFactor × (1 − lowerTrust))
+```
+
+where `rssiCost` runs linearly from 1 at -30 dBm to 10 at -90 dBm, `lowerTrust` is the lower trust score of the link's two ends, and
+`penaltyFactor` is `Topology:PenaltyFactor` (default 4). A device in the Fault band, or silent for three report intervals, is left out
+of the graph. Breadth-first search from all gateways at once gives each device its nearest gateway and hop count; Tarjan's low-link
+depth-first search finds the devices whose failure would split the mesh. Both are O(V + E).
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/topology
+curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/topology/reachability
+curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/topology/articulation-points
+```
+
+**Expect:** in the seeded layout, 55 devices and 3 gateways joined by 141 links in one connected network (a few devices start in
+Disconnect or Fault, so the live graph shows about 50 devices and about 118 links, with `excluded` naming the rest and why). From
+`reachability`, every device with a nearest gateway and a hop count of at most 4, and `cutOff` empty. From `articulation-points`, about
+seven or eight single points of failure, each with the devices that would lose every route if it failed (`GATEWAY-2` is one). Set a
+device to Disconnect (`POST /api/simulation/{mac}/scenario`, `{"scenario":"Disconnect"}`): after three report intervals it appears
+under `excluded` as `Stale` and is gone from `nodes` and `edges`. Tests: `TopologyTests` (both traversals against brute force on 200
+random graphs each).
+
 ### `HashSet`: duplicates and "already done"
 
 An alert is a `readonly record struct AlertKey(Mac, Kind)`. A firing condition calls `HashSet<AlertKey>.Add`: `true` is a new
@@ -352,7 +384,7 @@ the authority on what is a Fault. Tests: `SuggestionServiceTests`, `TrustForecas
 ## Tests
 
 ```bash
-dotnet test                                                                                                   # the whole suite: 1,414 cases
+dotnet test                                                                                                   # the whole suite: 1,429 cases
 dotnet test --filter "FullyQualifiedName~SuggestionServiceTests"                                              # one class
 dotnet test --settings tests/SmartX.Tests/benchmark.runsettings --filter "Category=Benchmark" --logger "console;verbosity=detailed"   # the benchmarks
 ```
@@ -368,6 +400,7 @@ for no fault of the code, and the behaviour they measure is covered by order in 
 | `Dictionary` (trust, device index, patterns) | about 80 | `TrustEngineTests`, `PatternEngineTests` |
 | `SortedDictionary` (history) | about 65 | `HistoryStoreContract` (run as `SortedDictionaryHistoryStoreTests`) |
 | AVL tree (history) | about 73 | `AvlTreeTests`, `AvlHistoryStoreContractTests` (the same contract), `HistoryRangeEndpointTests` |
+| Graph, BFS, articulation points (topology) | about 15 | `TopologyTests` |
 | `HashSet` (alerts, search) | about 55 | `AlertTrackerTests` |
 | Predictive engine | about 160 | `SuggestionServiceTests`, `TrustForecasterTests` |
 | Real-time push (hub, client feeds) | about 95 | `RealtimeHubTests`, `ClientRealtimeTests` |
@@ -376,7 +409,7 @@ for no fault of the code, and the behaviour they measure is covered by order in 
 | Device simulator | about 20 | `DeviceSimulatorTests` |
 | Attachments (streamed, encrypted) | about 35 | `AttachmentUploadTests` |
 
-Counts are `[Fact]` and `[Theory]` methods; theory rows bring the suite to 1,414 cases. The API tests boot the real API in memory
+Counts are `[Fact]` and `[Theory]` methods; theory rows bring the suite to 1,429 cases. The API tests boot the real API in memory
 with `WebApplicationFactory`, and the browser components are tested with bUnit on a fake hub, a fake API and a fake clock.
 
 ## Where each concept lives
@@ -399,6 +432,9 @@ with `WebApplicationFactory`, and the browser components are tested with bUnit o
 | Command lifecycle | [`CommandService.cs`](src/SmartX.Api/Commands/CommandService.cs), [`CommandStore.cs`](src/SmartX.Api/Commands/CommandStore.cs) | states and transitions; `Collect` hands each command over once; `TryTransition` is the compare-and-swap |
 | Recursion, reused | [`CommandService.cs`](src/SmartX.Api/Commands/CommandService.cs), [`ZoneTree.cs`](src/SmartX.Shared/Zones/ZoneTree.cs) | `IssueForZone` calls the same `NodesBeneath` walk as Part 1 to find every actuator under a zone, and the device search asks `ZoneIdsBeneath`, which shares the same private `Descend` |
 | Sorted dictionary | [`SortedDictionaryHistoryStore.cs`](src/SmartX.Api/History/SortedDictionaryHistoryStore.cs), [`HistoryKey.cs`](src/SmartX.Api/History/HistoryKey.cs) | a dictionary of nodes, each owning a `SortedDictionary<HistoryKey, HistoryEntry>`; the key is `(Timestamp, Sequence)` so equal timestamps cannot collide, and the class comment states the cost of a range query honestly |
+| Graph (adjacency list) | [`MeshGraph.cs`](src/SmartX.Shared/Topology/MeshGraph.cs), [`LinkCost.cs`](src/SmartX.Shared/Topology/LinkCost.cs) | `Dictionary<string, List<MeshLink>>`, an edge if either end reports it with the weaker RSSI, and the cost formula with its reasoning |
+| BFS and DFS | [`MeshTraversal.cs`](src/SmartX.Shared/Topology/MeshTraversal.cs) | multi-source breadth-first search with a `Queue<T>` from every gateway; Tarjan's low-link search for articulation points |
+| Immutable snapshot | [`TopologyService.cs`](src/SmartX.Api/Topology/TopologyService.cs) | reports mark it stale, the next read rebuilds it, readers traverse without locking |
 | AVL tree | [`AvlTree.cs`](src/SmartX.Shared/Collections/AvlTree.cs), [`AvlHistoryStore.cs`](src/SmartX.Api/History/AvlHistoryStore.cs) | a generic tree with the height stored in each node, four rotations (LL, RR, LR, RL), and `Range`, `Floor`, `Ceiling`, `Min`, `Max`; the default history store, whose range query is O(log n + k) |
 | Downsampling | [`TimelineBuilder.cs`](src/SmartX.Api/History/TimelineBuilder.cs) | one pass into at most `maxPoints` buckets with min, max, average and count, so a spike survives |
 | HashSet for duplicate prevention | [`AlertTracker.cs`](src/SmartX.Api/Alerts/AlertTracker.cs), [`AlertKey.cs`](src/SmartX.Shared/Alerts/AlertKey.cs) | `HashSet<AlertKey>` where `Add` returning `false` is the suppress decision; the key is a `readonly record struct` so value equality works |
@@ -447,6 +483,8 @@ an environment variable uses `__` for `:` (`Trust:HalfLife` is `Trust__HalfLife`
 | `Ingestion:MaxQueueDepth` | `10000` | Bound of the standard queue |
 | `Commands:MaxUndoDepth` | `20` | Depth of the undo stack |
 | `History:Store` | `Avl` | `Avl` or `SortedDictionary`: which store holds history |
+| `Topology:ReportInterval`, `Simulator:NeighbourReportInterval` | `00:00:30` | How often a device reports its neighbours, and the interval the gateway counts silence in (keep them equal) |
+| `Topology:PenaltyFactor` | `4` | How hard low trust raises a link's cost |
 | `Auth:SigningKey`, `Auth:FleetSecret` | published development values | Required outside Development; at least 32 and 16 bytes |
 | `Auth:SeedDemoUsers` | `true` in Development and Docker | The `operator` and `viewer` logins |
 | `Auth:TokenLifetime` | `01:00:00` | How long a login lasts |

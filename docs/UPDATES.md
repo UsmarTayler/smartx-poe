@@ -44,6 +44,7 @@ Entries U1 to U12 each name their own source (a review of the code, a test, a li
 | [U20](#u20-accessibility-findings-in-the-light-theme) | 2026-10-13 | Client | Contrast, names, landmarks and live regions found by an axe pass | `b62dccc`, `5c23e63`, `7b5e0fc`, `3bd34b4`, `718d7e0` |
 | [U21](#u21-the-api-had-no-authentication) | 2026-10-14 | API, client, simulator | Add a login with roles, per-device keys, a protected hub and a login page; protect every endpoint but health and login | `5b33a2b`, `b845474`, `76355a3`, `3fcb356`, `7920580`, `94be739`, `36d261e`, `fbe6bb3`, `1041e6b` |
 | [U22](#u22-history-range-queries-walked-from-the-oldest-entry) | 2026-10-22 | History | Replace the sorted-dictionary store with an AVL tree as the default, so a time-range query seeks | `6b706e9`, `ea4e45c`, `df974a5`, `ecfefe0` |
+| [U23](#u23-the-mesh-was-not-modelled-as-a-network) | 2026-10-22 | Topology | Model the mesh as a weighted graph built from device-reported neighbours, with breadth-first reachability and articulation points | `e52b330`, `ce6c806`, `39d0dac` |
 
 ---
 
@@ -650,10 +651,29 @@ Considered and not done: giving the simulator an Operator login to register (a p
 
 ---
 
+## U23. The mesh was not modelled as a network
+
+**Source:** the Part 3 brief, which asks for the IoT mesh as a graph, a traversal that finds what is connected and what is down, and the weak points; and a design note of our own: `DeploymentLocation.NodeId` called a device's gateway a "mesh node", but nothing recorded which devices could hear which.
+
+**What was wrong.** The gateway knew each device's zone and a label for the node it reported through, and nothing about links. It could not say which devices were reachable, what route a packet would take, or which device's failure would strand others. A device that failed was found by its silence, with no view of what that did to its neighbours.
+
+**Why it mattered.** The question an operator asks of a mesh is "what depends on this device?", and the data to answer it did not exist. It is also the substance of Part 3: without a graph there is nothing for a traversal or a spanning tree to run on.
+
+**What changed.** Devices report their neighbour table (and their position) to `POST /api/devices/{mac}/neighbours` every 30 seconds, signed with their own key like telemetry, and a device may report only for its own MAC. The simulator lays the fleet out on a plan from a fixed seed (three gateways, each device hearing its two to four nearest neighbours and a gateway in range, zones joined by single links so some single points of failure remain) and reports the part of that plan that is transmitting: a device in Disconnect stops reporting and leaves other devices' tables. `MeshGraph` is an adjacency list built from those reports. A link exists if either end reports it and uses the weaker reading; its cost is `rssiCost × (1 + penaltyFactor × (1 − lowerTrust))`. Devices in the Fault band, or silent for three intervals, are left out. The API keeps an immutable snapshot, rebuilt at the next read after reports change or after two seconds, so traversals take no lock. A multi-source breadth-first search from the gateways gives each device its nearest gateway and hop count (O(V + E)), and Tarjan's low-link search finds the articulation points (O(V + E)), each with the devices it would cut off. Both are checked against brute force on 200 random graphs. Three read endpoints under the Viewer policy: `/api/topology`, `/api/topology/reachability`, `/api/topology/articulation-points`. In the seeded layout: 58 vertices, 141 links, 7 articulation points. Run in Docker with no `.env`, 50 devices and 3 gateways are live in one connected component with none cut off, and a device set to Disconnect leaves the graph after three report intervals. Considered and not done: requiring both ends to report a link (a device that misses one report would drop out of its neighbours' routes), and a lock around the mutable table (a slow traversal would hold up every report).
+
+- `src/SmartX.Shared/Topology/` (`MeshGraph.cs`, `LinkCost.cs`, `MeshTraversal.cs`, `MeshLayout.cs`, `TopologyContracts.cs`)
+- `src/SmartX.Api/Topology/`, `src/SmartX.Api/Endpoints/TopologyEndpoints.cs`, `Program.cs`, `appsettings.json`
+- `src/SmartX.DeviceSimulator/DeviceFleet.cs`, `GatewayClient.cs`, `SimulatedDevice.cs`, `SimulatorOptions.cs`, `docker-compose.yml`
+- `tests/SmartX.Tests/TopologyTests.cs`
+
+**Commits:** `e52b330` the graph, cost, traversals and layout, `ce6c806` reports, snapshot and endpoints, `39d0dac` tests
+
+---
+
 ## Entry template
 
 ```markdown
-## U23. Short title of the problem
+## U24. Short title of the problem
 
 **Source:** how it was found: lecturer feedback on Part 1, code review, a test, a live run
 
