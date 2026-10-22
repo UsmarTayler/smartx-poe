@@ -24,6 +24,9 @@ internal static class TopologyEndpoints
         api.MapGet("/topology", GetTopology).WithName("GetTopology");
         api.MapGet("/topology/reachability", GetReachability).WithName("GetTopologyReachability");
         api.MapGet("/topology/articulation-points", GetArticulationPoints).WithName("GetTopologyArticulationPoints");
+        api.MapGet("/topology/mst", GetMst).WithName("GetTopologyMst");
+        api.MapGet("/topology/route/{mac}", GetRouteAsync).WithName("GetTopologyRoute");
+        api.MapGet("/topology/route-changes", GetRouteChanges).WithName("GetTopologyRouteChanges");
 
         return api;
     }
@@ -177,5 +180,84 @@ internal static class TopologyEndpoints
 
                 return new ArticulationPointView(point.Id, vertex.Name, point.IsGateway, point.CutOff);
             })]));
+    }
+
+    /// <summary>The backbone: the cheapest links that connect every reachable device to a gateway, one tree per gateway.</summary>
+    private static IResult GetMst(TopologyService topology)
+    {
+        var snapshot = topology.Current;
+        var forest = snapshot.Forest;
+
+        return Results.Ok(new MstView(
+            snapshot.BuiltAt,
+            [.. forest.Edges.Select(edge => new TopologyEdge(edge.A, edge.B, edge.Rssi, edge.Cost))],
+            [.. forest.WeightByGateway.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair =>
+            {
+                snapshot.Graph.TryGetVertex(pair.Key, out var gateway);
+
+                return new MstTreeView(pair.Key, gateway.Name, pair.Value, forest.GatewayOf.Count(entry => entry.Value == pair.Key && entry.Key != pair.Key));
+            })],
+            forest.TotalWeight,
+            snapshot.Reachability.CutOff));
+    }
+
+    /// <summary>
+    /// One device's route to its gateway along the tree, with the cheapest cost it could have had by any path for comparison. An
+    /// unregistered device is a 404; a registered one that is not in the graph is a route that is cut off, and says why.
+    /// </summary>
+    private static async Task<IResult> GetRouteAsync(string mac, ISensorRegistry registry, TopologyService topology, CancellationToken cancellationToken)
+    {
+        if (!MacAddressValidator.TryNormalise(mac, out var canonical) || await registry.FindAsync(canonical, cancellationToken) is null)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status404NotFound,
+                title: "Sensor not registered",
+                detail: $"No sensor is registered with MAC address '{mac}'.");
+        }
+
+        var snapshot = topology.Current;
+
+        if (!snapshot.Routes.TryGetValue(canonical, out var route))
+        {
+            var reason = snapshot.Excluded.FirstOrDefault(excluded => excluded.Id == canonical)?.Reason
+                ?? (snapshot.Graph.Contains(canonical) ? "No path to any gateway" : "No neighbour report yet");
+
+            return Results.Ok(new RouteView(snapshot.BuiltAt, canonical, true, reason, null, null, null, null, []));
+        }
+
+        return Results.Ok(new RouteView(
+            snapshot.BuiltAt,
+            canonical,
+            false,
+            null,
+            route.Gateway,
+            route.Hops,
+            route.Cost,
+            snapshot.ShortestCosts.TryGetValue(canonical, out var shortest) ? shortest : null,
+            [.. route.Path.Select(id =>
+            {
+                snapshot.Graph.TryGetVertex(id, out var vertex);
+
+                return new RouteHop(id, vertex.Name);
+            })]));
+    }
+
+    /// <summary>Routes that changed when the mesh was rebuilt, newest first. The history is bounded, so this is the recent past only.</summary>
+    private static IResult GetRouteChanges(int? limit, IOptions<TopologyOptions> options, TopologyService topology)
+    {
+        var count = limit ?? 50;
+
+        if (count < 1 || count > options.Value.RouteChangeHistory)
+        {
+            return Results.ValidationProblem(
+                new Dictionary<string, string[]> { ["limit"] = [$"'limit' must be between 1 and {options.Value.RouteChangeHistory}."] },
+                title: "The route change request is not valid");
+        }
+
+        _ = topology.Current;
+
+        return Results.Ok(topology.RouteChanges(count)
+            .Select(change => new RouteChangeView(change.At, change.Device, change.Name, change.OldPath, change.NewPath, change.Reason))
+            .ToList());
     }
 }

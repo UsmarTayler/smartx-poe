@@ -73,3 +73,67 @@ public sealed record ArticulationPointView(string Id, string Name, bool IsGatewa
 /// <param name="BuiltAt">When the snapshot this was computed from was built.</param>
 /// <param name="Points">Each articulation point, in id order. Empty means no single failure splits the mesh.</param>
 public sealed record ArticulationView(DateTimeOffset BuiltAt, IReadOnlyList<ArticulationPointView> Points);
+
+/// <summary>One gateway's tree in the spanning forest.</summary>
+/// <param name="Gateway">The gateway at the root.</param>
+/// <param name="Name">Its label.</param>
+/// <param name="Weight">The total cost of the links in its tree.</param>
+/// <param name="Devices">How many devices the tree serves.</param>
+public sealed record MstTreeView(string Gateway, string Name, double Weight, int Devices);
+
+/// <summary>The backbone: the cheapest set of links that connects every reachable device to a gateway.</summary>
+/// <param name="BuiltAt">When the snapshot this was computed from was built.</param>
+/// <param name="Edges">The links kept, each once.</param>
+/// <param name="Trees">One per gateway.</param>
+/// <param name="TotalWeight">The sum of the trees' weights.</param>
+/// <param name="CutOff">Devices with no path to any gateway, which are not in the tree.</param>
+public sealed record MstView(
+    DateTimeOffset BuiltAt,
+    IReadOnlyList<TopologyEdge> Edges,
+    IReadOnlyList<MstTreeView> Trees,
+    double TotalWeight,
+    IReadOnlyList<string> CutOff);
+
+/// <summary>One stop on a route.</summary>
+/// <param name="Id">The device's MAC address, or the gateway's id.</param>
+/// <param name="Name">Its label.</param>
+public sealed record RouteHop(string Id, string Name);
+
+/// <summary>A device's route to its gateway along the spanning tree.</summary>
+/// <param name="BuiltAt">When the snapshot this was computed from was built.</param>
+/// <param name="Device">The device asked about.</param>
+/// <param name="CutOff">True when it has no route: it is cut off, or has been left out of the graph.</param>
+/// <param name="Reason">When cut off, why: <c>Stale</c>, <c>Fault</c>, <c>No path to any gateway</c> or <c>No neighbour report yet</c>.</param>
+/// <param name="Gateway">The gateway the route ends at.</param>
+/// <param name="HopCount">How many links it crosses.</param>
+/// <param name="MstCost">The cost of the route along the tree.</param>
+/// <param name="ShortestCost">
+/// The cheapest cost from this device to any gateway by any path, from Dijkstra's algorithm. Never below <paramref name="MstCost"/>
+/// when the tree's gateway is the nearest, and often lower: the tree minimises the cost of the whole network, not of each device.
+/// </param>
+/// <param name="Hops">Every stop, the device first and the gateway last.</param>
+public sealed record RouteView(
+    DateTimeOffset BuiltAt,
+    string Device,
+    bool CutOff,
+    string? Reason,
+    string? Gateway,
+    int? HopCount,
+    double? MstCost,
+    double? ShortestCost,
+    IReadOnlyList<RouteHop> Hops);
+
+/// <summary>A device's route changing, as the history records it.</summary>
+/// <param name="At">When the mesh was rebuilt and the change noticed.</param>
+/// <param name="Device">The device.</param>
+/// <param name="Name">Its label.</param>
+/// <param name="OldPath">Its route before, device first. Null if it had none.</param>
+/// <param name="NewPath">Its route after. Null if it has none now.</param>
+/// <param name="Reason">What caused it, such as <c>GATEWAY-2 excluded: Stale</c>.</param>
+public sealed record RouteChangeView(
+    DateTimeOffset At,
+    string Device,
+    string Name,
+    IReadOnlyList<string>? OldPath,
+    IReadOnlyList<string>? NewPath,
+    string Reason);
