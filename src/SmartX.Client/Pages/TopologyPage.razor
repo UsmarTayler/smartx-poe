@@ -143,7 +143,8 @@ else
 
             if (failed is null)
             {
-                _picture = MeshPicture.Build(topology.Result.Value, mst.Result.Value, reachability.Result.Value, weak.Result.Value);
+                // No problem on any of the four means each has a value; ApiResult<T> does not say so to the compiler.
+                _picture = MeshPicture.Build(topology.Result.Value!, mst.Result.Value!, reachability.Result.Value!, weak.Result.Value!);
                 _drawnRevision = revision;
                 _loaded = true;
                 _problem = null;
