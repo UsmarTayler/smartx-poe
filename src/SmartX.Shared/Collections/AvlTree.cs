@@ -40,6 +40,13 @@ public sealed class AvlTree<TKey, TValue>
     public int Height => HeightOf(_root);
 
     /// <summary>
+    /// ⌈log₂(n + 1)⌉: the fewest levels any binary tree of <paramref name="count"/> keys can have, the bar a balanced tree's
+    /// <see cref="Height"/> is compared with.
+    /// </summary>
+    /// <remarks>The number of bits in the count: 1 key needs 1 level, 3 need 2, 7 need 3, 1,000,000 need 20.</remarks>
+    public static int MinimumHeightFor(int count) => count <= 0 ? 0 : 32 - System.Numerics.BitOperations.LeadingZeroCount((uint)count);
+
+    /// <summary>
     /// Adds a key. Returns <see langword="false"/> and leaves the tree unchanged when the key is already present.
     /// </summary>
     /// <remarks>

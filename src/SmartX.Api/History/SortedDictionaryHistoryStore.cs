@@ -1,3 +1,5 @@
+using SmartX.Shared;
+
 namespace SmartX.Api.History;
 
 /// <summary>
@@ -23,7 +25,8 @@ namespace SmartX.Api.History;
 /// <b>Cost of a range query, stated honestly.</b> <see cref="SortedDictionary{TKey, TValue}"/> cannot seek to "the first entry at
 /// or after 14:00". <see cref="GetRange"/> enumerates from the oldest entry, skips to <c>from</c>, collects until <c>to</c> and
 /// stops: O(n) to reach the range plus O(k) for the k results, not the O(log n + k) of a balanced tree. A query for an old window
-/// is cheap and one for the newest walks everything. This is the stated reason Part 3 builds its own tree.
+/// is cheap and one for the newest walks everything. That is why <see cref="AvlHistoryStore"/> is the default; this store stays
+/// selectable (<c>History:Store</c>) so the two can be compared.
 /// <see cref="GetLatest"/> has the same limit: it walks forward and keeps the last <c>count</c> in a small queue.
 /// </para>
 /// <para>
@@ -33,6 +36,9 @@ namespace SmartX.Api.History;
 /// </remarks>
 internal sealed class SortedDictionaryHistoryStore : IHistoryStore
 {
+    /// <summary>The name <see cref="GetStats"/> reports.</summary>
+    internal const string StoreName = "SortedDictionary";
+
     private readonly Lock _gate = new();
 
     private readonly Dictionary<string, SortedDictionary<HistoryKey, HistoryEntry>> _nodes = new(StringComparer.Ordinal);
@@ -202,6 +208,28 @@ internal sealed class SortedDictionaryHistoryStore : IHistoryStore
 
         return removed;
     }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Heights are null: the red-black tree inside <see cref="SortedDictionary{TKey, TValue}"/> is not exposed, so only the
+    /// entry counts and the best possible height can be reported.
+    /// </remarks>
+    public HistoryStoreStats GetStats(int largest = 10)
+    {
+        lock (_gate)
+        {
+            var biggest = _nodes
+                .OrderByDescending(pair => pair.Value.Count)
+                .ThenBy(pair => pair.Key, StringComparer.Ordinal)
+                .Take(Math.Max(largest, 0))
+                .Select(pair => Describe(pair.Key, pair.Value.Count));
+
+            return new HistoryStoreStats(StoreName, _count, _nodes.Count + 1, [Describe("events", _events.Count), .. biggest]);
+        }
+    }
+
+    private static HistoryTreeStats Describe(string scope, int entries) =>
+        new(scope, entries, Height: null, AvlTree<HistoryKey, HistoryEntry>.MinimumHeightFor(entries));
 
     /// <summary>The entries of one tree in <c>[from, to)</c>, found by walking from the oldest and stopping early.</summary>
     private static List<HistoryEntry> Collect(
