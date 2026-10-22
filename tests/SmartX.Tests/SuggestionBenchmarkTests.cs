@@ -275,8 +275,19 @@ public class SuggestionBenchmarkTests(ITestOutputHelper output)
             postedToReceived.Add(watch.Elapsed.TotalMilliseconds);
             triggerToReceived.Add((arrived - update.Suggestions.Max(found => found.TriggeredAt)).TotalMilliseconds);
 
-            // Back above the re-arm level, so the next dip is a new trigger.
+            // Back above the re-arm level, so the next dip fires the trigger again.
             await host.Http.PostAsync("api/telemetry", Reading(moisture, "60"));
+
+            // And act on what was suggested. The service folds a sensor crossing the same level again, with nothing done about the
+            // last time, into the incident already on the page (so that a hovering sensor does not make a suggestion flash "New" for
+            // ever), and tells the client of that only as a refreshed time, at most once a second and otherwise at the next sweep.
+            // That is a different thing from a new incident arriving and is not what is measured here: an earlier version of this test
+            // repeated the same incident and so measured the sweep interval (4.97 s). Once something has been done about it, the
+            // next dip is a new incident with a new suggestion, which is announced at once.
+            var settled = client.Messages<SuggestionsUpdate>(RealtimeMethods.SuggestionsUpdated).Count;
+            using var done = await host.Http.PostAsJsonAsync("api/commands", new IssueCommandRequest(DemoDevices.Hydroponics.PumpA, CommandAction.PumpOn));
+            Assert.True(done.IsSuccessStatusCode, $"The command was refused: {(int)done.StatusCode}.");
+            await client.WaitForAsync<SuggestionsUpdate>(RealtimeMethods.SuggestionsUpdated, settled + 1);
             await Task.Delay(30);
         }
 
@@ -285,7 +296,7 @@ public class SuggestionBenchmarkTests(ITestOutputHelper output)
 
         double Percentile(List<double> sorted, double p) => sorted[(int)Math.Min(sorted.Count - 1, p * sorted.Count)];
 
-        output.WriteLine($"40 dips below 20 %, a client subscribed to the suggestions topic, long polling over the in-memory test server:");
+        output.WriteLine($"40 new incidents (a dip below 20 %, then the pump turned on), a client subscribed to the suggestions topic, long polling over the in-memory test server:");
         output.WriteLine($"Reading posted to suggestion received:  median {Percentile(postedToReceived, 0.5):N1} ms, p95 {Percentile(postedToReceived, 0.95):N1} ms, worst {postedToReceived[^1]:N1} ms");
         output.WriteLine($"Trigger fired to suggestion received:   median {Percentile(triggerToReceived, 0.5):N1} ms, p95 {Percentile(triggerToReceived, 0.95):N1} ms, worst {triggerToReceived[^1]:N1} ms");
 
