@@ -42,6 +42,8 @@ not yet meet; the one category added to the four usual ones). Commits are in eac
 | [U24](#u24-the-backbone-of-the-mesh-and-what-happens-when-part-of-it-fails) | 3 | brief | Build the minimum spanning tree (Prim's, checked by Kruskal's), route along it, and record routes that heal |
 | [U25](#u25-the-test-suite-had-redundant-and-slow-tests) | 3 | test cleanup | Remove duplicate tests and share hosts: 1,429 tests to 1,347, 26 s to 20 s |
 | [U26](#u26-the-topology-pillar-was-listed-and-disabled) | 3 | brief | Build the topology page, and make "take offline" exclude the node at once |
+| [U27](#u27-a-feed-test-could-fail-under-load) | 3 | test cleanup | Make the fake topology snapshot hold what it has announced, so a late second sync cannot wipe the first push |
+| [U28](#u28-the-topology-page-built-with-four-warnings) | 3 | fault | Clear four nullable warnings in the topology page, so the solution builds with none |
 
 ## Lecturer feedback on Part 1
 
@@ -56,11 +58,11 @@ Entries U1 to U12 each name their own source (a review of the code, a test, a li
 ## Lecturer feedback on Part 2
 
 > **PLACEHOLDER: to be filled in when the Part 2 mark comes back.** Paste each comment below verbatim, one row per comment, and add the entry
-> that answers it as U27 onward (the template is at the end of this file).
+> that answers it as U29 onward (the template is at the end of this file).
 
 | # | Feedback, verbatim | Answered by | Notes |
 | --- | --- | --- | --- |
-| 1 | _Not received yet._ | _U27 onward_ | |
+| 1 | _Not received yet._ | _U29 onward_ | |
 
 ---
 
@@ -743,10 +745,42 @@ Two faults found by running it in Docker, not by the tests that passed. A compon
 
 ---
 
+## U27. A feed test could fail under load
+
+**Source:** the full-suite run before the Part 3 merge. `TopologyPageTests.The_feed_keeps_each_route_change_once_newest_first` failed once, with `[3, 2]` where `[3, 2, 1]` was expected, and passed 25 of 25 runs on its own.
+
+**What was wrong.** The test starts the feed and then delivers two pushes in a row. Every sync replaces what the feed holds with its snapshot, and the fake snapshot always answered with an empty list at sequence 0. The missing change was the first push's, which is what a snapshot landing between the two pushes would do. The most likely cause, inferred from that output and from how the feed starts (the connection's `Connected` event can start a sync after the first has already applied), is a second sync arriving late under load; it was not caught in the act. A real server's snapshot would have contained the change.
+
+**Why it mattered.** A flaky test teaches people to ignore red (see U11), and this one is in the default suite that runs before every merge. It had passed when Prompt 21 merged.
+
+**What changed.** The fake snapshot now returns what the test has already announced, as the server's does, so a late sync gives the same answer as the pushes. Nothing in `src` changed: a fresh snapshot replacing the list is the feed's correct behaviour. The same test still proves that an overlapping push is merged by id and not repeated.
+
+- `tests/SmartX.Tests/TopologyPageTests.cs`
+
+**Commit:** `62e911f` test(client): keep the fake topology snapshot consistent with what it has announced
+
+---
+
+## U28. The topology page built with four warnings
+
+**Source:** a Release build during the Part 3 benchmark run; the final gate asks for a build with zero warnings.
+
+**What was wrong.** `TopologyPage.razor` passed the `Value` of four `ApiResult<T>` results to `MeshPicture.Build`, which takes non-null arguments: four CS8604 warnings, there since Prompt 21. The values are never null at that point (the call is made only when none of the four has a problem), but the compiler could not see it.
+
+**Why it mattered.** Warnings that are always there hide the one that matters, and CI does not fail on them, so nothing had flagged it.
+
+**What changed.** The four values are marked non-null with a comment saying why that holds.
+
+- `src/SmartX.Client/Pages/TopologyPage.razor`
+
+**Commit:** `471da9a` fix(client): clear the nullable warnings in the topology page
+
+---
+
 ## Entry template
 
 ```markdown
-## U27. Short title of the problem
+## U29. Short title of the problem
 
 **Source:** how it was found: lecturer feedback on Part 1, code review, a test, a live run
 
