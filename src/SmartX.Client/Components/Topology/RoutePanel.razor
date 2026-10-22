@@ -1,0 +1,167 @@
+@using SmartX.Client.Topology
+@implements IDisposable
+@inject IOperatorApi Api
+@inject AuthSession Session
+@inject SensorService Catalog
+
+@* One selected device: what it is, where its packets go, what that costs, and the controls to take it off the air and put it back.
+
+   The route is the tree's, hop by hop. Its cost is shown beside the cheapest cost the device could have had by any path, because
+   the two are different on purpose: the spanning tree keeps the whole network cheapest, not each device's own route. *@
+<MudPaper Outlined="true" Class="pa-3" role="region" aria-label="Selected device">
+    @if (Node is null)
+    {
+        <MudText Typo="Typo.h6" HtmlTag="h2" Class="mb-1">Selected device</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">Choose a device on the map, in the table or in the search to follow its route to a gateway.</MudText>
+    }
+    else
+    {
+        <MudText Typo="Typo.h6" HtmlTag="h2">@Node.Name</MudText>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">
+            <span class="smartx-mono">@Node.Id</span>@(Node.ZoneId is { } zone ? $" · {Catalog.ZonePath(zone)}" : string.Empty)
+        </MudText>
+
+        <div class="smartx-detail__facts">
+            @if (Node.Band is { } band)
+            {
+                <TrustStatusChip Band="band" />
+            }
+            else if (Node.IsGateway)
+            {
+                <span class="smartx-status"><MudIcon Icon="@Icons.Material.Filled.Router" Size="Size.Small" aria-hidden="true" /><span>Gateway</span></span>
+            }
+
+            @if (Node.IsWeakPoint)
+            {
+                <span class="smartx-status smartx-status--weak">
+                    <MudIcon Icon="@Icons.Material.Filled.CallSplit" Size="Size.Small" aria-hidden="true" />
+                    <span>Weak point@(Node.CutOffDevices > 0 ? $": {Node.CutOffDevices} devices depend on it" : ": the mesh splits if it fails")</span>
+                </span>
+            }
+        </div>
+
+        @if (Node.Reason is { } reason)
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="my-2" role="status">
+                @(Node.LeftOutReason is null ? "Cut off from every gateway" : "Left out of the mesh"): @reason
+            </MudAlert>
+        }
+
+        @if (Route is { CutOff: false } route)
+        {
+            <MudText Typo="Typo.subtitle2" Class="mt-2">Route to @route.Gateway, @route.HopCount @(route.HopCount == 1 ? "hop" : "hops")</MudText>
+            <ol class="smartx-route" aria-label="Hops from this device to its gateway">
+                @foreach (var hop in route.Hops)
+                {
+                    <li @key="hop.Id"><span>@hop.Name</span> <span class="smartx-mono mud-text-secondary">@(hop.Id.Length > 5 && hop.Id.Contains(':') ? hop.Id[^5..] : hop.Id)</span></li>
+                }
+            </ol>
+
+            <dl class="smartx-route-costs">
+                <div><dt>Along the spanning tree</dt><dd>@route.MstCost?.ToString("0.00")</dd></div>
+                <div><dt>Cheapest possible path</dt><dd>@route.ShortestCost?.ToString("0.00")</dd></div>
+            </dl>
+
+            @if (Differs(route))
+            {
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">The spanning tree keeps the whole network cheapest, so this device's own route isn't the cheapest possible.</MudText>
+            }
+        }
+        else if (Route is { CutOff: true } cut && Node.Reason is null)
+        {
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">No route: @cut.Reason.</MudText>
+        }
+
+        @if (!Node.IsGateway)
+        {
+            <div class="mt-3">
+                @if (BroughtBack)
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" StartIcon="@Icons.Material.Filled.PowerSettingsNew"
+                               Disabled="@(!Session.CanChange || _busy)" OnClick="() => SetAsync(SimulationScenario.Nominal)">Bring back</MudButton>
+                }
+                else
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small" StartIcon="@Icons.Material.Filled.PowerOff"
+                               Disabled="@(!Session.CanChange || _busy || Node.LeftOutReason is not null)" OnClick="() => SetAsync(SimulationScenario.Disconnect)">Take offline</MudButton>
+                }
+
+                <OperatorsOnlyNote Text="Operators only. You are signed in as a Viewer, so Take offline and Bring back are disabled." />
+
+                @if (_problem is not null)
+                {
+                    <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="mt-2" role="status">@_problem</MudAlert>
+                }
+                else if (_sent is not null)
+                {
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary" role="status">@_sent</MudText>
+                }
+            </div>
+        }
+    }
+</MudPaper>
+
+@code {
+    private const string TakenOffline = "Taken offline by operator";
+
+    private bool _busy;
+    private string? _problem;
+    private string? _sent;
+
+    [Parameter]
+    public PictureNode? Node { get; set; }
+
+    [Parameter]
+    public RoutePathView? Route { get; set; }
+
+    /// <summary>Whether the device is one an operator took offline, so that the button offers to bring it back.</summary>
+    private bool BroughtBack => Node?.LeftOutReason == TakenOffline;
+
+    private static bool Differs(RoutePathView route) => route.MstCost is { } tree && route.ShortestCost is { } shortest && tree > shortest + 0.005;
+
+    protected override void OnInitialized() => Session.Changed += OnSession;
+
+    protected override void OnParametersSet()
+    {
+        // A message about the last device's button is not about this one.
+        if (_sent is not null && Node is not null && _sentFor != Node.Id)
+        {
+            _sent = null;
+            _problem = null;
+        }
+    }
+
+    private string? _sentFor;
+
+    private async Task SetAsync(SimulationScenario scenario)
+    {
+        if (Node is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _problem = null;
+
+        var result = await Api.SetScenarioAsync(Node.Id, scenario);
+
+        _busy = false;
+        _sentFor = Node.Id;
+
+        if (result.IsSuccess)
+        {
+            _sent = scenario == SimulationScenario.Disconnect
+                ? "Taken offline. It leaves the mesh now, and its routes heal."
+                : "Brought back. It rejoins the mesh with its next report.";
+        }
+        else
+        {
+            _sent = null;
+            _problem = result.Problem.Message;
+        }
+    }
+
+    private void OnSession() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Session.Changed -= OnSession;
+}

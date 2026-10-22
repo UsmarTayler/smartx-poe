@@ -77,33 +77,9 @@ h1:focus {
 }
 
 /* ---- Navigation --------------------------------------------------------------------------------
-   Future pillars are disabled but must stay legible. MudBlazor's disabled styling fades the whole
-   link to the disabled text colour, which drops below readable contrast; here the text keeps the
-   secondary colour, full opacity, and a not-allowed cursor, so it reads as "not yet" rather than
-   "broken". The label wraps so the full pillar name survives the drawer's width. */
-.smartx-future-pillar .mud-nav-link,
-.smartx-future-pillar.mud-nav-link,
-.smartx-future-pillar .mud-nav-link.mud-nav-link-disabled {
-    color: var(--mud-palette-text-secondary) !important;
-    opacity: 1 !important;
-    cursor: not-allowed;
-}
-
-.smartx-future-pillar .mud-nav-link-icon {
-    color: var(--mud-palette-text-secondary) !important;
-    opacity: 1 !important;
-}
-
-.smartx-future-pillar__label,
+   The label wraps so the full pillar name survives the drawer's width. */
 .mud-nav-link .mud-nav-link-text {
     white-space: normal;
-}
-
-.smartx-future-pillar__label {
-    display: inline-flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 4px;
 }
 
 /* ---- Content ---------------------------------------------------------------------------------
@@ -626,7 +602,6 @@ h1:focus {
 }
 
 .smartx-pillar { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
-.smartx-pillar--future { opacity: 0.8; border-style: dashed; }
 
 /* Live stream */
 .smartx-stream__header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
@@ -840,3 +815,69 @@ h1:focus {
 
 /* The visible reason a control is disabled for a Viewer. Beside the controls it explains, small, and not mistaken for an error. */
 .smartx-operators-only { display: flex; align-items: center; gap: 6px; margin: 4px 0 8px; }
+
+/* ---- Network topology ------------------------------------------------------------------------------------------- */
+/* Two columns when there is room: the map and the table on the left, the controls and the lists on the right. The map is an SVG
+   with a viewBox, so it takes whatever width it is given. */
+.smartx-topo { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (min-width: 1100px) { .smartx-topo { grid-template-columns: minmax(0, 1.7fr) minmax(320px, 1fr); } }
+.smartx-topo__side { display: grid; gap: 12px; }
+
+.smartx-mesh-wrap { margin-top: 8px; }
+.smartx-mesh { display: block; width: 100%; height: auto; max-height: 70vh; border: 1px solid var(--mud-palette-lines-default); border-radius: 8px; background: var(--mud-palette-surface); }
+
+/* Links: the spanning tree is solid and prominent, every other link thin and faint, the selected route over them in the accent. */
+.smartx-mesh__link { stroke: var(--mud-palette-lines-inputs); stroke-width: 0.25; opacity: 0.8; vector-effect: non-scaling-stroke; stroke-width: 1px; }
+.smartx-mesh__link--tree { stroke: var(--mud-palette-text-primary); stroke-width: 2.4px; opacity: 1; }
+.smartx-mesh__route { stroke: var(--mud-palette-primary); stroke-width: 5px; stroke-linecap: round; vector-effect: non-scaling-stroke; opacity: 0.95; }
+.smartx-mesh__route--swatch { stroke-width: 4px; vector-effect: none; }
+
+/* Nodes. The outline is the text colour, so it has contrast on either theme; the fill is the trust band's. */
+.smartx-mesh__node { cursor: pointer; outline: none; }
+.smartx-mesh__shape { stroke: var(--mud-palette-text-primary); stroke-width: 0.45; fill: var(--mud-palette-text-secondary); }
+.smartx-mesh__node--gateway .smartx-mesh__shape, .smartx-mesh__gateway-swatch { fill: #3b4a6b; }
+.smartx-mesh__icon { pointer-events: none; }
+.smartx-mesh__icon--light { fill: #ffffff; }
+.smartx-mesh__icon--dark { fill: #1b1b1b; }
+.smartx-mesh__node--weak .smartx-mesh__shape, .smartx-mesh__legend-weak { stroke-width: 1.5; }
+.smartx-mesh__weak { font-size: 2.3px; font-weight: 700; fill: var(--mud-palette-text-primary); paint-order: stroke; stroke: var(--mud-palette-surface); stroke-width: 0.7px; pointer-events: none; }
+.smartx-mesh__node--out { opacity: 0.55; }
+.smartx-mesh__node--out .smartx-mesh__shape, .smartx-mesh__legend-out { fill: var(--mud-palette-background-gray) !important; stroke-dasharray: 1.1 0.8; }
+.smartx-mesh__ring { fill: none; stroke: var(--mud-palette-primary); stroke-width: 1px; vector-effect: non-scaling-stroke; stroke-width: 3px; }
+.smartx-mesh__node:focus-visible .smartx-mesh__shape { stroke: var(--mud-palette-primary); stroke-width: 1.4; }
+.smartx-mesh__node:hover .smartx-mesh__shape { stroke-width: 1; }
+
+.smartx-mesh-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; list-style: none; margin: 10px 0 0; padding: 0; font-size: 0.8125rem; color: var(--mud-palette-text-primary); }
+.smartx-mesh-legend li { display: inline-flex; align-items: center; gap: 6px; }
+
+/* The table fallback. */
+.smartx-topo-table-wrap { max-height: 360px; overflow: auto; border: 1px solid var(--mud-palette-lines-default); border-radius: 8px; }
+.smartx-topo-table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+.smartx-topo-table caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.smartx-topo-table th, .smartx-topo-table td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--mud-palette-lines-default); vertical-align: top; }
+.smartx-topo-table thead th { position: sticky; top: 0; background: var(--mud-palette-surface); }
+.smartx-topo-table tbody th { font-weight: 500; }
+.smartx-topo-table tr[aria-selected="true"] { background: var(--mud-palette-action-default-hover); }
+.smartx-link-button { all: unset; cursor: pointer; text-decoration: underline; color: var(--mud-palette-primary); }
+.smartx-link-button:focus-visible { outline: 2px solid var(--mud-palette-primary); outline-offset: 2px; }
+
+/* The side panels. */
+.smartx-devices--short { height: auto; max-height: 280px; }
+.smartx-route { margin: 6px 0; padding-left: 22px; }
+.smartx-route li { padding: 2px 0; }
+.smartx-route-costs { display: grid; gap: 4px; margin: 8px 0; }
+.smartx-route-costs div { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px dotted var(--mud-palette-lines-default); }
+.smartx-route-costs dt { color: var(--mud-palette-text-secondary); }
+.smartx-route-costs dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; }
+.smartx-status--weak { --smartx-status: #b45309; }
+.smartx-history-custom { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: end; margin: 8px 0; font-size: 0.8125rem; }
+.smartx-history-custom label { display: grid; gap: 2px; color: var(--mud-palette-text-secondary); }
+.smartx-history-custom input { font: inherit; color: var(--mud-palette-text-primary); background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-lines-inputs); border-radius: 4px; padding: 4px 6px; }
+
+.smartx-route-changes { list-style: none; margin: 6px 0 0; padding: 0; max-height: 320px; overflow-y: auto; display: grid; gap: 6px; }
+.smartx-route-change { all: unset; box-sizing: border-box; width: 100%; display: grid; gap: 2px; padding: 8px 10px; cursor: pointer; border: 1px solid var(--mud-palette-lines-default); border-radius: 8px; font-size: 0.8125rem; }
+.smartx-route-change:hover { background: var(--mud-palette-action-default-hover); }
+.smartx-route-change:focus-visible { outline: 2px solid var(--mud-palette-primary); outline-offset: 2px; }
+.smartx-route-change__head { display: flex; justify-content: space-between; gap: 8px; }
+.smartx-route-change__reason { font-weight: 600; }
+.smartx-route-change__path { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }

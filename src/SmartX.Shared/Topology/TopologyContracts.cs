@@ -118,7 +118,7 @@ public sealed record RouteHop(string Id, string Name);
 /// when the tree's gateway is the nearest, and often lower: the tree minimises the cost of the whole network, not of each device.
 /// </param>
 /// <param name="Hops">Every stop, the device first and the gateway last.</param>
-public sealed record RouteView(
+public sealed record RoutePathView(
     DateTimeOffset BuiltAt,
     string Device,
     bool CutOff,

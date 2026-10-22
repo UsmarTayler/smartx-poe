@@ -1,0 +1,173 @@
+@using SmartX.Client.Topology
+
+@* The mesh, drawn as SVG with no library. Every node is at the position it reported, in metres, and the viewBox does the scaling,
+   so the picture resizes with its container.
+
+   What each mark means, and why it is not colour alone:
+   - A device is a circle and a gateway is a square, so the two read apart in greyscale.
+   - A device's fill is its trust band, and the band's icon is drawn inside it. The band's word is in the node's tooltip and in the
+     side panel and the table.
+   - A weak point (a device whose failure would split the mesh) has a thick outline and the words "weak point".
+   - A link in the spanning tree is solid and prominent; every other link is thin and faint.
+   - A device with no path to a gateway, or left out of the mesh, is greyed and dashed.
+   - The selected device has a ring, and its route is drawn over the links in the accent colour, thicker.
+   Nodes are focusable and Enter or Space selects one, so the picture works without a mouse. The same facts are in a table
+   beneath it, for anyone who cannot use the picture. *@
+<div class="smartx-mesh-wrap">
+    <svg class="smartx-mesh" viewBox="@Picture.ViewBox" preserveAspectRatio="xMidYMid meet" role="group" aria-label="@MapLabel">
+        <title>@MapLabel</title>
+
+        @foreach (var link in Picture.Links)
+        {
+            <line class="@LinkClass(link)" x1="@N(link.X1)" y1="@N(link.Y1)" x2="@N(link.X2)" y2="@N(link.Y2)">
+                <title>@LinkTitle(link)</title>
+            </line>
+        }
+
+        @foreach (var link in Picture.Links.Where(OnRoute))
+        {
+            <line class="smartx-mesh__route" x1="@N(link.X1)" y1="@N(link.Y1)" x2="@N(link.X2)" y2="@N(link.Y2)" />
+        }
+
+        @foreach (var node in Picture.Nodes)
+        {
+            var band = node.Band is { } b ? TrustBandStyle.For(b) : (TrustBandStyle?)null;
+
+            <g class="@NodeClass(node)" transform="translate(@N(node.X) @N(node.Y))" tabindex="0" role="button"
+               aria-pressed="@(node.Id == Selected ? "true" : "false")" aria-label="@Label(node)"
+               @onclick="() => Pick(node.Id)" @onkeydown="e => OnKey(e, node.Id)" @key="node.Id">
+                <title>@Tooltip(node)</title>
+
+                @if (node.Id == Selected)
+                {
+                    <circle class="smartx-mesh__ring" r="@N(Radius + 1.9)" />
+                }
+
+                @if (node.IsGateway)
+                {
+                    <rect class="smartx-mesh__shape" x="@N(-Radius - 0.5)" y="@N(-Radius - 0.5)" width="@N(2 * Radius + 1)" height="@N(2 * Radius + 1)" rx="0.6" />
+                    <g class="smartx-mesh__icon smartx-mesh__icon--light" transform="translate(-1.7 -1.7) scale(0.142)" aria-hidden="true">@((MarkupString)Icons.Material.Filled.Router)</g>
+                }
+                else if (node.LeftOutReason is not null)
+                {
+                    <circle class="smartx-mesh__shape" r="@N(Radius)" />
+                    <g class="smartx-mesh__icon smartx-mesh__icon--dark" transform="translate(-1.7 -1.7) scale(0.142)" aria-hidden="true">@((MarkupString)Icons.Material.Filled.PowerOff)</g>
+                }
+                else
+                {
+                    <circle class="smartx-mesh__shape" r="@N(Radius)" style="fill: @(band?.Colour ?? "#6b6a66")" />
+                    @if (band is { } style)
+                    {
+                        <g class="@($"smartx-mesh__icon {(node.Band == TrustBand.Degrading ? "smartx-mesh__icon--dark" : "smartx-mesh__icon--light")}")"
+                           transform="translate(-1.7 -1.7) scale(0.142)" aria-hidden="true">@((MarkupString)style.Icon)</g>
+                    }
+                }
+
+                @if (node.IsWeakPoint)
+                {
+                    @* Razor reserves the <text> tag for its own use, so the SVG element is written as markup. *@
+                    @((MarkupString)$"<text class=\"smartx-mesh__weak\" y=\"{N(Radius + 3.6)}\" text-anchor=\"middle\">weak point</text>")
+                }
+            </g>
+        }
+    </svg>
+
+    <ul class="smartx-mesh-legend" aria-label="Legend">
+        <li><svg viewBox="-4 -4 8 8" width="18" height="18" aria-hidden="true"><circle r="2.6" class="smartx-mesh__shape" style="fill: var(--mud-palette-text-secondary)" /></svg> Device</li>
+        <li><svg viewBox="-4 -4 8 8" width="18" height="18" aria-hidden="true"><rect x="-2.8" y="-2.8" width="5.6" height="5.6" rx="0.6" class="smartx-mesh__shape smartx-mesh__gateway-swatch" /></svg> Gateway</li>
+        @foreach (var band in TrustBandStyle.InSeverityOrder)
+        {
+            <li><TrustStatusChip Band="band" /></li>
+        }
+        <li><svg viewBox="-4 -4 8 8" width="18" height="18" aria-hidden="true"><circle r="2.4" class="smartx-mesh__shape smartx-mesh__legend-weak" style="fill: var(--mud-palette-text-secondary)" /></svg> Weak point: its failure would split the mesh</li>
+        <li><svg viewBox="0 0 16 4" width="30" height="10" aria-hidden="true"><line x1="0" y1="2" x2="16" y2="2" class="smartx-mesh__link smartx-mesh__link--tree" /></svg> Spanning-tree link (the backbone)</li>
+        <li><svg viewBox="0 0 16 4" width="30" height="10" aria-hidden="true"><line x1="0" y1="2" x2="16" y2="2" class="smartx-mesh__link" /></svg> Other link</li>
+        <li><svg viewBox="0 0 16 4" width="30" height="10" aria-hidden="true"><line x1="0" y1="2" x2="16" y2="2" class="smartx-mesh__route smartx-mesh__route--swatch" /></svg> Selected device's route</li>
+        <li><svg viewBox="-4 -4 8 8" width="18" height="18" aria-hidden="true"><circle r="2.4" class="smartx-mesh__shape smartx-mesh__legend-out" /></svg> Cut off or left out (greyed, dashed)</li>
+    </ul>
+</div>
+
+@code {
+    private const double Radius = 2.5;
+
+    private HashSet<(string, string)> _route = [];
+
+    [Parameter, EditorRequired]
+    public MeshPicture Picture { get; set; } = MeshPicture.Empty;
+
+    /// <summary>The selected device's id, if any.</summary>
+    [Parameter]
+    public string? Selected { get; set; }
+
+    /// <summary>The selected device's route, device first and gateway last. Drawn over the links.</summary>
+    [Parameter]
+    public IReadOnlyList<string> RoutePath { get; set; } = [];
+
+    [Parameter]
+    public EventCallback<string> OnSelect { get; set; }
+
+    private string MapLabel =>
+        $"Mesh map: {Picture.Nodes.Count(node => !node.IsGateway):N0} devices and {Picture.Nodes.Count(node => node.IsGateway):N0} gateways, " +
+        $"{Picture.Links.Count:N0} links, {Picture.Links.Count(link => link.InTree):N0} of them in the spanning tree. " +
+        "The same information is in the table below the map.";
+
+    protected override void OnParametersSet() => _route = MeshPicture.PairsOf(RoutePath);
+
+    private static string N(double value) => value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+    private bool OnRoute(PictureLink link) => MeshPicture.Contains(_route, link.A, link.B);
+
+    private static string LinkClass(PictureLink link) => link.InTree ? "smartx-mesh__link smartx-mesh__link--tree" : "smartx-mesh__link";
+
+    private static string LinkTitle(PictureLink link) =>
+        $"{(link.InTree ? "Spanning-tree link" : "Link")}: {link.Rssi} dBm, cost {link.Cost:0.0}";
+
+    private string NodeClass(PictureNode node)
+    {
+        var classes = new List<string> { "smartx-mesh__node", node.IsGateway ? "smartx-mesh__node--gateway" : "smartx-mesh__node--device" };
+
+        if (node.IsWeakPoint)
+        {
+            classes.Add("smartx-mesh__node--weak");
+        }
+
+        if (node.IsUnavailable)
+        {
+            classes.Add("smartx-mesh__node--out");
+        }
+
+        if (node.Id == Selected)
+        {
+            classes.Add("smartx-mesh__node--selected");
+        }
+
+        return string.Join(' ', classes);
+    }
+
+    private static string Describe(PictureNode node)
+    {
+        var parts = new List<string> { node.Name };
+
+        parts.Add(node.IsGateway ? "gateway" : node.Band is { } band ? $"trust {TrustBandStyle.For(band).Label}" : "not in the mesh");
+
+        if (node.Reason is { } reason)
+        {
+            parts.Add(node.LeftOutReason is null ? $"cut off: {reason}" : $"left out: {reason}");
+        }
+
+        if (node.IsWeakPoint)
+        {
+            parts.Add(node.CutOffDevices > 0 ? $"weak point, {node.CutOffDevices} devices depend on it" : "weak point");
+        }
+
+        return string.Join(", ", parts);
+    }
+
+    private static string Label(PictureNode node) => Describe(node);
+
+    private static string Tooltip(PictureNode node) => $"{Describe(node)}{(node.Hops is { } hops && !node.IsGateway ? $", {hops} hops to {node.Gateway}" : string.Empty)}";
+
+    private Task Pick(string id) => OnSelect.InvokeAsync(id);
+
+    private Task OnKey(KeyboardEventArgs e, string id) => e.Key is "Enter" or " " ? Pick(id) : Task.CompletedTask;
+}

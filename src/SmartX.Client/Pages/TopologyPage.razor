@@ -1,0 +1,208 @@
+@page "/topology"
+@attribute [Authorize]
+@implements IAsyncDisposable
+@inject ITopologyApi Topology
+@inject ITopologyFeed Feed
+@inject AppState State
+@inject SensorService Catalog
+
+<PageTitle>Network Topology · Smart-X</PageTitle>
+
+<PageHeader Title="Network Topology and Mesh Routing"
+            Subtitle="The mesh as it is: who can hear whom, the cheapest backbone that connects it, where it would break, and what happens when a device drops out." />
+
+@* Live. The page draws the mesh from /api/topology and its neighbours, and asks for it again when the hub says the mesh has a new
+   revision. A push carries the revision and the route changes, not the mesh, so it stays small however big the network is. If the hub
+   cannot be reached the feed polls instead, and the same revision check applies. *@
+@if (_problem is not null && !_loaded)
+{
+    <ApiErrorState Problem="_problem" OnRetry="ReloadAsync" />
+}
+else if (!_loaded)
+{
+    <div aria-hidden="true"><MudSkeleton Height="320px" /></div>
+}
+else
+{
+    <div class="smartx-topo">
+        <div class="smartx-topo__map">
+            <MudPaper Outlined="true" Class="pa-3">
+                <MudText Typo="Typo.h6" HtmlTag="h2" Class="mb-1">Mesh map</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary" role="status" aria-live="polite">
+                    @Summary
+                </MudText>
+
+                @if (_problem is not null)
+                {
+                    <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="my-2" role="status">Showing the last map: @_problem.Message</MudAlert>
+                }
+
+                <MeshMap Picture="_picture" Selected="State.TopologyDevice" RoutePath="RoutePath" OnSelect="Toggle" />
+            </MudPaper>
+
+            <MudPaper Outlined="true" Class="pa-3 mt-3">
+                <MudText Typo="Typo.h6" HtmlTag="h2" Class="mb-1">Devices as a table</MudText>
+                <TopologyTable Picture="_picture" Selected="State.TopologyDevice" OnSelect="Choose" />
+            </MudPaper>
+        </div>
+
+        <div class="smartx-topo__side">
+            <DevicePicker OnPick="Choose" />
+            <RoutePanel Node="SelectedNode" Route="_route" />
+            <DeviceHistoryLog Mac="SelectedNode?.Id" Name="SelectedNode?.Name" />
+            <RouteChangesFeed Changes="Feed.Current.Changes" OnSelect="OnChangeChosen" />
+        </div>
+    </div>
+}
+
+@code {
+    private MeshPicture _picture = MeshPicture.Empty;
+    private RoutePathView? _route;
+    private ApiProblem? _problem;
+    private bool _loaded;
+    private bool _loading;
+    private bool _again;
+    private long _drawnRevision = -1;
+    private string? _routeFor;
+
+    private PictureNode? SelectedNode => _picture.Find(State.TopologyDevice);
+
+    private IReadOnlyList<string> RoutePath => _route is { CutOff: false } route ? [.. route.Hops.Select(hop => hop.Id)] : [];
+
+    private string Summary
+    {
+        get
+        {
+            var devices = _picture.Nodes.Count(node => !node.IsGateway);
+            var gateways = _picture.Nodes.Count(node => node.IsGateway);
+            var weak = _picture.Nodes.Count(node => node.IsWeakPoint);
+            var out_ = _picture.Nodes.Count(node => node.IsUnavailable);
+
+            return $"{devices:N0} devices and {gateways:N0} gateways, {_picture.Links.Count:N0} links, {_picture.Links.Count(link => link.InTree):N0} in the spanning tree. " +
+                   $"{weak:N0} weak {(weak == 1 ? "point" : "points")}. {out_:N0} {(out_ == 1 ? "device" : "devices")} cut off or left out.";
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        // The catalogue names zones in the table. Refreshed on every visit, as the other pages do.
+        await Catalog.LoadAsync();
+
+        Feed.Updated += OnFeed;
+        State.Changed += OnState;
+
+        await Feed.StartAsync();
+        await ReloadAsync();
+    }
+
+    private void OnFeed()
+    {
+        // A new revision is a new picture. Anything else the feed carries (a route change arriving) re-renders the list only.
+        if (Feed.Current.IsLoaded && Feed.Current.Revision != _drawnRevision)
+        {
+            _ = InvokeAsync(async () =>
+            {
+                await ReloadAsync();
+                StateHasChanged();
+            });
+        }
+        else
+        {
+            _ = InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void OnState() => _ = InvokeAsync(StateHasChanged);
+
+    /// <summary>Fetches the graph, the spanning tree, reachability and the weak points together, and the selected device's route.</summary>
+    private async Task ReloadAsync()
+    {
+        if (_loading)
+        {
+            // A reload is already in flight. Say so, and it will go round once more when it finishes, so a revision that
+            // arrives while it is loading is not lost.
+            _again = true;
+
+            return;
+        }
+
+        do
+        {
+            _again = false;
+            _loading = true;
+
+            var revision = Feed.Current.Revision;
+            var topology = Topology.GetTopologyAsync();
+            var mst = Topology.GetMstAsync();
+            var reachability = Topology.GetReachabilityAsync();
+            var weak = Topology.GetArticulationPointsAsync();
+
+            await Task.WhenAll(topology, mst, reachability, weak);
+
+            var failed = new[] { topology.Result.Problem, mst.Result.Problem, reachability.Result.Problem, weak.Result.Problem }.FirstOrDefault(problem => problem is not null);
+
+            if (failed is null)
+            {
+                _picture = MeshPicture.Build(topology.Result.Value, mst.Result.Value, reachability.Result.Value, weak.Result.Value);
+                _drawnRevision = revision;
+                _loaded = true;
+                _problem = null;
+            }
+            else
+            {
+                _problem = failed;
+            }
+
+            _loading = false;
+
+            await LoadRouteAsync();
+        }
+        while (_again);
+    }
+
+    private async Task LoadRouteAsync()
+    {
+        var selected = State.TopologyDevice;
+        _routeFor = selected;
+
+        if (selected is null || SelectedNode is { IsGateway: true })
+        {
+            _route = null;
+
+            return;
+        }
+
+        var result = await Topology.GetRouteAsync(selected);
+
+        // The selection may have moved while the route was in flight.
+        if (_routeFor == selected)
+        {
+            _route = result.IsSuccess ? result.Value : null;
+        }
+    }
+
+    /// <summary>Clicking the map: the same device again lets go of it.</summary>
+    private Task Toggle(string id) => Choose(State.TopologyDevice == id ? null : id);
+
+    /// <summary>Choosing a device from the table or the search: it is selected, and stays selected if chosen again.</summary>
+    private async Task Choose(string? id)
+    {
+        State.SelectTopologyDevice(id);
+        await LoadRouteAsync();
+    }
+
+    private async Task OnChangeChosen(RouteChangeView change)
+    {
+        // Choosing a healed route selects its device, so the route it has now is the one drawn.
+        State.SelectTopologyDevice(change.Device);
+        await LoadRouteAsync();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Feed.Updated -= OnFeed;
+        State.Changed -= OnState;
+
+        await Feed.StopAsync();
+    }
+}

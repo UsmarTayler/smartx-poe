@@ -293,7 +293,7 @@ public class MeshRoutingTests
         using var _ = api;
         var http = api.AsViewer();
 
-        var route = await http.GetFromJsonAsync<RouteView>($"/api/topology/route/{C}");
+        var route = await http.GetFromJsonAsync<RoutePathView>($"/api/topology/route/{C}");
 
         Assert.False(route!.CutOff);
         Assert.Equal([C, B, A, "GATEWAY-1"], route.Hops.Select(hop => hop.Id));

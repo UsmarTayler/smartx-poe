@@ -1,0 +1,47 @@
+@* Routes that have healed, newest first. A route is only here if what it was made of has gone: a device left the mesh or a link was
+   lost. The list sits in a polite live region, so a screen reader is told when a new one arrives without being interrupted. Each entry
+   says which device, the route it had, the route it has, and why; choosing one selects the device, so its new route is drawn. *@
+<MudPaper Outlined="true" Class="pa-3" role="region" aria-label="Route changes">
+    <MudText Typo="Typo.h6" HtmlTag="h2" Class="mb-1">Route changes</MudText>
+
+    <div aria-live="polite" aria-relevant="additions">
+        @if (Changes.Count == 0)
+        {
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">No route has changed lately. When a device leaves the mesh, the routes that went through it appear here.</MudText>
+        }
+        else
+        {
+            <ol class="smartx-route-changes">
+                @foreach (var change in Changes)
+                {
+                    <li @key="change.Id">
+                        <button type="button" class="smartx-route-change" @onclick="() => OnSelect.InvokeAsync(change)">
+                            <span class="smartx-route-change__head">
+                                <strong>@change.Name</strong>
+                                <span class="mud-text-secondary">@ReadingFormatter.Time(change.At)</span>
+                            </span>
+                            <span class="smartx-route-change__reason">@Short(change.Reason)</span>
+                            <span class="smartx-route-change__path"><span class="mud-text-secondary">was</span> @Path(change.OldPath)</span>
+                            <span class="smartx-route-change__path"><span class="mud-text-secondary">now</span> @Path(change.NewPath)</span>
+                        </button>
+                    </li>
+                }
+            </ol>
+        }
+    </div>
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<RouteChangeView> Changes { get; set; } = [];
+
+    [Parameter]
+    public EventCallback<RouteChangeView> OnSelect { get; set; }
+
+    /// <summary>The route as the last five characters of each MAC, which is how people tell these devices apart at a glance.</summary>
+    private static string Path(IReadOnlyList<string>? path) =>
+        path is null ? "no route" : string.Join(" › ", path.Select(Short));
+
+    private static string Short(string id) =>
+        id.StartsWith("GATEWAY", StringComparison.Ordinal) ? id : System.Text.RegularExpressions.Regex.Replace(id, "[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}", match => match.Value[^5..]);
+}

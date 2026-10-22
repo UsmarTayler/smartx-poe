@@ -1,0 +1,184 @@
+@inject IOperatorApi Api
+@inject ITopologyApi Topology
+@inject IChartSizing Sizing
+@inject TimeProvider Time
+
+@* A device's readings over a time range, from the history tree. The chart and its table are the Command Stream's, so there is one
+   way of drawing a device's history; what this adds is the range (a preset, or any from and to) and a line saying how long the
+   tree took to find the window. "Found 120 readings in 3 µs" is the AVL tree's range query made visible: a seek to the start of the
+   window and a walk across it, whatever the size of the history. The count comes from the timeline, which counts every reading
+   in the window; the time comes from the range endpoint, which times the query itself and not the network. *@
+<MudPaper Outlined="true" Class="pa-3" role="region" aria-label="Reading history">
+    <MudText Typo="Typo.h6" HtmlTag="h2" Class="mb-1">Reading history</MudText>
+
+    @if (Mac is null)
+    {
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">Choose a device to see its readings over a time range.</MudText>
+    }
+    else
+    {
+        <div class="smartx-detail__range" role="group" aria-label="Time range">
+            @foreach (var preset in Presets)
+            {
+                <MudButton Size="Size.Small" Variant="@(_preset == preset.Key ? Variant.Filled : Variant.Outlined)" Color="Color.Primary"
+                           OnClick="() => ChoosePresetAsync(preset.Key)" aria-pressed="@(_preset == preset.Key ? "true" : "false")">@preset.Value.Label</MudButton>
+            }
+        </div>
+
+        <div class="smartx-history-custom">
+            <label>From <input type="datetime-local" @bind="_from" @bind:format="yyyy-MM-ddTHH:mm" /></label>
+            <label>To <input type="datetime-local" @bind="_to" @bind:format="yyyy-MM-ddTHH:mm" /></label>
+            <MudButton Size="Size.Small" Variant="@(_preset is null ? Variant.Filled : Variant.Outlined)" Color="Color.Primary"
+                       Disabled="@(_from is null || _to is null)" OnClick="ChooseCustomAsync">Show this range</MudButton>
+        </div>
+
+        @if (_problem is not null)
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="my-2" role="status">@_problem</MudAlert>
+        }
+
+        @if (_found is { } found)
+        {
+            <MudText Typo="Typo.body2" Class="my-2" role="status" aria-live="polite">
+                Found <strong>@found.Readings.ToString("N0")</strong> @(found.Readings == 1 ? "reading" : "readings") in
+                <strong>@found.Microseconds.ToString("N0") µs</strong>
+            </MudText>
+        }
+
+        @if (_loading && _timeline is null)
+        {
+            <div aria-hidden="true"><MudSkeleton Height="160px" /></div>
+        }
+        else
+        {
+            <TimelineChart Timeline="_timeline" Width="_width" Title="@($"{Name} readings")" />
+        }
+    }
+</MudPaper>
+
+@code {
+    private sealed record Preset(string Label, TimeSpan Length);
+
+    private static readonly Dictionary<string, Preset> Presets = new()
+    {
+        ["15m"] = new("15 min", TimeSpan.FromMinutes(15)),
+        ["1h"] = new("1 hour", TimeSpan.FromHours(1)),
+        ["2h"] = new("2 hours", TimeSpan.FromHours(2)),
+        ["24h"] = new("24 hours", TimeSpan.FromHours(24)),
+    };
+
+    private readonly record struct Found(int Readings, double Microseconds);
+
+    private string? _loadedFor;
+    private string? _preset = "1h";
+    private DateTime? _from;
+    private DateTime? _to;
+    private SensorTimeline? _timeline;
+    private Found? _found;
+    private string? _problem;
+    private bool _loading;
+    private int _width = 480;
+    private int _version;
+
+    /// <summary>The device whose history to show, or null for none.</summary>
+    [Parameter]
+    public string? Mac { get; set; }
+
+    /// <summary>A label for the chart.</summary>
+    [Parameter]
+    public string? Name { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Mac != _loadedFor)
+        {
+            _loadedFor = Mac;
+            _timeline = null;
+            _found = null;
+            _problem = null;
+
+            if (Mac is not null)
+            {
+                await LoadAsync();
+            }
+        }
+    }
+
+    private Task ChoosePresetAsync(string key)
+    {
+        _preset = key;
+
+        return LoadAsync();
+    }
+
+    private Task ChooseCustomAsync()
+    {
+        _preset = null;
+
+        return LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (Mac is null)
+        {
+            return;
+        }
+
+        DateTimeOffset from, to;
+
+        if (_preset is { } key)
+        {
+            to = Time.GetUtcNow();
+            from = to - Presets[key].Length;
+            _from = from.ToLocalTime().DateTime;
+            _to = to.ToLocalTime().DateTime;
+        }
+        else if (_from is { } customFrom && _to is { } customTo)
+        {
+            // The inputs are local times, because that is what a person types.
+            from = new DateTimeOffset(DateTime.SpecifyKind(customFrom, DateTimeKind.Local)).ToUniversalTime();
+            to = new DateTimeOffset(DateTime.SpecifyKind(customTo, DateTimeKind.Local)).ToUniversalTime();
+        }
+        else
+        {
+            return;
+        }
+
+        if (from >= to)
+        {
+            _problem = "The start of the range must be before its end.";
+
+            return;
+        }
+
+        var mac = Mac;
+        var version = ++_version;
+        _loading = true;
+        _problem = null;
+        _width = await Sizing.WidthAsync();
+
+        // Two questions of the same window: the chart's buckets, and how long the tree took to find it. The second asks for one reading
+        // only; the timing is of the whole query, not of the page of results.
+        var timeline = await Api.GetTimelineAsync(mac, from, to, ChartSizes.MaxPointsFor(_width));
+        var range = await Topology.GetHistoryRangeAsync(mac, from, to, 1);
+
+        if (version != _version || mac != Mac)
+        {
+            // Another range or another device was chosen while this was loading.
+            return;
+        }
+
+        _loading = false;
+
+        if (timeline.IsSuccess)
+        {
+            _timeline = timeline.Value;
+            _found = range.IsSuccess ? new Found(timeline.Value.ReadingCount, range.Value.QueryMicroseconds) : null;
+        }
+        else
+        {
+            _problem = timeline.Problem.Message;
+        }
+    }
+}

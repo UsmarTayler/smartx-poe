@@ -20,7 +20,7 @@ public interface ITopologyApi
 
     Task<ApiResult<ArticulationView>> GetArticulationPointsAsync(CancellationToken cancellationToken = default);
 
-    Task<ApiResult<RouteView>> GetRouteAsync(string macAddress, CancellationToken cancellationToken = default);
+    Task<ApiResult<RoutePathView>> GetRouteAsync(string macAddress, CancellationToken cancellationToken = default);
 
     Task<ApiResult<HistoryRange>> GetHistoryRangeAsync(
         string macAddress, DateTimeOffset from, DateTimeOffset to, int limit, CancellationToken cancellationToken = default);
@@ -40,7 +40,7 @@ public sealed class TopologyApi(SmartXApiClient api, ApiConnection connection) :
     public Task<ApiResult<ArticulationView>> GetArticulationPointsAsync(CancellationToken cancellationToken = default) =>
         Reported(api.GetArticulationPointsAsync(cancellationToken));
 
-    public Task<ApiResult<RouteView>> GetRouteAsync(string macAddress, CancellationToken cancellationToken = default) =>
+    public Task<ApiResult<RoutePathView>> GetRouteAsync(string macAddress, CancellationToken cancellationToken = default) =>
         Reported(api.GetRouteAsync(macAddress, cancellationToken));
 
     public Task<ApiResult<HistoryRange>> GetHistoryRangeAsync(

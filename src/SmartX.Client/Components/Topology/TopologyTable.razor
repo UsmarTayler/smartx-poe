@@ -1,0 +1,53 @@
+@using SmartX.Client.Topology
+@inject SensorService Catalog
+
+@* The same facts as the drawing, as a table: for a screen reader, and for anyone who finds a list easier than a picture. One row
+   per device, built from the same MeshPicture the drawing is, so the two cannot disagree. A row selects its device. *@
+<div class="smartx-topo-table-wrap">
+    <table class="smartx-topo-table">
+        <caption>Devices in the mesh, with their zone, trust band, gateway, hops and whether they are a weak point</caption>
+        <thead>
+            <tr>
+                <th scope="col">Device</th>
+                <th scope="col">Zone</th>
+                <th scope="col">Trust band</th>
+                <th scope="col">Nearest gateway</th>
+                <th scope="col">Hops</th>
+                <th scope="col">Weak point</th>
+                <th scope="col">Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var node in Devices)
+            {
+                <tr @key="node.Id" aria-selected="@(node.Id == Selected ? "true" : "false")">
+                    <th scope="row">
+                        <button type="button" class="smartx-link-button" @onclick="() => OnSelect.InvokeAsync(node.Id)">@node.Name</button>
+                        <span class="smartx-mono mud-text-secondary">@node.Id[^5..]</span>
+                    </th>
+                    <td>@(node.ZoneId is { } zone ? Catalog.ZonePath(zone) : "—")</td>
+                    <td>@(node.Band is { } band ? TrustBandStyle.For(band).Label : "—")</td>
+                    <td>@(node.Gateway ?? "—")</td>
+                    <td>@(node.Hops?.ToString() ?? "—")</td>
+                    <td>@(node.IsWeakPoint ? $"Yes, {node.CutOffDevices} depend on it" : "No")</td>
+                    <td>@(node.Reason is { } reason ? (node.LeftOutReason is null ? $"Cut off: {reason}" : $"Left out: {reason}") : "In the mesh")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public MeshPicture Picture { get; set; } = MeshPicture.Empty;
+
+    [Parameter]
+    public string? Selected { get; set; }
+
+    [Parameter]
+    public EventCallback<string> OnSelect { get; set; }
+
+    /// <summary>Devices and gateways both: a gateway can be a weak point too. Devices first, in the order of their names.</summary>
+    private IEnumerable<PictureNode> Devices =>
+        Picture.Nodes.OrderBy(node => node.IsGateway).ThenBy(node => node.Name, StringComparer.OrdinalIgnoreCase).ThenBy(node => node.Id, StringComparer.Ordinal);
+}

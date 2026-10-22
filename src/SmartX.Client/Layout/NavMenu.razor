@@ -1,7 +1,4 @@
-@* The three pillars of the brief. The first two are built; the third is listed and visibly disabled. Hiding it would
-   make the system look smaller than its scope, and an operator should be able to see where the product is going. The
-   disabled entry is styled to stay legible (see app.css) rather than fading to the framework's default disabled grey,
-   and carries a chip saying which part delivers it, so "disabled" reads as "not yet" rather than "broken".
+@* The three pillars of the brief, all built and all behaving the same way: each is a group that holds its pages.
 
    The active pillar is the one that holds the page being shown. Each pillar is a group, expanded while one of its pages is
    open, so the menu says where you are at the level of the product and not only of the page. *@
@@ -22,10 +19,9 @@
         <MudNavLink Href="command-stream" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Podcasts">Command stream</MudNavLink>
     </MudNavGroup>
 
-    <MudNavLink Disabled="true" Icon="@Icons.Material.Filled.Lan" Class="smartx-future-pillar" aria-disabled="true">
-        <span class="smartx-future-pillar__label">
-            Network Topology and Mesh Routing
-            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="ml-1">Part 3</MudChip>
-        </span>
-    </MudNavLink>
+    <MudNavGroup Title="Network Topology and Mesh Routing"
+                 Icon="@Icons.Material.Filled.Lan"
+                 Expanded="true">
+        <MudNavLink Href="topology" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Hub">Mesh topology</MudNavLink>
+    </MudNavGroup>
 </MudNavMenu>

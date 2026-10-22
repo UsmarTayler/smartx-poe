@@ -189,8 +189,8 @@ public sealed class SmartXApiClient(HttpClient http)
         GetAsync<ArticulationView>("api/topology/articulation-points", cancellationToken);
 
     /// <summary>One device's route to its gateway along the tree.</summary>
-    public Task<ApiResult<RouteView>> GetRouteAsync(string macAddress, CancellationToken cancellationToken = default) =>
-        GetAsync<RouteView>($"api/topology/route/{Uri.EscapeDataString(macAddress)}", cancellationToken);
+    public Task<ApiResult<RoutePathView>> GetRouteAsync(string macAddress, CancellationToken cancellationToken = default) =>
+        GetAsync<RoutePathView>($"api/topology/route/{Uri.EscapeDataString(macAddress)}", cancellationToken);
 
     /// <summary>One sensor's raw readings in a window, from the history tree, with how long the tree took to find them.</summary>
     public Task<ApiResult<HistoryRange>> GetHistoryRangeAsync(

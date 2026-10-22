@@ -222,10 +222,10 @@ internal static class TopologyEndpoints
             var reason = snapshot.Excluded.FirstOrDefault(excluded => excluded.Id == canonical)?.Reason
                 ?? (snapshot.Graph.Contains(canonical) ? "No path to any gateway" : "No neighbour report yet");
 
-            return Results.Ok(new RouteView(snapshot.BuiltAt, canonical, true, reason, null, null, null, null, []));
+            return Results.Ok(new RoutePathView(snapshot.BuiltAt, canonical, true, reason, null, null, null, null, []));
         }
 
-        return Results.Ok(new RouteView(
+        return Results.Ok(new RoutePathView(
             snapshot.BuiltAt,
             canonical,
             false,
