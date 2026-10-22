@@ -45,6 +45,8 @@ Entries U1 to U12 each name their own source (a review of the code, a test, a li
 | [U21](#u21-the-api-had-no-authentication) | 2026-10-14 | API, client, simulator | Add a login with roles, per-device keys, a protected hub and a login page; protect every endpoint but health and login | `5b33a2b`, `b845474`, `76355a3`, `3fcb356`, `7920580`, `94be739`, `36d261e`, `fbe6bb3`, `1041e6b` |
 | [U22](#u22-history-range-queries-walked-from-the-oldest-entry) | 2026-10-22 | History | Replace the sorted-dictionary store with an AVL tree as the default, so a time-range query seeks | `6b706e9`, `ea4e45c`, `df974a5`, `ecfefe0` |
 | [U23](#u23-the-mesh-was-not-modelled-as-a-network) | 2026-10-22 | Topology | Model the mesh as a weighted graph built from device-reported neighbours, with breadth-first reachability and articulation points | `e52b330`, `ce6c806`, `39d0dac` |
+| [U24](#u24-the-backbone-of-the-mesh-and-what-happens-when-part-of-it-fails) | 2026-10-22 | Topology | Compute the minimum spanning tree (Prim's, checked by Kruskal's), route devices along it, compare with shortest paths, and record routes that heal | `380db8a`, `69fed7a`, `25d9b52`, `4a15b8a` |
+| [U25](#u25-the-test-suite-had-redundant-and-slow-tests) | 2026-10-22 | Tests | Remove duplicate tests and run theory rows on one host, using the test audit: 1,429 tests to 1,347 and 26 s to 20 s | `4eeb56a`, `5733243`, `2a47ae4`, `89d1fa1`, `16c9582` |
 
 ---
 
@@ -670,10 +672,46 @@ Considered and not done: giving the simulator an Operator login to register (a p
 
 ---
 
+## U24. The backbone of the mesh, and what happens when part of it fails
+
+**Source:** the Part 3 brief ("implement Prim's or Kruskal's algorithm to calculate the Minimum Spanning Tree of the network ... the most power-efficient routing path for telemetry data to hop through the mesh nodes to reach the central server"), and the graph built in U23, which could say what was connected but not how to connect it cheaply.
+
+**What was wrong.** The mesh graph answered "what can reach a gateway" (breadth-first) and "what can we not lose" (articulation points), but it had no notion of a route: nothing chose which links to use, so nothing said how much it costs to keep the network connected, or what a device's path to its gateway is. When a device failed, the graph was rebuilt without it and nothing recorded what that did to anyone's route.
+
+**Why it mattered.** Choosing links is the part of mesh routing the brief marks; and "the mesh heals itself" is a claim that needs something to show for it.
+
+**What changed.** `MeshSpanning` (from scratch, in `SmartX.Shared`): Prim's algorithm with a lazy `PriorityQueue` that skips stale entries (O(E log E)); several gateways handled by a virtual root joined to each at cost 0, run from, then dropped, which gives one tree per gateway; Kruskal's algorithm with a `DisjointSet` (path compression and union by rank) as the independent check; and Dijkstra's algorithm, run from all gateways at once, for the cheapest cost of each device on its own. Devices with no path to a gateway (U23's cut-off list) are left out of both trees. A device is routed along the tree, not by Dijkstra's, because the tree is the backbone: it minimises the cost of the whole network, so a device's route through it can cost more than its own best, and the endpoint returns both. The spanning forest belongs to the topology snapshot, so it cannot disagree with the graph it is shown beside. Self-healing is a record and not a mechanism, because routes are recomputed from each snapshot anyway: each new snapshot is compared with the last, and a device whose route has broken (a device left the graph, or a link was lost) gets a route change with the old and new path and a reason such as `28 excluded: Stale`, kept in a ring buffer of 200. A timer rebuilds the snapshot every 5 seconds so a change is noticed when it happens and not at the next read. New: `GET /api/topology/mst`, `GET /api/topology/route/{mac}`, `GET /api/topology/route-changes`, all under the Viewer policy. In the seeded layout the tree weighs 74.95 over 55 links, Prim's and Kruskal's agree, and 29 of 55 devices have a tree route dearer than their shortest path.
+
+The first version recorded every change of path, and in Docker produced 79 route changes in 40 seconds on a healthy mesh: trust scores move all the time, so the tree flipped between near-equal routes with every wobble, and every flip was "a link on the route changed". It now records a change only when the old route no longer holds, and nothing in the first 30 seconds while the fleet's reports are still arriving. Same mesh afterwards: 11 changes in the minute around a real failure, every one of them caused by a device that really had left (ten by the device taken off the air, one by a device that fell into Fault). Checked in Docker with no `.env` and a 5-second report interval: a device on eight routes (not an articulation point) set to Disconnect, and about 14 seconds later nine route changes were recorded (the device's own and eight of the routes that had passed through it), each with the reason `excluded: Stale` and none of the new routes going through it.
+
+- `src/SmartX.Shared/Topology/MeshSpanning.cs`, `TopologyContracts.cs`, `MeshLayout.cs` (now uses `DisjointSet`)
+- `src/SmartX.Api/Topology/TopologyService.cs`, `TopologyRefreshService.cs`, `TopologyOptions.cs`, `src/SmartX.Api/Endpoints/TopologyEndpoints.cs`, `Program.cs`, `appsettings.json`
+- `tests/SmartX.Tests/MeshRoutingTests.cs`
+
+**Commits:** `380db8a` the algorithms, `69fed7a` routes, the route record and the endpoints, `25d9b52` tests, `4a15b8a` record a change only when the old route no longer holds
+
+---
+
+## U25. The test suite had redundant and slow tests
+
+**Source:** the test audit written at the end of Prompt 19 (`TEST_AUDIT.md`), which sorted all 1,429 tests by whether anything else proved the same thing and by how long they took.
+
+**What was wrong.** Three kinds of waste. Duplicates: HTTP tests that repeated what a unit test of the same logic already proved more precisely (device search filters tested through the endpoint and again against the index, timeline downsampling tested through the endpoint and again against the builder). Near-duplicates: four tests of one record's equality, six that each asserted "mixing units throws" for a different operator. And Theory rows that each started a whole `WebApplicationFactory` host (about a second each) to ask one question: fourteen of them in the device search tests alone, eleven in the token tests.
+
+**Why it mattered.** The suite is run before every merge, and its time went mostly on starting hosts. A duplicate test also costs when behaviour changes on purpose: it has to be found and updated twice.
+
+**What changed.** Test files only, apart from one parameter. Five search, five telemetry, three history, one alert, one end-to-end and one command-service test removed, each after reading the test that covers it; two of the audit's claims did not hold and were kept or corrected (see `TEST_AUDIT.md`). Near-duplicates collapsed (4 into 2, 2 into 1, 6 into 2, and two folds in the login tests). Theory rows that start their own host became one test on one host looping over the cases, with an assertion message naming the failing case, in eleven classes; theories of pure functions were left alone, because they cost nothing and show exactly which case broke. The login throttle's table cap became a constructor parameter (default unchanged) so its flood test could use 100 names and not 10,000: it took 3.1 seconds because each new name past the cap scanned the whole table, and takes 13 milliseconds. **1,429 tests became 1,347 and the full run went from 26 seconds to 20.** The contract suites, the endpoint-protection test and the randomised comparisons were not touched.
+
+- `tests/SmartX.Tests/` (about twenty files), `src/SmartX.Api/Security/LoginThrottle.cs` (the cap)
+
+**Commits:** `4eeb56a` removals, `5733243` near-duplicates, `2a47ae4` and `89d1fa1` theories on one host, `16c9582` throttle cap and sampling intervals
+
+---
+
 ## Entry template
 
 ```markdown
-## U24. Short title of the problem
+## U26. Short title of the problem
 
 **Source:** how it was found: lecturer feedback on Part 1, code review, a test, a live run
 
