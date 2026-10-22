@@ -126,7 +126,7 @@ public static class MeshLayout
         }
 
         var tables = fleet.ToDictionary(device => device.MacAddress, _ => new List<PlannedLink>(), StringComparer.Ordinal);
-        var joined = new UnionFind(positions.Keys);
+        var joined = new DisjointSet(positions.Keys);
 
         void Hear(string reporter, string heard)
         {
@@ -166,7 +166,7 @@ public static class MeshLayout
         // gateway cannot report), joins them, and repeats. This is Kruskal's idea applied to islands, and it ends with one network.
         var vertices = positions.Keys.Order(StringComparer.Ordinal).ToList();
 
-        while (joined.Components > 1)
+        while (joined.Count > 1)
         {
             (string Reporter, string Heard, double Distance)? best = null;
 
@@ -230,43 +230,5 @@ public static class MeshLayout
         }
 
         return hash;
-    }
-
-    /// <summary>Tracks which vertices are already connected, and how many separate networks remain.</summary>
-    private sealed class UnionFind
-    {
-        private readonly Dictionary<string, string> _parent;
-
-        public UnionFind(IEnumerable<string> ids)
-        {
-            _parent = ids.ToDictionary(id => id, id => id, StringComparer.Ordinal);
-            Components = _parent.Count;
-        }
-
-        public int Components { get; private set; }
-
-        public bool Connected(string a, string b) => Find(a) == Find(b);
-
-        public void Union(string a, string b)
-        {
-            var (rootA, rootB) = (Find(a), Find(b));
-
-            if (rootA != rootB)
-            {
-                _parent[rootA] = rootB;
-                Components--;
-            }
-        }
-
-        private string Find(string id)
-        {
-            while (_parent[id] != id)
-            {
-                _parent[id] = _parent[_parent[id]];
-                id = _parent[id];
-            }
-
-            return id;
-        }
     }
 }
