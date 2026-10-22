@@ -83,6 +83,7 @@ builder.Services.AddScoped<ICommandFeed, CommandFeed>();
 builder.Services.AddScoped<ITelemetryStream, TelemetryStream>();
 builder.Services.AddScoped<IPipelineFeed, PipelineFeed>();
 builder.Services.AddScoped<ISuggestionFeed, SuggestionFeed>();
+builder.Services.AddScoped<ITopologyFeed, TopologyFeed>();
 
 // The Command Stream page. Its services are scoped for the same reason as the feeds: the stream's buffer, the search
 // result and the pinned critical readings outlive the page, so leaving and coming back finds them where they were.
@@ -91,6 +92,7 @@ var streamOptions = builder.Configuration.GetSection(CommandStreamOptions.Sectio
 
 builder.Services.AddSingleton(streamOptions);
 builder.Services.AddScoped<IOperatorApi, OperatorApi>();
+builder.Services.AddScoped<ITopologyApi, TopologyApi>();
 builder.Services.AddScoped<IDeviceFeedFactory, DeviceFeedFactory>();
 builder.Services.AddScoped<DeviceSearchService>();
 builder.Services.AddScoped<SuggestionActions>();

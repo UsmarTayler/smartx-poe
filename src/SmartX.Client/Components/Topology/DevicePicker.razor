@@ -1,0 +1,74 @@
+@implements IDisposable
+@inject DeviceSearchService Search
+@inject AppState State
+
+@* Finding a device by MAC address or name: the Command Stream's search bar, unchanged, with its results as a short list. Choosing a
+   device selects it on the map. The search and its filters are the same state as on the Command Stream page, so what was typed
+   there is still here. *@
+<MudPaper Outlined="true" Class="pa-3" role="region" aria-label="Find a device">
+    <MudText Typo="Typo.h6" HtmlTag="h2" Class="mb-2">Track a device</MudText>
+
+    <DeviceSearchBar />
+
+    @if (Search.Problem is not null)
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="mt-2" role="status">
+            @(Search.Result is null ? "The search failed" : "Showing the last result"): @Search.Problem.Message
+        </MudAlert>
+    }
+
+    @if (Search.Result is { } result)
+    {
+        @if (result.Devices.Count == 0)
+        {
+            <EmptyState Icon="@Icons.Material.Outlined.SearchOff" Title="No devices match" Text="Clear a filter to widen the search." />
+        }
+        else
+        {
+            <div class="smartx-devices smartx-devices--short" role="list" aria-label="Matching devices">
+                @foreach (var hit in result.Devices.Take(Shown))
+                {
+                    <div role="listitem" @key="hit.MacAddress">
+                        <button type="button" class="smartx-device-row" aria-pressed="@(State.TopologyDevice == hit.MacAddress ? "true" : "false")"
+                                @onclick="() => OnPick.InvokeAsync(hit.MacAddress)">
+                            <span class="smartx-device-row__name">@hit.Room</span>
+                            <TrustStatusChip Band="hit.Band" />
+                            <span class="smartx-device-row__meta">@hit.Category · <span class="smartx-mono">@hit.MacAddress</span></span>
+                        </button>
+                    </div>
+                }
+            </div>
+
+            @if (result.Devices.Count > Shown)
+            {
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">Showing the first @Shown of @result.Devices.Count.ToString("N0"). Type more of the name or address to narrow it.</MudText>
+            }
+        }
+    }
+</MudPaper>
+
+@code {
+    private const int Shown = 8;
+
+    [Parameter]
+    public EventCallback<string> OnPick { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Search.Changed += OnChanged;
+        State.Changed += OnChanged;
+
+        if (Search.Result is null)
+        {
+            await Search.RefreshNowAsync();
+        }
+    }
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        Search.Changed -= OnChanged;
+        State.Changed -= OnChanged;
+    }
+}

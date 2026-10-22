@@ -6,6 +6,7 @@ using SmartX.Api.Alerts;
 using SmartX.Api.Commands;
 using SmartX.Api.Ingestion;
 using SmartX.Api.Patterns;
+using SmartX.Api.Topology;
 using SmartX.Api.Trust;
 using SmartX.Shared;
 
@@ -53,6 +54,7 @@ internal sealed class RealtimeBroadcaster : BackgroundService
     private readonly ProcessedReadings _processed;
     private readonly ISuggestionService _suggestions;
     private readonly InsightService _insights;
+    private readonly TopologyService _topology;
     private readonly TelemetryIngestionQueue _queue;
     private readonly IHubContext<TelemetryHub, ITelemetryClient> _hub;
     private readonly RealtimeSubscriptions _subscriptions;
@@ -91,6 +93,7 @@ internal sealed class RealtimeBroadcaster : BackgroundService
         ProcessedReadings processed,
         ISuggestionService suggestions,
         InsightService insights,
+        TopologyService topology,
         TelemetryIngestionQueue queue,
         IHubContext<TelemetryHub, ITelemetryClient> hub,
         RealtimeSubscriptions subscriptions,
@@ -104,6 +107,7 @@ internal sealed class RealtimeBroadcaster : BackgroundService
         _processed = processed;
         _suggestions = suggestions;
         _insights = insights;
+        _topology = topology;
         _queue = queue;
         _hub = hub;
         _subscriptions = subscriptions;
@@ -125,6 +129,7 @@ internal sealed class RealtimeBroadcaster : BackgroundService
         _processed.Processed += OnReadingProcessed;
         _suggestions.Changed += OnSuggestionsChanged;
         _insights.Changed += OnSuggestionsChanged;
+        _topology.RevisionChanged += OnTopologyChanged;
     }
 
     // ---- sequence numbers and snapshots --------------------------------------------------------------------
@@ -235,6 +240,51 @@ internal sealed class RealtimeBroadcaster : BackgroundService
     }
 
     private int _suggestionsQueued;
+    private int _topologyQueued;
+    private long _lastTopologyChangeSent;
+
+    private void OnTopologyChanged()
+    {
+        if (!_subscriptions.Has(RealtimeTopics.Topology))
+        {
+            return;
+        }
+
+        // Raised with the topology service's lock held, so this only marks and queues. One message waiting is enough: it is built from
+        // the state when it is sent, so a burst of revisions is one message and not one each.
+        if (Interlocked.Exchange(ref _topologyQueued, 1) == 0)
+        {
+            Enqueue(SendTopologyAsync);
+        }
+    }
+
+    private async Task SendTopologyAsync()
+    {
+        // Cleared before the state is read, so a revision made after the read but before the send queues a message of its own.
+        Interlocked.Exchange(ref _topologyQueued, 0);
+
+        // Read, then numbered, then sent, as for suggestions. The route changes are the ones since the last message went out.
+        var snapshot = _topology.Current;
+        var changes = _topology.RouteChangesAfter(Interlocked.Read(ref _lastTopologyChangeSent));
+        var update = new TopologyUpdate(NextSequence(RealtimeTopics.Topology), snapshot.Revision, snapshot.BuiltAt, [.. changes.Select(change => change.ToView())]);
+
+        if (changes.Count > 0)
+        {
+            Interlocked.Exchange(ref _lastTopologyChangeSent, changes[0].Id);
+        }
+
+        await _hub.Clients.Group(RealtimeTopics.Topology).TopologyUpdated(update);
+    }
+
+    /// <summary>The mesh's revision and its recent route changes, with the topology topic's sequence, for a client to start from.</summary>
+    public TopologyUpdate GetTopologySnapshot()
+    {
+        // The sequence first, then the state: a message numbered at or below it was built from state that is already in what is read next.
+        var sequence = SequenceOf(RealtimeTopics.Topology);
+        var snapshot = _topology.Current;
+
+        return new TopologyUpdate(sequence, snapshot.Revision, snapshot.BuiltAt, [.. _topology.RouteChanges(50).Select(change => change.ToView())]);
+    }
 
     private void OnSuggestionsChanged()
     {

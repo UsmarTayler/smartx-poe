@@ -51,6 +51,12 @@ internal sealed class TopologySnapshot
     /// <summary>Which state of the reports this was built from.</summary>
     public long Version { get; }
 
+    /// <summary>
+    /// Which revision of the drawing this is. It moves only when something a person would see differs from the snapshot before:
+    /// see <see cref="TopologyService"/>. Set once, by the service, before the snapshot is published.
+    /// </summary>
+    public long Revision { get; internal set; }
+
     public DateTimeOffset BuiltAt { get; }
 
     public MeshGraph Graph { get; }
@@ -72,13 +78,18 @@ internal sealed class TopologySnapshot
 }
 
 /// <summary>A device's route changed when the mesh was rebuilt.</summary>
+/// <param name="Id">Its number, rising by one with each change.</param>
 /// <param name="At">When the rebuild noticed, from the injected clock.</param>
 /// <param name="Device">The device whose route changed.</param>
 /// <param name="Name">Its label.</param>
 /// <param name="OldPath">Its route before, device first and gateway last. Null if it had none.</param>
 /// <param name="NewPath">Its route after. Null if it has none now: it was left out of the graph or cut off.</param>
 /// <param name="Reason">What changed, in words, such as <c>GATEWAY-2 excluded: Stale</c>.</param>
-internal sealed record RouteChange(DateTimeOffset At, string Device, string Name, IReadOnlyList<string>? OldPath, IReadOnlyList<string>? NewPath, string Reason);
+internal sealed record RouteChange(long Id, DateTimeOffset At, string Device, string Name, IReadOnlyList<string>? OldPath, IReadOnlyList<string>? NewPath, string Reason)
+{
+    /// <summary>The change as the API and the hub send it.</summary>
+    public RouteChangeView ToView() => new(Id, At, Device, Name, OldPath, NewPath, Reason);
+}
 
 /// <summary>
 /// Holds what devices have reported about their neighbours and turns it into the mesh graph.
@@ -109,11 +120,64 @@ internal sealed class TopologyService(ITrustEngine trust, TimeProvider time, IOp
     // Devices that have had a route at least once. A device getting its first route as the mesh fills in is starting up, not healing.
     private readonly HashSet<string> _routedBefore = new(StringComparer.Ordinal);
 
+    // Devices an operator has taken offline, and whether they have been brought back. A device taken offline is left out of the graph
+    // at once, not after three missed reports; one brought back stays out until it next reports, so it cannot reappear on the strength
+    // of a report it sent before it went. Only touched with the lock held.
+    private readonly Dictionary<string, bool> _offline = new(StringComparer.Ordinal);
+
     private TopologySnapshot? _current;
     private long _version;
+    private long _changeId;
+    private long _revision;
+    private string _signature = string.Empty;
     private DateTimeOffset? _firstReportAt;
 
     private sealed record DeviceReport(string Name, string ZoneId, NeighbourReport Report, DateTimeOffset ReportedAt);
+
+    /// <summary>
+    /// Raised, with the lock held, when a new snapshot is a new revision. Handlers must return at once and take no locks of their own.
+    /// </summary>
+    public event Action? RevisionChanged;
+
+    /// <summary>The newest route change's number, or 0 if there has been none.</summary>
+    public long LatestChangeId
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _changeId;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Leaves a device out of the graph straight away, because an operator has taken it offline.
+    /// </summary>
+    /// <remarks>
+    /// Waiting for it to go stale would take three report intervals, ninety seconds by default, to show what an operator has just
+    /// done. The reason it gives is the operator's, not a timeout's.
+    /// </remarks>
+    public void TakeOffline(string macAddress)
+    {
+        lock (_gate)
+        {
+            _offline[macAddress] = false;
+            _version++;
+        }
+    }
+
+    /// <summary>The operator has brought a device back. It rejoins the graph with its next report, not before.</summary>
+    public void BringBack(string macAddress)
+    {
+        lock (_gate)
+        {
+            if (_offline.ContainsKey(macAddress))
+            {
+                _offline[macAddress] = true;
+            }
+        }
+    }
 
     /// <summary>Records a device's neighbour table, replacing its last.</summary>
     /// <remarks>
@@ -125,6 +189,13 @@ internal sealed class TopologyService(ITrustEngine trust, TimeProvider time, IOp
         lock (_gate)
         {
             _firstReportAt ??= time.GetUtcNow();
+
+            // A device brought back rejoins with this report.
+            if (_offline.TryGetValue(macAddress, out var broughtBack) && broughtBack)
+            {
+                _offline.Remove(macAddress);
+            }
+
             _reports[macAddress] = new DeviceReport(name, zoneId, report, time.GetUtcNow());
             _version++;
         }
@@ -150,9 +221,16 @@ internal sealed class TopologyService(ITrustEngine trust, TimeProvider time, IOp
                     return rebuilt;
                 }
 
+                var revisionBefore = _revision;
                 var built = Build();
                 RecordRouteChanges(built);
+                built.Revision = RevisionOf(built);
                 Volatile.Write(ref _current, built);
+
+                if (built.Revision != revisionBefore)
+                {
+                    RevisionChanged?.Invoke();
+                }
 
                 return built;
             }
@@ -165,6 +243,15 @@ internal sealed class TopologyService(ITrustEngine trust, TimeProvider time, IOp
         lock (_gate)
         {
             return [.. _changes.Reverse().Take(limit)];
+        }
+    }
+
+    /// <summary>The route changes recorded after change number <paramref name="afterId"/>, newest first.</summary>
+    public IReadOnlyList<RouteChange> RouteChangesAfter(long afterId)
+    {
+        lock (_gate)
+        {
+            return [.. _changes.Reverse().TakeWhile(change => change.Id > afterId)];
         }
     }
 
@@ -199,9 +286,16 @@ internal sealed class TopologyService(ITrustEngine trust, TimeProvider time, IOp
 
         foreach (var (mac, entry) in _reports.OrderBy(pair => pair.Key, StringComparer.Ordinal))
         {
+            if (_offline.ContainsKey(mac))
+            {
+                excluded.Add(new ExcludedNode(mac, "Taken offline by operator", entry.Name, entry.Report.X, entry.Report.Y));
+
+                continue;
+            }
+
             if (now - entry.ReportedAt > staleAfter)
             {
-                excluded.Add(new ExcludedNode(mac, "Stale"));
+                excluded.Add(new ExcludedNode(mac, "Stale", entry.Name, entry.Report.X, entry.Report.Y));
 
                 continue;
             }
@@ -210,7 +304,7 @@ internal sealed class TopologyService(ITrustEngine trust, TimeProvider time, IOp
 
             if (known && score!.Band == TrustBand.Fault)
             {
-                excluded.Add(new ExcludedNode(mac, "Fault"));
+                excluded.Add(new ExcludedNode(mac, "Fault", entry.Name, entry.Report.X, entry.Report.Y));
 
                 continue;
             }
@@ -223,12 +317,62 @@ internal sealed class TopologyService(ITrustEngine trust, TimeProvider time, IOp
                 entry.Report.Y,
                 false,
                 known ? score!.Band : TrustBand.Unproven,
-                known ? score!.Score : TrustFormula.PriorScore));
+                known ? Math.Round(score!.Score, 1) : TrustFormula.PriorScore));
 
             claims.AddRange(entry.Report.Neighbours.Select(link => new LinkClaim(mac, link.Id, link.Rssi)));
         }
 
         return new TopologySnapshot(_version, now, MeshGraph.FromClaims(vertices, claims, _options.PenaltyFactor), excluded);
+    }
+
+    /// <summary>
+    /// The revision this snapshot is: the one before it if it looks the same to a person, otherwise the next.
+    /// </summary>
+    /// <remarks>
+    /// What counts as looking the same is the drawing: which devices are in the graph and in what band, which links there are, which
+    /// of them are in the spanning tree, and who is left out and why. Trust scores, signal strengths and costs are not in it, because
+    /// they move all the time and a page that redrew for every drift would never keep still. (The scores that set a link's cost are
+    /// also rounded to a tenth when the graph is built, so the tree does not flip between near-equal routes with every wobble.)
+    /// </remarks>
+    private long RevisionOf(TopologySnapshot built)
+    {
+        var text = new System.Text.StringBuilder();
+
+        foreach (var vertex in built.Graph.Vertices)
+        {
+            text.Append(vertex.Id).Append(':').Append(vertex.Band).Append(';');
+        }
+
+        text.Append('|');
+
+        foreach (var edge in built.Graph.Edges)
+        {
+            text.Append(edge.A).Append('-').Append(edge.B).Append(';');
+        }
+
+        text.Append('|');
+
+        foreach (var edge in built.Forest.Edges)
+        {
+            text.Append(edge.A).Append('-').Append(edge.B).Append(';');
+        }
+
+        text.Append('|');
+
+        foreach (var excluded in built.Excluded)
+        {
+            text.Append(excluded.Id).Append(':').Append(excluded.Reason).Append(';');
+        }
+
+        var signature = text.ToString();
+
+        if (!string.Equals(signature, _signature, StringComparison.Ordinal))
+        {
+            _signature = signature;
+            _revision++;
+        }
+
+        return _revision;
     }
 
     /// <summary>
@@ -261,7 +405,7 @@ internal sealed class TopologyService(ITrustEngine trust, TimeProvider time, IOp
             if (!settling && _lastPaths.TryGetValue(mac, out var oldPath) && !SamePath(oldPath, newPath)
                 && (oldPath is null ? _routedBefore.Contains(mac) : !PathHolds(oldPath, built.Graph)))
             {
-                _changes.Add(new RouteChange(built.BuiltAt, mac, entry.Name, oldPath, newPath, ReasonFor(mac, oldPath, newPath, built)));
+                _changes.Add(new RouteChange(++_changeId, built.BuiltAt, mac, entry.Name, oldPath, newPath, ReasonFor(mac, oldPath, newPath, built)));
             }
 
             _lastPaths[mac] = newPath;

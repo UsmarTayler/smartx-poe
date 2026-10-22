@@ -1,11 +1,11 @@
-@* The landing page's map of the product: the three pillars of the brief, with what each does and where it stands. Two
-   are open and one is not built yet; the third is shown disabled with its part, the same way the menu shows it. Status is
-   a chip with an icon and a word, never colour alone. *@
+@* The landing page's map of the product: the three pillars of the brief, with what each does. All three are open, and each is
+   introduced the same way. *@
 <div class="smartx-pillars" role="list" aria-label="The three pillars of Smart-X">
     <MudPaper Outlined="true" Class="smartx-pillar pa-3" role="listitem">
         <MudText Typo="Typo.subtitle2" HtmlTag="h2">Sensor Data Ingestion and Telemetry</MudText>
-        <MudText Typo="Typo.caption" Class="mud-text-secondary">Register sensors, send readings, watch trust. You are here.</MudText>
-        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success" Icon="@Icons.Material.Filled.CheckCircle">Open</MudChip>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">Register sensors, send readings, watch trust.</MudText>
+        <MudButton Href="" Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Shield">Open trust panel</MudButton>
     </MudPaper>
 
     <MudPaper Outlined="true" Class="smartx-pillar pa-3" role="listitem">
@@ -15,9 +15,10 @@
                    StartIcon="@Icons.Material.Filled.Podcasts">Open command stream</MudButton>
     </MudPaper>
 
-    <MudPaper Outlined="true" Class="smartx-pillar smartx-pillar--future pa-3" role="listitem" aria-disabled="true">
+    <MudPaper Outlined="true" Class="smartx-pillar pa-3" role="listitem">
         <MudText Typo="Typo.subtitle2" HtmlTag="h2">Network Topology and Mesh Routing</MudText>
-        <MudText Typo="Typo.caption" Class="mud-text-secondary">Not built yet.</MudText>
-        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Lock">Part 3</MudChip>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">The mesh, its cheapest backbone, its weak points and how routes heal.</MudText>
+        <MudButton Href="topology" Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Hub">Open network topology</MudButton>
     </MudPaper>
 </div>

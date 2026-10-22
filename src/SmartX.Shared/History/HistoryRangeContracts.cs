@@ -14,6 +14,10 @@ public sealed record HistoryReading(long Sequence, DateTimeOffset Timestamp, dou
 /// <param name="Metric">The unit filter that was applied, or null for none.</param>
 /// <param name="Readings">At most the page size, oldest first.</param>
 /// <param name="Truncated">Whether more readings matched than the page holds.</param>
+/// <param name="QueryMicroseconds">
+/// How long the store took to find the window, in microseconds. The tree's seek and the walk across the window; not the HTTP, the
+/// registry lookup or the JSON. Shown on the topology page so the tree's speed is something a person can see.
+/// </param>
 /// <param name="NextFrom">
 /// When truncated, the timestamp of the first reading left out: ask again from here. If several readings share that instant and
 /// some came back already, <see cref="HistoryReading.Sequence"/> is how to drop the repeats.
@@ -25,6 +29,7 @@ public sealed record HistoryRange(
     string? Metric,
     IReadOnlyList<HistoryReading> Readings,
     bool Truncated,
+    double QueryMicroseconds,
     DateTimeOffset? NextFrom);
 
 /// <summary>The size of one of a store's trees.</summary>
