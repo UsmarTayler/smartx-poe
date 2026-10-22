@@ -8,6 +8,25 @@ New entries are appended at the end using the [template](#entry-template). Part 
 updates made from Parts 1 and 2 feedback. This file is that list, kept while the work happens instead of
 reconstructed afterwards.
 
+## Lecturer feedback on Part 1
+
+**Criterion:** Gateway Startup Layout and API Integration. **Mark: 5/10.** This is the only criterion that lost marks in Part 1.
+
+| # | Feedback, verbatim | Answered by | Notes |
+| --- | --- | --- | --- |
+| 1 | "The rest of your startup flow is flawless, with clean pillar disabling and fully asynchronous communication. There is no authentication on the API at all, so add a login step and protect your sensitive endpoints with it in Part 2." | [U21](#u21-the-api-had-no-authentication) | Operators log in with a JWT and have a role; devices authenticate with a per-device key; the hub requires a token. |
+
+Entries U1 to U12 each name their own source (a review of the code, a test, a live run); none of them is recorded as lecturer feedback.
+
+## Lecturer feedback on Part 2
+
+> **PLACEHOLDER: to be filled in when the Part 2 mark comes back.** Paste each comment below verbatim, one row per comment, and add the entry
+> that answers it as U29 onward (the template is at the end of this file).
+
+| # | Feedback, verbatim | Answered by | Notes |
+| --- | --- | --- | --- |
+| 1 | _Not received yet._ | _U29 onward_ | |
+
 ## Summary
 
 Categories: **feedback** (a lecturer's comment), **fault** (wrong behaviour found by review, a test or a live run), **optimisation** (a cost or
@@ -45,25 +64,7 @@ not yet meet; the one category added to the four usual ones). Commits are in eac
 | [U27](#u27-a-feed-test-could-fail-under-load) | 3 | test cleanup | Make the fake topology snapshot hold what it has announced, so a late second sync cannot wipe the first push |
 | [U28](#u28-the-topology-page-built-with-four-warnings) | 3 | fault | Clear four nullable warnings in the topology page, so the solution builds with none |
 | [U29](#u29-a-fresh-clone-built-with-a-vulnerability-warning) | 3 | fault | Move the SignalR client to 10.0.13 for a high-severity advisory only a fresh restore showed, and correct the README on what the live mesh excludes |
-
-## Lecturer feedback on Part 1
-
-**Criterion:** Gateway Startup Layout and API Integration. **Mark: 5/10.** This is the only criterion that lost marks in Part 1.
-
-| # | Feedback, verbatim | Answered by | Notes |
-| --- | --- | --- | --- |
-| 1 | "The rest of your startup flow is flawless, with clean pillar disabling and fully asynchronous communication. There is no authentication on the API at all, so add a login step and protect your sensitive endpoints with it in Part 2." | [U21](#u21-the-api-had-no-authentication) | Operators log in with a JWT and have a role; devices authenticate with a per-device key; the hub requires a token. |
-
-Entries U1 to U12 each name their own source (a review of the code, a test, a live run); none of them is recorded as lecturer feedback.
-
-## Lecturer feedback on Part 2
-
-> **PLACEHOLDER: to be filled in when the Part 2 mark comes back.** Paste each comment below verbatim, one row per comment, and add the entry
-> that answers it as U29 onward (the template is at the end of this file).
-
-| # | Feedback, verbatim | Answered by | Notes |
-| --- | --- | --- | --- |
-| 1 | _Not received yet._ | _U29 onward_ | |
+| [U30](#u30-a-latency-benchmark-measured-the-sweep-and-the-readme-timings-were-old) | 3 | test cleanup | Make the suggestion latency test measure new incidents (15.7 ms median, not 4.97 s), and restate the README's timings from today's measurements |
 
 ---
 
@@ -794,10 +795,26 @@ Two faults found by running it in Docker, not by the tests that passed. A compon
 
 ---
 
+## U30. A latency benchmark measured the sweep, and some README timings were old
+
+**Source:** the Part 3 final report named `SuggestionBenchmarkTests.The_latency_from_a_reading_crossing_20_percent_to_the_suggestion_arriving_in_a_client` as failing at about 4.97 s against a 1 s limit, at every commit checked back to the Part 2 final pass. The instruction was to diagnose it and to make every latency figure in the README match a measurement.
+
+**What was wrong.** Not the transport and not the push path. With `Suggestions:SweepInterval` set to 1 s the same test measured about 1.3 s, so the delay followed the sweep. Printing each round showed the first dip arriving in 71 ms and every later one a second or more late, with the same two suggestion ids each time. The service folds a sensor crossing the same level again, with nothing done about the last time, into the incident already on the page (so a hovering sensor cannot make a suggestion flash "New" for ever), and announces that only as a refreshed time, at most once a second and otherwise at the next sweep. The test dipped the same sensor 40 times in a row with nothing done in between, so after the first round it was timing refreshed times, one sweep apart, and each round began just after the last message, so each waited nearly a whole sweep. The behaviour is the design; the test measured something other than what its name says.
+
+**Why it mattered.** A benchmark that fails for ever, in a category that is outside the default run, is ignored, and the figure it was meant to give (how long a new suggestion takes to reach a client) was missing. It also sat in the final report as an unexplained failure.
+
+**What changed.** After each measured dip the test turns the suggested pump on, which closes that incident, so the next dip is a new incident with a new suggestion, announced at once. Result over the in-memory long-polling transport: median 15.7 ms, p95 30.7 ms, worst 90.8 ms from the reading being posted to the suggestion arriving; the test passes its 1 s bound. A repeat of the same incident is deliberately slower (a refreshed time within a second of the last announcement waits for the next sweep, up to 5 s) and the test comment says so. The README's timings were each checked against a measurement made on 22 October and restated: the critical-lane unit measurement (0.4 ms against 1,578 to 1,611 ms in three Release runs, where it had said 1,691), the Docker backlog (71 ms against 31,102 ms after about two minutes, where it had said 47 against 19,183), the cost of a range read on the sorted-dictionary store at 200,000 entries (8 to 11 µs and 2.5 to 3.0 ms in Release, where it had said 18 µs and 10.8 ms, which were not Release figures), the push latency through nginx (110 to 117 ms median and 3 to 6 ms for a critical reading over WebSockets, measured with a throwaway client outside the repository, where it had said 134 ms and 3 ms), and the example on the topology page ("Found 193 readings in 30 µs", as seen in the clone). "Within about five seconds" for a device taking a command is the shadow poll interval (`ShadowPollInterval`, 5 s), a setting and not a measurement. Considered and not done: making the service announce a throttled time refresh when its second is up, instead of at the next sweep. A refreshed time on a suggestion already on the page is the least urgent thing the topic carries, and the cost is a timer and another path through a service that has already had one deadlock (U18).
+
+- `tests/SmartX.Tests/SuggestionBenchmarkTests.cs`, `README.md`
+
+**Commits:** `1de39ea` the test, `63d8fa7` the README figures
+
+---
+
 ## Entry template
 
 ```markdown
-## U30. Short title of the problem
+## U31. Short title of the problem
 
 **Source:** how it was found: lecturer feedback on Part 1, code review, a test, a live run
 

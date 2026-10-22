@@ -227,8 +227,8 @@ event** again. Measured both ways:
 
 | | Critical reading | Normal reading |
 | --- | --- | --- |
-| Unit test: 5,000 normal readings queued, 0.3 ms per reading | waited **0.4 ms** | waited **1,691 ms** (about 4,500× longer) |
-| Docker, 4 ms per reading, fleet at 50× | average wait **47 ms** | average wait **19,183 ms** ("408.7× sooner", 430 readings refused with `503`) |
+| Unit test: 5,000 normal readings queued, 0.3 ms per reading | waited **0.4 ms** | waited **1,578 to 1,611 ms** (about 4,000× longer; three Release runs) |
+| Docker, 4 ms per reading, fleet at 50×, about two minutes in | average wait **71 ms** (longest 425 ms) | average wait **31,102 ms** (longest 46,890 ms; "437.7× sooner", 2,087 readings refused with `503`) |
 
 Tests: `CriticalLaneOrderTests` (order, which does not depend on machine speed), `IngestionQueueTests` (stability and the valve).
 The same structure ranks suggestions, capped at K: see [the predictive engine](#the-predictive-engine).
@@ -279,8 +279,8 @@ curl -H "Authorization: Bearer $TOKEN" "http://localhost:5266/api/sensors/B8:27:
 
 **Expect:** `"shape":"Buckets"`, at most 20 buckets in time order with `min`, `max`, `average` and `count`; a spike survives
 downsampling as a bucket's `max`. In the page, open a device on `/command-stream` for the chart, with commands, alerts and trust
-changes as markers. A range read walks from the start of a node's keys (a `SortedDictionary` cannot seek): on 200,000 entries the
-oldest 100 take about 18 µs and the newest 100 about 10.8 ms. That cost is why Part 3 replaced it with an AVL tree, which is now
+changes as markers. A range read walks from the start of a node's keys (a `SortedDictionary` cannot seek): on 200,000 entries (Release) the
+oldest 100 take 8 to 11 µs and the newest 100 2.5 to 3.0 ms. That cost is why Part 3 replaced it with an AVL tree, which is now
 the default store (`History:Store`); the dictionary store stays selectable for comparison. Tests:
 `SortedDictionaryHistoryStoreTests` (through the shared contract suite), `TimelineBuilderTests`.
 
@@ -647,7 +647,7 @@ by hop with names, and shows the cost along the spanning tree beside the cheapes
 differ it says why: the tree keeps the whole network cheapest, so a device's own route isn't the cheapest possible.
 
 **The historical log.** For the selected device, *Reading history* shows its readings over 15 minutes, 1, 2 or 24 hours, or any from and to,
-in the same chart (and table) as the Command Stream, and says "Found 156 readings in 20 µs": how long the AVL tree took to find the window.
+in the same chart (and table) as the Command Stream, and says "Found 193 readings in 30 µs": how long the AVL tree took to find the window.
 
 **Simulating a failure (Operators only).** *Take offline* sets the device to the Disconnect scenario. The API leaves it out of the mesh
 at once, with the reason "Taken offline by operator", and the routes through it heal; they appear in *Route changes* with the old and the new
@@ -871,7 +871,8 @@ snapshot. A test forces exactly that interleaving by holding the snapshot respon
 
 If WebSockets are blocked the connection falls back to long polling, and the page says which transport it is on (a proxy that
 drops the upgrade breaks nothing visibly, which is exactly why it is shown). Measured through nginx: an ordinary reading reaches
-the browser in a median of 134 ms (mostly the batch window) and a critical one in 3 ms.
+the browser over WebSockets in a median of 110 to 117 ms, p95 under 270 ms (mostly the 250 ms batch window; two runs of 17 readings
+each), and a critical one in 3 to 6 ms (two runs of 18).
 
 ### Why predictions are not random
 
