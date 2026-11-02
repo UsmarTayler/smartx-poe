@@ -58,6 +58,10 @@
             else if (Search.Result is { } result)
             {
                 <span><strong>@result.Count.ToString("N0")</strong> @(result.Count == 1 ? "device" : "devices")@(Filters.IsEmpty ? string.Empty : " match")</span>
+                @if (result.LookupMicroseconds > 0)
+                {
+                    <span class="mud-text-secondary" title="Time the device index took to answer, not counting the network"> · found in @result.LookupMicroseconds.ToString("N0") µs through the device index</span>
+                }
             }
         </MudText>
 

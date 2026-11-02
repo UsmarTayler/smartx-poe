@@ -51,10 +51,15 @@ public sealed record DeviceSearchHit(
 /// <param name="Filters">What was asked for, echoed back.</param>
 /// <param name="Count">How many devices matched.</param>
 /// <param name="Devices">The matches, ordered by MAC address.</param>
+/// <param name="LookupMicroseconds">
+/// How long the device index took to answer, in microseconds, measured around the lookup alone and not the request. Zero when the
+/// server did not say. It is shown beside the count so the speed of the index is a figure on the page and not a claim.
+/// </param>
 public sealed record DeviceSearchResponse(
     DeviceSearchFilters Filters,
     int Count,
-    IReadOnlyList<DeviceSearchHit> Devices);
+    IReadOnlyList<DeviceSearchHit> Devices,
+    double LookupMicroseconds = 0);
 
 /// <summary>What sort of thing an operator did.</summary>
 [JsonConverter(typeof(JsonStringEnumConverter<ActivityKind>))]

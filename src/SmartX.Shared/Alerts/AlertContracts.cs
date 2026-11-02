@@ -28,4 +28,5 @@ public sealed record ActiveAlert(
 /// <param name="Cleared">Alerts whose condition ended.</param>
 /// <param name="Active">Alerts active now.</param>
 /// <param name="Acknowledged">Active alerts an operator has acknowledged.</param>
-public sealed record AlertStats(long Raised, long Suppressed, long Cleared, int Active, int Acknowledged);
+/// <param name="Disconnected">Nodes in the disconnected set, which is exactly those with an active Disconnected alert. Zero when the server did not say.</param>
+public sealed record AlertStats(long Raised, long Suppressed, long Cleared, int Active, int Acknowledged, int Disconnected = 0);
