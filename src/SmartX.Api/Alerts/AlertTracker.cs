@@ -427,7 +427,7 @@ internal sealed class AlertTracker(
     {
         lock (Gate)
         {
-            return new AlertStats(_raised, _suppressed, _cleared, _active.Count, _acknowledged.Count);
+            return new AlertStats(_raised, _suppressed, _cleared, _active.Count, _acknowledged.Count, _disconnected.Count);
         }
     }
 

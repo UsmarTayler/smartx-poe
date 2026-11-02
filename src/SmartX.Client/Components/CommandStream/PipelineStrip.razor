@@ -39,6 +39,62 @@
         }
     </div>
 
+    @* The order the worker will take readings in, from the server's own queues, so a critical reading is seen in front of a backlog
+       before it is taken and not only in the wait figures afterwards. The server works the order out with the rule the worker
+       follows, so this list is what will happen and not an illustration of it. *@
+    @if (Pipeline.Current.Stats is { NextUp: { } next })
+    {
+        <section class="smartx-pipeline__next" aria-label="Order readings will be taken in">
+            <MudText Typo="Typo.subtitle2" HtmlTag="h2">Next to be taken</MudText>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">@OrderRule</MudText>
+
+            @if (next.Count == 0)
+            {
+                <MudText Typo="Typo.body2" Class="mud-text-secondary mt-1" role="status">Nothing is waiting. Readings are taken as they arrive.</MudText>
+            }
+            else
+            {
+                <ol class="smartx-pipeline__order">
+                    @foreach (var item in next)
+                    {
+                        var critical = item.Lane == "critical";
+
+                        <li class="@(critical ? "smartx-pipeline__order-item smartx-pipeline__order-item--critical" : "smartx-pipeline__order-item")">
+                            <span class="smartx-pipeline__order-position">@item.Position</span>
+                            <MudIcon Icon="@(critical ? Icons.Material.Filled.PriorityHigh : Icons.Material.Filled.Queue)" Size="Size.Small" aria-hidden="true" />
+                            <strong>@(critical ? "Critical" : "Standard")</strong>
+                            <span>@Describe(item.MacAddress)</span>
+                            <span class="mud-text-secondary">waiting @Wait(item.WaitingMilliseconds)</span>
+                            @if (item.Position == 1)
+                            {
+                                <span class="smartx-pipeline__order-next">next</span>
+                            }
+                        </li>
+                    }
+                </ol>
+            }
+
+            @* The last critical readings taken, newest first, each with what it was served ahead of. A critical reading is gone from the
+               lane within milliseconds, so the list above almost never has one in it; this is where the overtaking stays on the page. *@
+            @if (Pipeline.Current.Stats is { RecentCritical: { Count: > 0 } taken })
+            {
+                <MudText Typo="Typo.subtitle2" HtmlTag="h3" Class="mt-2">Critical readings just taken</MudText>
+                <ol class="smartx-pipeline__taken" aria-label="Critical readings taken just now, newest first">
+                    @foreach (var item in taken)
+                    {
+                        <li class="smartx-pipeline__order-item smartx-pipeline__order-item--critical">
+                            <MudIcon Icon="@Icons.Material.Filled.PriorityHigh" Size="Size.Small" aria-hidden="true" />
+                            <strong>Critical</strong>
+                            <span>@Describe(item.MacAddress)</span>
+                            <span class="mud-text-secondary">waited @Wait(item.WaitedMilliseconds)</span>
+                            <span>@Overtook(item)</span>
+                        </li>
+                    }
+                </ol>
+            }
+        </section>
+    }
+
     <div class="smartx-pipeline__footer">
         <span class="smartx-status" style="--smartx-status: @(Rejected > 0 ? "#d03b3b" : "#6b6a66")" title="Readings refused with 503 because a lane was full">
             <MudIcon Icon="@(Rejected > 0 ? Icons.Material.Filled.Block : Icons.Material.Filled.CheckCircleOutline)" Size="Size.Small" aria-hidden="true" />
@@ -94,6 +150,12 @@
 
     private IEnumerable<SensorRegistration> Candidates =>
         Catalog.Sensors.Where(sensor => sensor.Category != SensorCategory.Actuator);
+
+    // The rule is the server's (MaxConsecutiveCritical), said as the server reports it, and not assumed here.
+    private string OrderRule =>
+        Pipeline.Current.Stats is { MaxConsecutiveCritical: > 0 and var yields }
+            ? $"Critical readings are taken first. After {yields:N0} in a row one standard reading is taken, so the standard queue is never starved."
+            : "Critical readings are taken first.";
 
     private string Comparison
     {
@@ -203,6 +265,12 @@
 
         return sensor is null ? mac ?? string.Empty : $"{sensor.Location.Room} ({sensor.MacAddress[^5..]})";
     }
+
+    // What the critical reading was served ahead of, in words: the count of standard readings it overtook, and the oldest one's wait.
+    private static string Overtook(CriticalTaken item) =>
+        item.StandardAhead == 0
+            ? "nothing was queued ahead of it"
+            : $"taken ahead of {item.StandardAhead:N0} standard {(item.StandardAhead == 1 ? "reading" : "readings")}, the oldest waiting {Wait(item.OldestStandardWaitMilliseconds)}";
 
     private static string Rate(double? perSecond) => perSecond is { } value ? $"{value:0.#}/s" : "—";
 

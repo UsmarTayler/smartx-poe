@@ -1,3 +1,4 @@
+using SmartX.Client.Topology;
 using SmartX.Shared;
 
 namespace SmartX.Client.State;
@@ -94,6 +95,21 @@ public sealed class AppState
     /// <summary>The device the topology page has selected, kept so leaving the page and coming back finds it still chosen.</summary>
     public string? TopologyDevice { get; private set; }
 
+    /// <summary>
+    /// The last mesh map the topology page drew, or null before the first one. A return visit draws this at once and refreshes it
+    /// in the background, so the page is never swapped for a skeleton while the four requests that rebuild it are in flight.
+    /// </summary>
+    public MeshPicture? TopologyPicture { get; private set; }
+
+    /// <summary>The mesh revision <see cref="TopologyPicture"/> was drawn from.</summary>
+    public long TopologyRevision { get; private set; } = -1;
+
+    /// <summary>
+    /// The open investigations as last fetched, or null before the first fetch. The same idea as <see cref="TopologyPicture"/>:
+    /// the panel shows what it knew when the page was left and replaces it when the fresh list arrives.
+    /// </summary>
+    public IReadOnlyList<InvestigationDetails>? OpenInvestigations { get; private set; }
+
     /// <summary>The filters on the Command Stream page: device search and the live stream share them.</summary>
     public DeviceSearchFilters StreamFilters { get; private set; } = new();
 
@@ -135,6 +151,16 @@ public sealed class AppState
     }
 
     public void SelectTopologyDevice(string? macAddress) => Set(TopologyDevice, macAddress, value => TopologyDevice = value);
+
+    // These two keep what a page last showed and do not raise Changed: the page that calls them is the one drawing it, and nothing
+    // else renders from them, so notifying would only re-render every subscriber for no change on screen.
+    public void RememberTopology(MeshPicture picture, long revision)
+    {
+        TopologyPicture = picture;
+        TopologyRevision = revision;
+    }
+
+    public void RememberInvestigations(IReadOnlyList<InvestigationDetails> open) => OpenInvestigations = open;
 
     public void SetStreamFilters(DeviceSearchFilters filters) => Set(StreamFilters, filters, value => StreamFilters = value);
 

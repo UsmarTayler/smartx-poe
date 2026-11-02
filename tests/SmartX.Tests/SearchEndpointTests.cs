@@ -24,6 +24,9 @@ public class SearchEndpointTests
         Assert.Equal(DemoDevices.All.Count, result.Count);
         Assert.Equal(result.Devices.Select(device => device.MacAddress).Order(StringComparer.Ordinal), result.Devices.Select(device => device.MacAddress));
         Assert.True(result.Filters.IsEmpty);
+
+        // The time the device index took, which the search bar shows beside the count.
+        Assert.True(result.LookupMicroseconds > 0);
     }
 
     /// <summary>

@@ -478,7 +478,13 @@ h1:focus {
 .smartx-suggestion__weight { font-size: 0.75rem; color: var(--mud-palette-text-secondary); }
 .smartx-suggestion__actions, .smartx-insight__actions, .smartx-investigation__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
 .smartx-suggestions--strip .smartx-suggestion { padding: 8px 10px; }
-.smartx-suggestions--strip .smartx-suggestion__evidence, .smartx-suggestions--strip .smartx-suggestion__level { display: none; }
+.smartx-suggestions--strip .smartx-suggestion__evidence, .smartx-suggestions--strip .smartx-suggestion__level, .smartx-suggestions--strip .smartx-suggestion__learned-more { display: none; }
+
+/* What the pattern has learned: a row of label over figure. The label is a word, so nothing here is colour alone. */
+.smartx-suggestion__learned { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 8px 0 0; padding: 0; }
+.smartx-suggestion__learned > div { display: flex; flex-direction: column; }
+.smartx-suggestion__learned dt { font-size: 0.7rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--mud-palette-text-secondary); }
+.smartx-suggestion__learned dd { margin: 0; font-size: 1rem; font-weight: 600; font-variant-numeric: tabular-nums; }
 
 /* A suggestion or insight that has just arrived: an outline, and the word New. It moves nothing and fades by itself. */
 .smartx-suggestion--new, .smartx-insight--new {
@@ -572,6 +578,20 @@ h1:focus {
 
 .smartx-lane__figures dt { font-size: 0.72rem; color: var(--mud-palette-text-secondary); }
 .smartx-lane__figures dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* The three alert sets: label over size, in the same style as the lane figures. */
+.smartx-alert-sets { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 8px 0 0; padding: 0; }
+.smartx-alert-sets > div { display: flex; flex-direction: column; }
+.smartx-alert-sets dt { font-size: 0.72rem; color: var(--mud-palette-text-secondary); }
+.smartx-alert-sets dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* The order readings will be taken in. Position, icon and word travel together, so the critical rows are not marked by colour alone. */
+.smartx-pipeline__next { margin-top: 12px; }
+.smartx-pipeline__order, .smartx-pipeline__taken { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
+.smartx-pipeline__order-item { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 4px 8px; border: 1px solid var(--mud-palette-lines-default); border-radius: 6px; font-size: 0.875rem; }
+.smartx-pipeline__order-item--critical { border-color: #d03b3b; border-left-width: 4px; }
+.smartx-pipeline__order-position { min-width: 1.4em; font-weight: 700; font-variant-numeric: tabular-nums; }
+.smartx-pipeline__order-next { margin-left: auto; font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
 
 .smartx-pipeline__footer {
     display: flex;

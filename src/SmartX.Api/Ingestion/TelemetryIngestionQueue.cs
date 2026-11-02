@@ -135,22 +135,102 @@ internal sealed class TelemetryIngestionQueue(IOptions<IngestionOptions> options
 
         lock (_gate)
         {
-            var mustYield = _consecutiveCritical >= _options.MaxConsecutiveCritical && _standard.Count > 0;
+            QueuedReading taken;
 
-            if (_critical.Count > 0 && !mustYield)
+            if (TakesCritical(_consecutiveCritical, _critical.Count, _standard.Count, _options.MaxConsecutiveCritical))
             {
                 _consecutiveCritical++;
+                taken = _critical.Dequeue();
+            }
+            else
+            {
+                _consecutiveCritical = 0;
 
-                return _critical.Dequeue();
+                // The semaphore is released exactly once per enqueued reading, so a successful wait guarantees a
+                // reading is here: if the critical lane was empty or yielding, the standard lane holds it.
+                taken = _standard.Dequeue();
             }
 
-            _consecutiveCritical = 0;
+            RememberTaken(taken);
 
-            // The semaphore is released exactly once per enqueued reading, so a successful wait guarantees a
-            // reading is here: if the critical lane was empty or yielding, the standard lane holds it.
-            return _standard.Dequeue();
+            return taken;
         }
     }
+
+    /// <summary>
+    /// Keeps the last few critical readings taken, each with how many standard readings it was served ahead of and how long the
+    /// oldest of them had waited. The critical lane is empty again within milliseconds, and a snapshot is made once a second, so a
+    /// critical reading is almost never still waiting when one is made; and a list of the last readings taken of either lane would
+    /// span only a few milliseconds at the rate the worker runs. What lasts is the overtaking itself, so that is what is kept.
+    /// Called under the queue lock. A bounded queue like the rest of the pipeline.
+    /// </summary>
+    private void RememberTaken(QueuedReading reading)
+    {
+        if (!reading.IsCritical)
+        {
+            return;
+        }
+
+        var now = time.GetUtcNow();
+
+        if (_recentCritical.Count >= CriticalTakenShown)
+        {
+            _recentCritical.Dequeue();
+        }
+
+        _recentCritical.Enqueue(new CriticalTaken(
+            reading.Packet.NodeId,
+            (now - reading.EnqueuedAt).TotalMilliseconds,
+            _standard.Count,
+            _standard.Count == 0 ? 0 : (now - _standard.Peek().EnqueuedAt).TotalMilliseconds));
+    }
+
+    private readonly Queue<CriticalTaken> _recentCritical = new();
+
+    /// <summary>How many critical readings a snapshot names.</summary>
+    internal const int CriticalTakenShown = 5;
+
+    /// <summary>
+    /// Whether the worker's next reading comes from the critical lane. The one place the rule is written, used by
+    /// <see cref="DequeueAsync"/> to choose and by <see cref="Stats"/> to say what will be chosen, so the order the interface
+    /// shows cannot drift from the order the worker takes.
+    /// </summary>
+    private static bool TakesCritical(int consecutiveCritical, int criticalWaiting, int standardWaiting, int maxConsecutiveCritical) =>
+        criticalWaiting > 0 && !(consecutiveCritical >= maxConsecutiveCritical && standardWaiting > 0);
+
+    /// <summary>
+    /// The next few readings in the order the worker will take them. Read under the queue lock, so it is one consistent moment.
+    /// </summary>
+    /// <remarks>
+    /// Only the first <see cref="NextUpShown"/> of each lane can be among the next few, so that is all that is gathered. The
+    /// heap is not sorted, so the critical lane's front is found by ordering a copy of its entries by the same
+    /// (severity, arrival) key the heap uses, and LINQ's ordered Take keeps that a partial selection and not a full sort of a lane
+    /// that can hold a thousand entries. The standard queue enumerates in arrival order already.
+    /// </remarks>
+    private List<QueuedItem> NextUp(DateTimeOffset now)
+    {
+        var critical = _critical.UnorderedItems.OrderBy(entry => entry.Priority).Take(NextUpShown).Select(entry => entry.Element).ToList();
+        var standard = _standard.Take(NextUpShown).ToList();
+
+        var items = new List<QueuedItem>(NextUpShown);
+        var consecutive = _consecutiveCritical;
+        int criticalTaken = 0, standardTaken = 0;
+
+        while (items.Count < NextUpShown && (criticalTaken < critical.Count || standardTaken < standard.Count))
+        {
+            // The counts passed are what is still waiting, which is what the worker would see at that point.
+            var fromCritical = TakesCritical(consecutive, _critical.Count - criticalTaken, _standard.Count - standardTaken, _options.MaxConsecutiveCritical);
+            var reading = fromCritical ? critical[criticalTaken++] : standard[standardTaken++];
+
+            consecutive = fromCritical ? consecutive + 1 : 0;
+            items.Add(new QueuedItem(items.Count + 1, reading.Lane, reading.Packet.NodeId, (now - reading.EnqueuedAt).TotalMilliseconds));
+        }
+
+        return items;
+    }
+
+    /// <summary>How many of the next readings a snapshot names.</summary>
+    internal const int NextUpShown = 6;
 
     /// <summary>Records that a reading has been fully processed, and how long that took from acceptance.</summary>
     /// <remarks>
@@ -173,6 +253,8 @@ internal sealed class TelemetryIngestionQueue(IOptions<IngestionOptions> options
     {
         lock (_gate)
         {
+            var now = time.GetUtcNow();
+
             return new PipelineStats(
                 [
                     _criticalCounters.ToStats(CriticalLane, _critical.Count),
@@ -180,7 +262,10 @@ internal sealed class TelemetryIngestionQueue(IOptions<IngestionOptions> options
                 ],
                 _options.MaxQueueDepth,
                 _rejectedWhenFull,
-                time.GetUtcNow());
+                now,
+                NextUp(now),
+                _options.MaxConsecutiveCritical,
+                [.. _recentCritical.Reverse()]);
         }
     }
 

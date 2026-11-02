@@ -23,6 +23,29 @@
         }
     </div>
 
+    @* The counts the pattern rests on, as figures. In the compact strip only the first two show; the sentence below says the rest. *@
+    <dl class="smartx-suggestion__learned" aria-label="What has been learned about this pattern">
+        <div>
+            <dt>Followed</dt>
+            <dd>@Learned.Counted</dd>
+        </div>
+        <div title="Weighted toward recent occurrences, so it can differ from the plain share in the first figure.">
+            <dt>Confidence</dt>
+            <dd>@Learned.Confidence</dd>
+        </div>
+        <div class="smartx-suggestion__learned-more">
+            <dt>More likely</dt>
+            <dd>@Learned.Lift</dd>
+        </div>
+        @if (Learned.Seeded is { } seeded)
+        {
+            <div class="smartx-suggestion__learned-more">
+                <dt>Seeded</dt>
+                <dd>@seeded</dd>
+            </div>
+        }
+    </dl>
+
     <p class="smartx-suggestion__why"><span class="mud-text-secondary">Why</span> @Suggestion.Why at @ReadingFormatter.Time(Suggestion.TriggeredAt).</p>
 
     <p class="smartx-suggestion__evidence"><span class="mud-text-secondary">Evidence</span> @Suggestion.Evidence.Summary</p>
@@ -85,6 +108,8 @@
     private string CssClass => IsNew ? "smartx-suggestion smartx-suggestion--new" : "smartx-suggestion";
 
     private string LevelIcon => Suggestion.Level == PatternLevel.Specific ? Icons.Material.Filled.DeviceHub : Icons.Material.Filled.Hub;
+
+    private LearnedFigures Learned => SuggestionPresentation.Learned(Suggestion.Evidence);
 
     private string? Latency => IsNew && ArrivedAt is { } at ? SuggestionPresentation.Latency(Suggestion, at) : null;
 }

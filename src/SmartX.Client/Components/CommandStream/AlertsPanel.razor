@@ -15,6 +15,14 @@
         </MudText>
     </div>
 
+    @* The three sets the alerts are held in, with their sizes. Each is a hash set, so asking whether an alert is already on, or already
+       acknowledged, or whether a node is already disconnected, is one lookup, and a repeat is turned away by the set and counted. *@
+    <dl class="smartx-alert-sets" aria-label="Alert sets and their sizes">
+        <div title="Alerts that are on. A repeat of one already here is counted and not added."><dt>Active set</dt><dd>@State.Stats.Active.ToString("N0")</dd></div>
+        <div title="Active alerts an operator has seen."><dt>Acknowledged set</dt><dd>@State.Stats.Acknowledged.ToString("N0")</dd></div>
+        <div title="Nodes with an active Disconnected alert."><dt>Disconnected set</dt><dd>@State.Stats.Disconnected.ToString("N0")</dd></div>
+    </dl>
+
     <OperatorsOnlyNote Text="Operators only. You are signed in as a Viewer, so alerts cannot be acknowledged." />
 
     @if (_problem is not null)

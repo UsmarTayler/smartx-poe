@@ -68,11 +68,15 @@ internal static class SearchEndpoints
                 detail: $"No zone has id '{zoneId}'.");
         }
 
+        // Timed around the lookup alone, the way the history range read is, so the figure on the page is the index's and does not
+        // include the catalogue read, the activity record or the network.
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
         var devices = index.Search(filters, catalogue);
+        var lookupMicroseconds = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMicroseconds;
 
         activity.RecordSearch(filters, devices);
 
-        return Results.Ok(new DeviceSearchResponse(filters, devices.Count, devices));
+        return Results.Ok(new DeviceSearchResponse(filters, devices.Count, devices, lookupMicroseconds));
     }
 
     /// <summary>Reads an optional enum filter, ignoring case, and records an error that lists the choices when it is wrong.</summary>

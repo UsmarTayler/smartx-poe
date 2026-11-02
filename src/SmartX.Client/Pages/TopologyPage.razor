@@ -85,6 +85,15 @@ else
 
     protected override async Task OnInitializedAsync()
     {
+        // Before the first await, so the first render is the last map and not a skeleton. It is still refetched below, and the
+        // revision it was drawn from is what lets OnFeed tell whether the feed has something newer.
+        if (State.TopologyPicture is { } held)
+        {
+            _picture = held;
+            _drawnRevision = State.TopologyRevision;
+            _loaded = true;
+        }
+
         // The catalogue names zones in the table. Refreshed on every visit, as the other pages do.
         await Catalog.LoadAsync();
 
@@ -146,6 +155,7 @@ else
                 // No problem on any of the four means each has a value; ApiResult<T> does not say so to the compiler.
                 _picture = MeshPicture.Build(topology.Result.Value!, mst.Result.Value!, reachability.Result.Value!, weak.Result.Value!);
                 _drawnRevision = revision;
+                State.RememberTopology(_picture, revision);
                 _loaded = true;
                 _problem = null;
             }
