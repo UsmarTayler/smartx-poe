@@ -20,12 +20,22 @@ Entries U1 to U12 each name their own source (a review of the code, a test, a li
 
 ## Lecturer feedback on Part 2
 
-> **PLACEHOLDER: to be filled in when the Part 2 mark comes back.** Paste each comment below verbatim, one row per comment, and add the entry
-> that answers it as U29 onward (the template is at the end of this file).
+**Part 2 total: 92/100 (92 %).** Marks lost, by criterion (the GitHub deduction was 0):
+
+| Criterion | Mark | Lost |
+| --- | ---: | ---: |
+| Main menu navigation and active pillar state | 27/30 | 3 |
+| Advanced collections: stacks and queues | 14/15 | 1 |
+| Lookup structures: dictionaries and key-value maps | 14/15 | 1 |
+| Unique collections: sets | 9/10 | 1 |
+| Predictive action and suggestion engine | 28/30 | 2 |
 
 | # | Feedback, verbatim | Answered by | Notes |
 | --- | --- | --- | --- |
-| 1 | _Not received yet._ | _U29 onward_ | |
+| 1 | "This is the most complete submission in the group. It is a large web application with a component library, a device simulator and close to ninety automated tests. The menu offers a trust panel, sensors, telemetry and the command stream, and a disabled Network Topology and Mesh Routing item. A few views reload, and that was the only navigation loss." | [U31](#u31-views-showed-a-skeleton-again-on-every-return-visit) | The disabled topology item had already been replaced by the page in Part 3. The reloads were measured, and two views were found that rebuilt themselves from a skeleton on every visit. |
+| 2 | "The ingestion queue keeps critical and standard lanes and always serves critical items first. Commands have undo with a stack. Tests prove the lane order. Only one mark was missed because the lane order could be shown more clearly to a user in the interface." | [U32](#u32-the-order-the-lanes-are-served-in-was-not-on-the-page) | The strip now lists what will be taken next, in order, and keeps each critical reading with what it was served ahead of. |
+| 3 | "Histories are kept in a sorted dictionary store with its own tests for the key, retention and the cost of a range search. A device index supports fast lookups. Active, acknowledged and disconnected alerts are held in hash sets, and repeats are filtered before they reach the broadcaster. Only one mark was missed." | [U34](#u34-the-alert-sets-and-the-device-index-were-not-visible) | This comment covers the dictionaries and the sets, which each lost one mark, and does not say what was missed in either. The answer is a guess aimed at what a user could not see; it is recorded as that. |
+| 4 | "The pattern engine uses a sliding window, a suggestion service ranks with a heap, and a background service generates insights, all covered by tests. To finish, put the learned counts in the interface next to each suggestion." | [U33](#u33-the-counts-a-suggestion-had-learned-were-only-in-a-sentence) | Shown as figures on every suggestion, in the full card and the compact one. |
 
 ## Summary
 
@@ -65,6 +75,10 @@ not yet meet; the one category added to the four usual ones). Commits are in eac
 | [U28](#u28-the-topology-page-built-with-four-warnings) | 3 | fault | Clear four nullable warnings in the topology page, so the solution builds with none |
 | [U29](#u29-a-fresh-clone-built-with-a-vulnerability-warning) | 3 | fault | Move the SignalR client to 10.0.13 for a high-severity advisory only a fresh restore showed, and correct the README on what the live mesh excludes |
 | [U30](#u30-a-latency-benchmark-measured-the-sweep-and-the-readme-timings-were-old) | 3 | test cleanup | Make the suggestion latency test measure new incidents (15.7 ms median, not 4.97 s), and restate the README's timings from today's measurements |
+| [U31](#u31-views-showed-a-skeleton-again-on-every-return-visit) | 3 | feedback | Keep the last map and the last investigations across navigation, so a return visit shows no skeleton (none on two return laps of five pages) |
+| [U32](#u32-the-order-the-lanes-are-served-in-was-not-on-the-page) | 3 | feedback | Show the order the queue will serve readings in, and keep each critical reading with the standard readings it overtook |
+| [U33](#u33-the-counts-a-suggestion-had-learned-were-only-in-a-sentence) | 3 | feedback | Show how often a pattern held, its confidence, its lift and how much was seeded as figures beside each suggestion |
+| [U34](#u34-the-alert-sets-and-the-device-index-were-not-visible) | 3 | feedback | Show the sizes of the three alert sets and how long the device index took, where the feedback named no specific gap |
 
 ---
 
@@ -811,10 +825,76 @@ Two faults found by running it in Docker, not by the tests that passed. A compon
 
 ---
 
+## U31. Views showed a skeleton again on every return visit
+
+**Source:** lecturer feedback on Part 2, navigation and active pillar state, 27/30: "A few views reload, and that was the only navigation loss."
+
+**What was wrong.** The comment does not say which views, so they were measured. In the browser, against the running stack, a marker was set on `window` and the menu was clicked through every page and back: the marker survived every click, so nothing in the menu causes a full page load (a deep link to `/command-stream` returns the app with a 200). What did happen on a return visit was that a page threw away what it had shown and built it again from a skeleton. The topology page kept its map in a component field, so leaving it lost the picture, and the page showed a 320 px skeleton and fetched four endpoints (`/api/topology`, `/mst`, `/reachability`, `/articulation-points`) before drawing the same map again. The Investigations panel on the command stream did the same with its list. Sensors, Telemetry and the Trust panel did not: their data lives in scoped services that survive navigation. The command stream also fetched 13 endpoints on each visit, but rendered from what the feeds held at once, so it showed no skeleton apart from the Investigations panel. The reading of the feedback that fits the measurements is that these were the views that "reloaded".
+
+**Why it mattered.** The brief for the menu is asynchronous navigation between views without losing application state, and a map the operator was reading that vanishes for a moment is the loss the marker saw. The disabled "Network Topology and Mesh Routing" item the same comment mentions was replaced by the working page in Part 3 (U26).
+
+**What changed.** `AppState`, which exists so that anything a page must keep outlives the page, now holds the last mesh picture and its revision and the last open investigations. The topology page and the Investigations panel take them before their first `await`, so the first render is what they showed last time, and then fetch fresh data and replace it; a failed fetch still shows the last map with the existing "Showing the last map" warning. Neither raises `Changed` when it remembers, because the page that calls it is the only one drawing it. Measured again on the rebuilt Docker stack with the same marker: two return laps through Trust panel, Sensors, Telemetry, Command stream and Topology showed no skeleton on any page, where before the Investigations panel and the topology page each showed one on every return. Two new tests fail against the previous pages and pass now: the topology page holds every mesh request open and still shows the last map on its first render, and the investigations panel shows its list with no skeleton. What was not changed: the first visit to a page after signing in still shows its skeleton, because there is nothing yet to show; and a browser refresh (F5) restarts the application and so loses what is held in memory, as it would for any single-page app.
+
+- `src/SmartX.Client/State/AppState.cs`, `src/SmartX.Client/Pages/TopologyPage.razor`, `src/SmartX.Client/Components/CommandStream/InvestigationsPanel.razor`, `tests/SmartX.Tests/Part2FeedbackTests.cs`
+
+**Commits:** `21cfa71` the fix, `beb3a91` the tests
+
+---
+
+## U32. The order the lanes are served in was not on the page
+
+**Source:** lecturer feedback on Part 2, stacks and queues, 14/15: "Only one mark was missed because the lane order could be shown more clearly to a user in the interface."
+
+**What was wrong.** The pipeline strip showed two lanes with their depth, rate and waits, and a sentence comparing the averages. It did not show the order readings would be taken in, so "critical first" was a claim in a caption and a pair of averages, not something a person could see happen. The tests proved the order; the page did not.
+
+**Why it mattered.** The brief asks for a priority queue and a FIFO queue, and the mark is for the structures being visible to a user as well as correct.
+
+**What changed.** The queue now says what it will do. `PipelineStats` gained three optional members, so older callers and messages still read: `NextUp` (the next six readings in the order the worker will take them, from either lane), `MaxConsecutiveCritical` (the yield rule) and `RecentCritical`. The rule that decides whether the next reading is critical is written once, in `TakesCritical`, and used both by `DequeueAsync` to choose and by the snapshot to say what will be chosen, so the list cannot drift from the worker. The critical lane's front is found by ordering a copy of the heap's entries by the same (severity, arrival) key and taking six (LINQ's ordered `Take` is a partial selection), under the queue lock; the standard queue enumerates in arrival order. One randomised test (60 seeded rounds, a different yield limit and a different number already taken each round) drains the queue and checks that every reading comes out exactly where the snapshot said. The strip lists those readings numbered, with the lane in words, an icon and an outline (not colour alone), the wait so far, and the rule as the server reports it ("After 20 in a row one standard reading is taken, so the standard queue is never starved").
+
+A first version stopped there and was measured on the Docker stack with a 4 ms gateway cost and the simulator at 50 times its rate, which gives a standard backlog of about 3,500. Sampled four times a second for 22 seconds (91 samples), with a critical device switched on, the list never once held a critical reading: the worker takes critical readings within milliseconds and the snapshot is made once a second, so a critical reading is almost never still waiting when it is made. A list of the last readings taken of either lane would have the same problem (at 200 readings a second it spans about 30 ms). What lasts is the overtaking, so the queue now remembers the last five critical readings taken, each with how many standard readings were waiting when it was taken and how long the oldest had waited. On the same stack the strip shows, for example, "Critical Main Incomer waited 7.9 ms, taken ahead of 3,485 standard readings, the oldest waiting 23666 ms". Considered and not done: showing only the next-up list (it would have looked right in a test and been empty in use), and a client-side animation of items moving between lanes (it would be an illustration of the rule and not the server's own order).
+
+- `src/SmartX.Shared/Contracts/PipelineStats.cs`, `src/SmartX.Api/Ingestion/TelemetryIngestionQueue.cs`, `src/SmartX.Client/Components/CommandStream/PipelineStrip.razor`, `src/SmartX.Client/wwwroot/css/app.css`, `tests/SmartX.Tests/Part2FeedbackTests.cs`
+
+**Commits:** `d97a9f8` the next-up list, `59bca0f` the critical readings kept, `beb3a91` the tests
+
+---
+
+## U33. The counts a suggestion had learned were only in a sentence
+
+**Source:** lecturer feedback on Part 2, predictive action and suggestion engine, 28/30: "To finish, put the learned counts in the interface next to each suggestion."
+
+**What was wrong.** The counts were in the data (`SuggestionEvidence` carries how many times the action followed, out of how many, how many were seeded, the confidence and the lift), but the card showed only the server's sentence ("Operators did this 7 of the last 8 times (5 from seeded history). 3.2× more likely than usual."), and the compact card on the trust page hid even that.
+
+**Why it mattered.** A sentence is read once; the counts are what an operator checks to decide whether to believe the suggestion, and the engine's whole claim is that it learned them.
+
+**What changed.** Each suggestion now has a row of labelled figures built from the structured fields (not parsed from the sentence, so the two cannot disagree): Followed "7 of 8 times", Confidence "88 %", More likely "3.2×", and Seeded "5 of 7" when any were seeded. A lift the engine capped at 100 reads "over 100×", not "100×". The compact card carries the same markup, and its style sheet shows the first two figures in the strip on the trust page, where there is no room for the rest; the sentence stays in the full card. Each label is a word, so nothing depends on colour. On the live stack the cards read, for example, "Followed 7 of 8 times, Confidence 75 %, More likely 12×, Seeded 7 of 7". Confidence is weighted toward recent occurrences, so it can differ from the plain share in the first figure (7 of 8 is 88 %, and the card says 75 %); the Confidence figure carries a tooltip saying so, because the difference is what a careful reader would ask about first.
+
+- `src/SmartX.Client/CommandStream/SuggestionPresentation.cs`, `src/SmartX.Client/Components/CommandStream/SuggestionCard.razor`, `src/SmartX.Client/wwwroot/css/app.css`, `tests/SmartX.Tests/Part2FeedbackTests.cs`
+
+**Commits:** `1665f7f` the figures, `59bca0f` the Confidence tooltip, `beb3a91` the test
+
+---
+
+## U34. The alert sets and the device index were not visible
+
+**Source:** lecturer feedback on Part 2, lookup structures 14/15 and sets 9/10. The comment on these two criteria praises the sorted-dictionary histories, the device index and the three alert sets and says only that one mark was missed in each. It does not say what was missing.
+
+**What was wrong.** Nothing the comment names. What was true is that both structures were visible only in code and tests. The Alerts panel showed totals (raised, repeats suppressed, cleared) but not the size of the acknowledged set or the disconnected set, and the device search showed a count of matches but not that an index had answered it or how quickly.
+
+**Why it mattered.** If the missing mark was for what a user could see, this is the visible gap; if it was for something else, this does not close it, and this entry says so rather than claim it does.
+
+**What changed.** The Alerts panel shows the size of each of the three hash sets: Active, Acknowledged and Disconnected (`AlertStats` gained an optional `Disconnected`, read from the set itself, which the tracker keeps in step with the active Disconnected alerts), with a tooltip saying what each holds and that a repeat is counted and not added. The device search response gained an optional `LookupMicroseconds`, timed around the index lookup alone, and the search bar shows it beside the count: "6 devices match · found in 216 µs through the device index" on the running stack (a warm lookup; the first call after start-up took about 4 ms, which is the JIT and not the index). Two assertions were added to existing tests instead of new ones: the tracker's disconnected count after a node goes silent, and a positive lookup time on the search endpoint, plus one new test each for the panel and the bar. Also noted for the record: the sorted-dictionary history store the comment describes was replaced in Part 3 by the AVL tree (U22), so the cost of a range search it mentions is now the tree's.
+
+- `src/SmartX.Shared/Alerts/AlertContracts.cs`, `src/SmartX.Shared/Search/SearchContracts.cs`, `src/SmartX.Api/Alerts/AlertTracker.cs`, `src/SmartX.Api/Endpoints/SearchEndpoints.cs`, `src/SmartX.Client/Components/CommandStream/AlertsPanel.razor`, `src/SmartX.Client/Components/CommandStream/DeviceSearchBar.razor`, `tests/SmartX.Tests/`
+
+**Commits:** `94b40ca` the set sizes and the lookup time, `beb3a91` the tests
+
+---
+
 ## Entry template
 
 ```markdown
-## U31. Short title of the problem
+## U35. Short title of the problem
 
 **Source:** how it was found: lecturer feedback on Part 1, code review, a test, a live run
 
