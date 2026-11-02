@@ -135,9 +135,7 @@ internal sealed class TelemetryIngestionQueue(IOptions<IngestionOptions> options
 
         lock (_gate)
         {
-            var mustYield = _consecutiveCritical >= _options.MaxConsecutiveCritical && _standard.Count > 0;
-
-            if (_critical.Count > 0 && !mustYield)
+            if (TakesCritical(_consecutiveCritical, _critical.Count, _standard.Count, _options.MaxConsecutiveCritical))
             {
                 _consecutiveCritical++;
 
@@ -151,6 +149,48 @@ internal sealed class TelemetryIngestionQueue(IOptions<IngestionOptions> options
             return _standard.Dequeue();
         }
     }
+
+    /// <summary>
+    /// Whether the worker's next reading comes from the critical lane. The one place the rule is written, used by
+    /// <see cref="DequeueAsync"/> to choose and by <see cref="Stats"/> to say what will be chosen, so the order the interface
+    /// shows cannot drift from the order the worker takes.
+    /// </summary>
+    private static bool TakesCritical(int consecutiveCritical, int criticalWaiting, int standardWaiting, int maxConsecutiveCritical) =>
+        criticalWaiting > 0 && !(consecutiveCritical >= maxConsecutiveCritical && standardWaiting > 0);
+
+    /// <summary>
+    /// The next few readings in the order the worker will take them. Read under the queue lock, so it is one consistent moment.
+    /// </summary>
+    /// <remarks>
+    /// Only the first <see cref="NextUpShown"/> of each lane can be among the next few, so that is all that is gathered. The
+    /// heap is not sorted, so the critical lane's front is found by ordering a copy of its entries by the same
+    /// (severity, arrival) key the heap uses, and LINQ's ordered Take keeps that a partial selection and not a full sort of a lane
+    /// that can hold a thousand entries. The standard queue enumerates in arrival order already.
+    /// </remarks>
+    private List<QueuedItem> NextUp(DateTimeOffset now)
+    {
+        var critical = _critical.UnorderedItems.OrderBy(entry => entry.Priority).Take(NextUpShown).Select(entry => entry.Element).ToList();
+        var standard = _standard.Take(NextUpShown).ToList();
+
+        var items = new List<QueuedItem>(NextUpShown);
+        var consecutive = _consecutiveCritical;
+        int criticalTaken = 0, standardTaken = 0;
+
+        while (items.Count < NextUpShown && (criticalTaken < critical.Count || standardTaken < standard.Count))
+        {
+            // The counts passed are what is still waiting, which is what the worker would see at that point.
+            var fromCritical = TakesCritical(consecutive, _critical.Count - criticalTaken, _standard.Count - standardTaken, _options.MaxConsecutiveCritical);
+            var reading = fromCritical ? critical[criticalTaken++] : standard[standardTaken++];
+
+            consecutive = fromCritical ? consecutive + 1 : 0;
+            items.Add(new QueuedItem(items.Count + 1, reading.Lane, reading.Packet.NodeId, (now - reading.EnqueuedAt).TotalMilliseconds));
+        }
+
+        return items;
+    }
+
+    /// <summary>How many of the next readings a snapshot names.</summary>
+    internal const int NextUpShown = 6;
 
     /// <summary>Records that a reading has been fully processed, and how long that took from acceptance.</summary>
     /// <remarks>
@@ -173,6 +213,8 @@ internal sealed class TelemetryIngestionQueue(IOptions<IngestionOptions> options
     {
         lock (_gate)
         {
+            var now = time.GetUtcNow();
+
             return new PipelineStats(
                 [
                     _criticalCounters.ToStats(CriticalLane, _critical.Count),
@@ -180,7 +222,9 @@ internal sealed class TelemetryIngestionQueue(IOptions<IngestionOptions> options
                 ],
                 _options.MaxQueueDepth,
                 _rejectedWhenFull,
-                time.GetUtcNow());
+                now,
+                NextUp(now),
+                _options.MaxConsecutiveCritical);
         }
     }
 
