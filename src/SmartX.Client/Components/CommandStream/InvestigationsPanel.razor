@@ -1,6 +1,7 @@
 @implements IAsyncDisposable
 @inject ISuggestionFeed Feed
 @inject IOperatorApi Api
+@inject AppState State
 
 @* The open investigations. One opens when a node falls into fault, and closes by itself when the fault clears or when an operator
    gives a verdict. The list is refetched when the set of open investigations in the live insights changes, so a new one appears
@@ -61,6 +62,15 @@
 
     protected override async Task OnInitializedAsync()
     {
+        // What the panel showed when the page was left is shown again at once, and replaced when the fresh list arrives, so a return
+        // visit does not flash a skeleton over investigations the operator was reading a moment ago.
+        if (State.OpenInvestigations is { } held)
+        {
+            _open = [.. held];
+            _loadedFor = [.. _open.Select(investigation => investigation.Id)];
+            _loaded = true;
+        }
+
         Feed.Updated += OnFeedChanged;
 
         await Feed.StartAsync();
@@ -75,6 +85,7 @@
         {
             _open = [.. result.Value];
             _loadedFor = [.. _open.Select(investigation => investigation.Id)];
+            State.RememberInvestigations(_open);
             _problem = null;
 
             // One that was resolved by a verdict and is now open again is open, not resolved.
@@ -125,6 +136,7 @@
         }
 
         _loadedFor = [.. _open.Select(existing => existing.Id)];
+        State.RememberInvestigations([.. _open]);
 
         return Task.CompletedTask;
     }
