@@ -256,6 +256,9 @@ public class AlertTrackerTests
         Assert.Equal(AlertKind.Disconnected, alert.Key.Kind);
         Assert.Equal(5, alert.SuppressedCount);
         Assert.True(mesh.Alerts.DisconnectedSetMatchesAlerts());
+
+        // The size the Alerts panel shows for the disconnected set.
+        Assert.Equal(1, mesh.Alerts.Stats().Disconnected);
     }
 
     [Fact]
