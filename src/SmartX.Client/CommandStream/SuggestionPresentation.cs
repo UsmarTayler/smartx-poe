@@ -3,6 +3,9 @@ using SmartX.Shared;
 
 namespace SmartX.Client.CommandStream;
 
+/// <summary>What a suggestion has learned, as the figures the card shows. <paramref name="Seeded"/> is null when none of it was seeded.</summary>
+public readonly record struct LearnedFigures(string Counted, string Confidence, string Lift, string? Seeded);
+
 /// <summary>
 /// The words the suggestion, insight and investigation panels put on the screen.
 /// </summary>
@@ -37,6 +40,27 @@ public static class SuggestionPresentation
         return took < TimeSpan.FromSeconds(1)
             ? $"Arrived {took.TotalMilliseconds:0} ms after the trigger."
             : $"Arrived {took.TotalSeconds:0.0} s after the trigger.";
+    }
+
+    /// <summary>
+    /// The counts a pattern rests on, as separate figures to set beside a suggestion. The sentence in <c>Evidence.Summary</c> says the
+    /// same thing, but a sentence is read, and these are the numbers an operator checks at a glance: how often the pattern held, how
+    /// sure that makes it, how much the trigger matters, and how much of it was never observed.
+    /// </summary>
+    /// <remarks>
+    /// Built here from the structured fields and not parsed out of the server's sentence, so the two cannot disagree about a count.
+    /// The figures stay short enough to sit in the compact strip on the trust page, which has no room for the sentence.
+    /// </remarks>
+    public static LearnedFigures Learned(SuggestionEvidence evidence)
+    {
+        // The engine caps lift at 100 so it stays finite. "Over 100×" says it is capped; "100×" would read as measured.
+        var lift = evidence.Lift >= 100 ? "over 100×" : $"{evidence.Lift:0.#}×";
+
+        return new LearnedFigures(
+            $"{evidence.Times} of {evidence.OfTimes} times",
+            $"{evidence.Confidence * 100:0} %",
+            lift,
+            evidence.SeededTimes > 0 ? $"{evidence.SeededTimes} of {evidence.Times}" : null);
     }
 
     /// <summary>The time left to a projected fault, as the page shows it: counted down from the moment the server projected, not from when it was sent.</summary>
