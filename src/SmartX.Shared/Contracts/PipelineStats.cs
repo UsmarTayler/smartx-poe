@@ -22,6 +22,13 @@ public sealed record LaneStats(
 /// <param name="WaitingMilliseconds">How long it has been waiting so far.</param>
 public sealed record QueuedItem(int Position, string Lane, string MacAddress, double WaitingMilliseconds);
 
+/// <summary>A critical reading the worker took, and what it was served ahead of.</summary>
+/// <param name="MacAddress">The device that sent it.</param>
+/// <param name="WaitedMilliseconds">How long it waited between being accepted and being taken.</param>
+/// <param name="StandardAhead">How many standard readings were waiting when it was taken: the ones it overtook.</param>
+/// <param name="OldestStandardWaitMilliseconds">How long the oldest of those had been waiting. Zero when none were.</param>
+public sealed record CriticalTaken(string MacAddress, double WaitedMilliseconds, int StandardAhead, double OldestStandardWaitMilliseconds);
+
 /// <summary>
 /// A snapshot of the ingestion pipeline, for the dashboard and for proving the critical lane bypasses
 /// the standard one.
@@ -38,13 +45,18 @@ public sealed record QueuedItem(int Position, string Lane, string MacAddress, do
 /// How many critical readings the worker takes in a row before it takes one standard reading, so the standard lane is never starved.
 /// Zero when the server did not say.
 /// </param>
+/// <param name="RecentCritical">
+/// The last few critical readings the worker took, newest first. A critical reading is taken within milliseconds, so it is almost
+/// never still waiting when a snapshot is made; here it shows, with its short wait beside the standard readings it was served ahead of.
+/// </param>
 public sealed record PipelineStats(
     IReadOnlyList<LaneStats> Lanes,
     int Capacity,
     long RejectedWhenFull,
     DateTimeOffset SampledAt,
     IReadOnlyList<QueuedItem>? NextUp = null,
-    int MaxConsecutiveCritical = 0)
+    int MaxConsecutiveCritical = 0,
+    IReadOnlyList<CriticalTaken>? RecentCritical = null)
 {
     /// <summary>Readings waiting across every lane.</summary>
     public int TotalDepth => Lanes.Sum(lane => lane.Depth);

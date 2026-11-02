@@ -135,20 +135,60 @@ internal sealed class TelemetryIngestionQueue(IOptions<IngestionOptions> options
 
         lock (_gate)
         {
+            QueuedReading taken;
+
             if (TakesCritical(_consecutiveCritical, _critical.Count, _standard.Count, _options.MaxConsecutiveCritical))
             {
                 _consecutiveCritical++;
+                taken = _critical.Dequeue();
+            }
+            else
+            {
+                _consecutiveCritical = 0;
 
-                return _critical.Dequeue();
+                // The semaphore is released exactly once per enqueued reading, so a successful wait guarantees a
+                // reading is here: if the critical lane was empty or yielding, the standard lane holds it.
+                taken = _standard.Dequeue();
             }
 
-            _consecutiveCritical = 0;
+            RememberTaken(taken);
 
-            // The semaphore is released exactly once per enqueued reading, so a successful wait guarantees a
-            // reading is here: if the critical lane was empty or yielding, the standard lane holds it.
-            return _standard.Dequeue();
+            return taken;
         }
     }
+
+    /// <summary>
+    /// Keeps the last few critical readings taken, each with how many standard readings it was served ahead of and how long the
+    /// oldest of them had waited. The critical lane is empty again within milliseconds, and a snapshot is made once a second, so a
+    /// critical reading is almost never still waiting when one is made; and a list of the last readings taken of either lane would
+    /// span only a few milliseconds at the rate the worker runs. What lasts is the overtaking itself, so that is what is kept.
+    /// Called under the queue lock. A bounded queue like the rest of the pipeline.
+    /// </summary>
+    private void RememberTaken(QueuedReading reading)
+    {
+        if (!reading.IsCritical)
+        {
+            return;
+        }
+
+        var now = time.GetUtcNow();
+
+        if (_recentCritical.Count >= CriticalTakenShown)
+        {
+            _recentCritical.Dequeue();
+        }
+
+        _recentCritical.Enqueue(new CriticalTaken(
+            reading.Packet.NodeId,
+            (now - reading.EnqueuedAt).TotalMilliseconds,
+            _standard.Count,
+            _standard.Count == 0 ? 0 : (now - _standard.Peek().EnqueuedAt).TotalMilliseconds));
+    }
+
+    private readonly Queue<CriticalTaken> _recentCritical = new();
+
+    /// <summary>How many critical readings a snapshot names.</summary>
+    internal const int CriticalTakenShown = 5;
 
     /// <summary>
     /// Whether the worker's next reading comes from the critical lane. The one place the rule is written, used by
@@ -224,7 +264,8 @@ internal sealed class TelemetryIngestionQueue(IOptions<IngestionOptions> options
                 _rejectedWhenFull,
                 now,
                 NextUp(now),
-                _options.MaxConsecutiveCritical);
+                _options.MaxConsecutiveCritical,
+                [.. _recentCritical.Reverse()]);
         }
     }
 

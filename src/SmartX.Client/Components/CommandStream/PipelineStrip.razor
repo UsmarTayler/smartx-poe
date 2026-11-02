@@ -73,6 +73,25 @@
                     }
                 </ol>
             }
+
+            @* The last critical readings taken, newest first, each with what it was served ahead of. A critical reading is gone from the
+               lane within milliseconds, so the list above almost never has one in it; this is where the overtaking stays on the page. *@
+            @if (Pipeline.Current.Stats is { RecentCritical: { Count: > 0 } taken })
+            {
+                <MudText Typo="Typo.subtitle2" HtmlTag="h3" Class="mt-2">Critical readings just taken</MudText>
+                <ol class="smartx-pipeline__taken" aria-label="Critical readings taken just now, newest first">
+                    @foreach (var item in taken)
+                    {
+                        <li class="smartx-pipeline__order-item smartx-pipeline__order-item--critical">
+                            <MudIcon Icon="@Icons.Material.Filled.PriorityHigh" Size="Size.Small" aria-hidden="true" />
+                            <strong>Critical</strong>
+                            <span>@Describe(item.MacAddress)</span>
+                            <span class="mud-text-secondary">waited @Wait(item.WaitedMilliseconds)</span>
+                            <span>@Overtook(item)</span>
+                        </li>
+                    }
+                </ol>
+            }
         </section>
     }
 
@@ -246,6 +265,12 @@
 
         return sensor is null ? mac ?? string.Empty : $"{sensor.Location.Room} ({sensor.MacAddress[^5..]})";
     }
+
+    // What the critical reading was served ahead of, in words: the count of standard readings it overtook, and the oldest one's wait.
+    private static string Overtook(CriticalTaken item) =>
+        item.StandardAhead == 0
+            ? "nothing was queued ahead of it"
+            : $"taken ahead of {item.StandardAhead:N0} standard {(item.StandardAhead == 1 ? "reading" : "readings")}, the oldest waiting {Wait(item.OldestStandardWaitMilliseconds)}";
 
     private static string Rate(double? perSecond) => perSecond is { } value ? $"{value:0.#}/s" : "—";
 

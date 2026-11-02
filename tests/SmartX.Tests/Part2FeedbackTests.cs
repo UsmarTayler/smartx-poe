@@ -64,6 +64,22 @@ public class QueueOrderTests
 
             Assert.Equal(Enumerable.Range(1, next.Count), next.Select(item => item.Position));
         }
+
+        // A critical reading, once taken, is remembered with what it overtook: the snapshot is made long after the lane has emptied.
+        var overtaking = new TelemetryIngestionQueue(Options.Create(new IngestionOptions()), TimeProvider.System, new SmartX.Api.History.ArrivalSequence());
+
+        for (var i = 0; i < 3; i++)
+        {
+            overtaking.TryEnqueue(new NumericPacket<int>("AA:BB:CC:00:00:0" + i, i, DateTimeOffset.UnixEpoch, SensorCategory.PowerConsumption, "W"), null, out _);
+        }
+
+        overtaking.TryEnqueue(new NumericPacket<int>("AA:BB:CC:00:00:99", 99, DateTimeOffset.UnixEpoch, SensorCategory.PowerConsumption, "W"), new CriticalAlert(1, "power spike"), out _);
+        await overtaking.DequeueAsync(CancellationToken.None);
+
+        var overtook = Assert.Single(overtaking.Stats().RecentCritical!);
+
+        Assert.Equal("AA:BB:CC:00:00:99", overtook.MacAddress);
+        Assert.Equal(3, overtook.StandardAhead);
     }
 }
 
@@ -99,15 +115,18 @@ public class SuggestionFigureTests : StreamComponentTests
 /// <summary>The pipeline strip lists the next readings in the order they will be taken.</summary>
 public class PipelineOrderTests : StreamComponentTests
 {
-    private static PipelineStats Stats(params QueuedItem[] next) => new([], 10_000, 0, StreamKit.T0, next, 20);
+    private static PipelineStats Stats(QueuedItem[] next, params CriticalTaken[] taken) => new([], 10_000, 0, StreamKit.T0, next, 20, taken);
 
     [Fact]
     public async Task The_strip_lists_what_will_be_taken_next_with_critical_first_and_says_when_nothing_waits()
     {
         Rig.Snapshots.Pipeline = () => new PipelineUpdate(1, Stats(
-            new QueuedItem(1, "critical", "AA:BB:CC:00:00:01", 12.4),
-            new QueuedItem(2, "critical", "AA:BB:CC:00:00:02", 5),
-            new QueuedItem(3, "standard", "AA:BB:CC:00:00:03", 800)));
+            [
+                new QueuedItem(1, "critical", "AA:BB:CC:00:00:01", 12.4),
+                new QueuedItem(2, "critical", "AA:BB:CC:00:00:02", 5),
+                new QueuedItem(3, "standard", "AA:BB:CC:00:00:03", 800),
+            ],
+            new CriticalTaken("AA:BB:CC:00:00:09", 0.4, 3477, 23685)));
 
         var cut = Render<PipelineStrip>();
 
@@ -125,8 +144,11 @@ public class PipelineOrderTests : StreamComponentTests
         // The rule is the server's, as it reports it.
         Assert.Contains("After 20 in a row one standard reading is taken", cut.Markup, StringComparison.Ordinal);
 
+        // The overtaking stays on the page after the critical lane has emptied: what it was served ahead of, and for how long that had waited.
+        Assert.Contains("taken ahead of 3,477 standard readings, the oldest waiting 23685 ms", cut.Find("[aria-label='Critical readings taken just now, newest first']").TextContent, StringComparison.Ordinal);
+
         await ListeningAsync(Rig, RealtimeMethods.PipelineUpdated);
-        Rig.Hub.Deliver(RealtimeMethods.PipelineUpdated, new PipelineUpdate(2, Stats()));
+        Rig.Hub.Deliver(RealtimeMethods.PipelineUpdated, new PipelineUpdate(2, Stats([])));
 
         cut.WaitForAssertion(() => Assert.Contains("Nothing is waiting", cut.Markup, StringComparison.Ordinal));
         Assert.Empty(cut.FindAll("ol.smartx-pipeline__order li"));
