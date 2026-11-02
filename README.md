@@ -223,7 +223,7 @@ within about five seconds the reading is pinned at the top of the live stream, m
 
 With the defaults both lanes are empty, which shows nothing. To watch it jump a backlog, build one:
 `SMARTX_PROCESS_DELAY=00:00:00.004 SMARTX_RATE=50 SMARTX_TICK=00:00:00.050 docker compose up -d`, then press **Simulate critical
-event** again. Measured both ways:
+event** again. The strip lists **Next to be taken** in the worker's order, and keeps each critical reading with the backlog it overtook. Measured both ways:
 
 | | Critical reading | Normal reading |
 | --- | --- | --- |
@@ -295,8 +295,8 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/alerts/stats
 ```
 
 **Expect:** the same alerts (one per device and kind) with `suppressedCount` higher the second time, and `suppressed` far larger
-than `raised` in the stats. The Alerts panel shows "suppressed ×N" on each row. The pattern engine uses the same idea to count a
-response once, and to drop a suggestion once its action is taken. Tests: `AlertTrackerTests`, `PatternEngineTests`.
+than `raised` in the stats. The Alerts panel shows "suppressed ×N" on each row and the size of each of the three sets. The pattern
+engine uses the same idea to count a response once, and to drop a suggestion once its action is taken. Tests: `AlertTrackerTests`, `PatternEngineTests`.
 
 ### The predictive engine
 
@@ -304,8 +304,8 @@ It learns what operators do after what, ranks the likely next action (a `Priorit
 for Fault (a least-squares fit).
 
 1. Open `/command-stream`. **Expect:** **Suggested Actions** lists "Turn on Pump A" and "Open Pump A" (Moisture Sensor B dropped
-   below 20 %), each with its evidence ("Operators did this 7 of the last 8 times (7 from seeded history). 12× more likely than
-   usual.") and one button. The second number grows as the sensor dips again; the seeded 7 stays.
+   below 20 %), each with the counts it learned as figures (Followed 7 of 8 times, Confidence 75 %, More likely 12×, Seeded 7 of 7),
+   the same in a sentence, and one button. The second number grows as the sensor dips again; the seeded 7 stays.
 2. The same data: `curl -H "Authorization: Bearer $TOKEN" http://localhost:5266/api/suggestions` and `.../api/insights`.
 3. Press **Open Pump A**. **Expect:** it disappears without a reload (its action is done), and the pattern's count does not rise:
    an accepted suggestion counts at weight zero, so the engine cannot train on its own advice.
