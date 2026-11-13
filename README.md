@@ -1,5 +1,5 @@
 # Smart-X [![CI](https://github.com/UsmarTayler/smartx-poe/actions/workflows/ci.yml/badge.svg)](https://github.com/UsmarTayler/smartx-poe/actions/workflows/ci.yml)
-> **Demo video:** submitted as a file with the POE (`Smart-X Part 2 and 3 demo.mp4`) rather than online. Apologies: there were problems uploading it.
+> **Demo video:** submitted as a file with the POE (`Smart-X Final Demo.mp4`) rather than online. Apologies: there were problems uploading it.
 
 An IoT telemetry ingestion and mesh-management system, built as a university Portfolio of Evidence. **Part 1** ingests sensor
 readings without boxing and scores each node's trust. **Part 2** adds a device simulator that reports over HTTP, FIFO and priority
