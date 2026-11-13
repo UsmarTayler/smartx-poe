@@ -1,4 +1,5 @@
 # Smart-X [![CI](https://github.com/UsmarTayler/smartx-poe/actions/workflows/ci.yml/badge.svg)](https://github.com/UsmarTayler/smartx-poe/actions/workflows/ci.yml)
+> **Demo video:** submitted as a file with the POE (`Smart-X Part 2 and 3 demo.mp4`) rather than online. Apologies: there were problems uploading it.
 
 An IoT telemetry ingestion and mesh-management system, built as a university Portfolio of Evidence. **Part 1** ingests sensor
 readings without boxing and scores each node's trust. **Part 2** adds a device simulator that reports over HTTP, FIFO and priority
@@ -19,9 +20,8 @@ articulation points, Prim's, Kruskal's and Dijkstra's algorithms with routes tha
 - [Where each concept lives](#where-each-concept-lives)
 - [Configuration](#configuration)
 - [Troubleshooting](#troubleshooting)
-- [Design notes](#design-notes): [the device shadow](#the-device-shadow),
-  [undo](#undo-restores-the-previous-state-it-does-not-do-the-opposite), [snapshot plus stream](#snapshot-plus-stream), [why
-  predictions are not random](#why-predictions-are-not-random)
+- [Design notes](#design-notes): [the device shadow](#the-device-shadow), [undo](#undo-restores-the-previous-state-it-does-not-do-the-opposite),
+  [snapshot plus stream](#snapshot-plus-stream), [why predictions are not random](#why-predictions-are-not-random)
 
 ## Architecture
 
